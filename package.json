@@ -1,0 +1,34 @@
+{
+  "name": "log-analysis-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production AWS Bedrock agentic log-analysis platform",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "web"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc -b",
+    "lint": "eslint . --ext .ts,.tsx",
+    "dev:api": "npm run dev --workspace @log/api",
+    "dev:web": "npm run dev --workspace web",
+    "db:up": "docker compose up -d postgres",
+    "db:migrate": "npm run migrate --workspace @log/db",
+    "db:seed": "npm run seed --workspace @log/db",
+    "simulate": "npm run start --workspace @log/simulator",
+    "bundle:lambda": "node scripts/bundle-lambda.mjs",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.9.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

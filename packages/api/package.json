@@ -1,0 +1,27 @@
+{
+  "name": "@log/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.0",
+    "@log/agents": "*",
+    "@log/analysis": "*",
+    "@log/db": "*",
+    "@log/ingestion": "*",
+    "@log/shared": "*",
+    "@log/simulator": "*",
+    "fastify": "^5.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

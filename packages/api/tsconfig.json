@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../shared" },
+    { "path": "../db" },
+    { "path": "../analysis" },
+    { "path": "../ingestion" },
+    { "path": "../agents" },
+    { "path": "../simulator" }
+  ],
+  "include": ["src/**/*.ts"]
+}

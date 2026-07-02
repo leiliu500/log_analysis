@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and adjust.
+project     = "log-analysis"
+environment = "prod"
+region      = "us-east-1"
+
+# Bedrock foundation model ARN (must be enabled in your account/region).
+bedrock_model_arn = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5-20250101-v1:0"
+
+# Real application endpoints the app-invoker agent can call.
+app_endpoints_json = "{\"scp\":\"https://scp.example.internal/api/execute\"}"
+
+# Log groups to ingest from CloudWatch.
+cloudwatch_log_groups = ["/aws/lambda/my-app", "/aws/ecs/my-service"]
+
+# Container images (set after CI pushes to ECR; blank uses :latest on the repo).
+api_image = ""
+web_image = ""

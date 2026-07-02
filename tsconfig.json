@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/db" },
+    { "path": "packages/analysis" },
+    { "path": "packages/ingestion" },
+    { "path": "packages/agents" },
+    { "path": "packages/simulator" },
+    { "path": "packages/api" }
+  ]
+}

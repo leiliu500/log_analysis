@@ -1,0 +1,21 @@
+# Local dev dependencies. Production uses AWS RDS (see infra/).
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: loganalysis-postgres
+    environment:
+      POSTGRES_USER: loguser
+      POSTGRES_PASSWORD: logpass
+      POSTGRES_DB: loganalysis
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loguser -d loganalysis"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

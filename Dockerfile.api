@@ -1,0 +1,22 @@
+# Build from repo root:  docker build -f Dockerfile.api -t log-api .
+FROM node:20-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json* tsconfig*.json ./
+COPY packages ./packages
+RUN npm install --workspaces --include-workspace-root
+RUN npm run build --workspace @log/shared \
+  && npm run build --workspace @log/db \
+  && npm run build --workspace @log/analysis \
+  && npm run build --workspace @log/ingestion \
+  && npm run build --workspace @log/simulator \
+  && npm run build --workspace @log/agents \
+  && npm run build --workspace @log/api
+
+FROM node:20-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=build /app/package.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages ./packages
+EXPOSE 4000
+CMD ["node", "packages/api/dist/server.js"]

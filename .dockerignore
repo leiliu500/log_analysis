@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+infra/.terraform
+infra/build
+.git
+*.log

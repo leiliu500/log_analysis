@@ -1,0 +1,88 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Log Analysis Agent Actions",
+    "version": "1.0.0",
+    "description": "Tools the log-analysis agents can call."
+  },
+  "paths": {
+    "/findings/search": {
+      "post": {
+        "operationId": "searchFindings",
+        "description": "Search stored findings/anomalies relevant to a natural-language query. Returns findings scoped to the query, not global stats.",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The user's question or search terms."
+          }
+        ],
+        "responses": {
+          "200": { "description": "Matching findings." }
+        }
+      }
+    },
+    "/logs/analyze": {
+      "post": {
+        "operationId": "analyzeLogs",
+        "description": "Pull recent logs from a source and run the full parse/correlate/reason pipeline.",
+        "parameters": [
+          { "name": "source", "in": "query", "required": true, "schema": { "type": "string", "enum": ["cloudwatch", "splunk", "grafana", "email"] } },
+          { "name": "since", "in": "query", "required": false, "schema": { "type": "integer" }, "description": "Epoch millis lower bound." },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Analysis summary + findings." } }
+      }
+    },
+    "/simulate": {
+      "post": {
+        "operationId": "simulateLogs",
+        "description": "Generate realistic logs for an application from a sample request/response and write them to sinks.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "application": { "type": "string" },
+                  "sampleRequest": { "type": "string", "description": "JSON string." },
+                  "sampleResponse": { "type": "string", "description": "JSON string." },
+                  "sinks": { "type": "string", "description": "Comma-separated sinks." },
+                  "count": { "type": "integer" },
+                  "injectAnomalies": { "type": "string" }
+                },
+                "required": ["application", "sinks"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Simulation result." } }
+      }
+    },
+    "/invoke-app": {
+      "post": {
+        "operationId": "invokeApplication",
+        "description": "Invoke a real downstream application endpoint (e.g. scp) with a request payload.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "application": { "type": "string" },
+                  "request": { "type": "string", "description": "JSON string payload." }
+                },
+                "required": ["application"]
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Downstream response." } }
+      }
+    }
+  }
+}
