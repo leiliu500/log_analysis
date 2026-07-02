@@ -15,12 +15,28 @@
             "name": "query",
             "in": "query",
             "required": true,
-            "schema": { "type": "string" },
-            "description": "The user's question or search terms."
+            "description": "The user's question or search terms.",
+            "schema": { "type": "string" }
           }
         ],
         "responses": {
-          "200": { "description": "Matching findings." }
+          "200": {
+            "description": "Matching findings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "findings": {
+                      "type": "array",
+                      "items": { "type": "object" },
+                      "description": "Findings relevant to the query."
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -29,11 +45,45 @@
         "operationId": "analyzeLogs",
         "description": "Pull recent logs from a source and run the full parse/correlate/reason pipeline.",
         "parameters": [
-          { "name": "source", "in": "query", "required": true, "schema": { "type": "string", "enum": ["cloudwatch", "splunk", "grafana", "email"] } },
-          { "name": "since", "in": "query", "required": false, "schema": { "type": "integer" }, "description": "Epoch millis lower bound." },
-          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+          {
+            "name": "source",
+            "in": "query",
+            "required": true,
+            "description": "Log source to analyze.",
+            "schema": { "type": "string", "enum": ["cloudwatch", "splunk", "grafana", "email"] }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Epoch millis lower bound.",
+            "schema": { "type": "integer" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of log records to pull.",
+            "schema": { "type": "integer" }
+          }
         ],
-        "responses": { "200": { "description": "Analysis summary + findings." } }
+        "responses": {
+          "200": {
+            "description": "Analysis summary and findings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "parsed": { "type": "integer", "description": "Count of parsed logs." },
+                    "anomalies": { "type": "integer", "description": "Count of anomalies detected." },
+                    "findings": { "type": "array", "items": { "type": "object" }, "description": "New findings." }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/simulate": {
@@ -47,19 +97,35 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "application": { "type": "string" },
-                  "sampleRequest": { "type": "string", "description": "JSON string." },
-                  "sampleResponse": { "type": "string", "description": "JSON string." },
-                  "sinks": { "type": "string", "description": "Comma-separated sinks." },
-                  "count": { "type": "integer" },
-                  "injectAnomalies": { "type": "string" }
+                  "application": { "type": "string", "description": "Application to simulate." },
+                  "sampleRequest": { "type": "string", "description": "Sample request as a JSON string." },
+                  "sampleResponse": { "type": "string", "description": "Sample response as a JSON string." },
+                  "sinks": { "type": "string", "description": "Comma-separated sinks (cloudwatch,splunk,grafana,email)." },
+                  "count": { "type": "integer", "description": "How many log lines to generate." },
+                  "injectAnomalies": { "type": "string", "description": "\"true\" to inject anomalies." }
                 },
                 "required": ["application", "sinks"]
               }
             }
           }
         },
-        "responses": { "200": { "description": "Simulation result." } }
+        "responses": {
+          "200": {
+            "description": "Simulation result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "application": { "type": "string" },
+                    "batchId": { "type": "string" },
+                    "written": { "type": "object", "description": "Count written per sink." }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/invoke-app": {
@@ -73,15 +139,32 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "application": { "type": "string" },
-                  "request": { "type": "string", "description": "JSON string payload." }
+                  "application": { "type": "string", "description": "Application name, e.g. scp." },
+                  "request": { "type": "string", "description": "Request payload as a JSON string." }
                 },
                 "required": ["application"]
               }
             }
           }
         },
-        "responses": { "200": { "description": "Downstream response." } }
+        "responses": {
+          "200": {
+            "description": "Downstream response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "application": { "type": "string" },
+                    "status": { "type": "integer" },
+                    "latencyMs": { "type": "number" },
+                    "response": { "type": "object", "description": "The downstream application response." }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

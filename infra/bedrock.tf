@@ -106,7 +106,10 @@ resource "aws_bedrockagent_agent" "supervisor" {
   foundation_model            = local.foundation_model
   agent_collaboration         = "SUPERVISOR_ROUTER"
   idle_session_ttl_in_seconds = 1800
-  prepare_agent               = true
+  # Defer preparation: a SUPERVISOR_ROUTER cannot be prepared until collaborators
+  # are attached, and those depend on this agent existing first. The alias step
+  # (which depends on the collaborators) prepares it once they're in place.
+  prepare_agent = false
   instruction                 = <<-EOT
     You are the Supervisor. Parse and extract intent from the user request and
     route to exactly one collaborator:
@@ -129,20 +132,22 @@ resource "aws_bedrockagent_agent_collaborator" "analysis" {
 }
 
 resource "aws_bedrockagent_agent_collaborator" "simulator" {
-  agent_id                  = aws_bedrockagent_agent.supervisor.agent_id
-  agent_version             = "DRAFT"
-  collaborator_name         = "simulator-agent"
-  collaboration_instruction = "Delegate requests to simulate or generate logs for an application."
+  agent_id                   = aws_bedrockagent_agent.supervisor.agent_id
+  agent_version              = "DRAFT"
+  collaborator_name          = "simulator-agent"
+  collaboration_instruction  = "Delegate requests to simulate or generate logs for an application."
+  relay_conversation_history = "TO_COLLABORATOR"
   agent_descriptor {
     alias_arn = aws_bedrockagent_agent_alias.simulator.agent_alias_arn
   }
 }
 
 resource "aws_bedrockagent_agent_collaborator" "app_invoker" {
-  agent_id                  = aws_bedrockagent_agent.supervisor.agent_id
-  agent_version             = "DRAFT"
-  collaborator_name         = "app-invoker-agent"
-  collaboration_instruction = "Delegate requests to invoke a real downstream application endpoint such as scp."
+  agent_id                   = aws_bedrockagent_agent.supervisor.agent_id
+  agent_version              = "DRAFT"
+  collaborator_name          = "app-invoker-agent"
+  collaboration_instruction  = "Delegate requests to invoke a real downstream application endpoint such as scp."
+  relay_conversation_history = "TO_COLLABORATOR"
   agent_descriptor {
     alias_arn = aws_bedrockagent_agent_alias.app_invoker.agent_alias_arn
   }

@@ -61,7 +61,8 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Route API paths to the API service.
+# Route API paths to the API service. ALB caps a path_pattern condition at 5
+# values, so the API routes are split across two rules.
 resource "aws_lb_listener_rule" "api" {
   listener_arn = aws_lb_listener.http.arn
   priority     = 10
@@ -71,7 +72,21 @@ resource "aws_lb_listener_rule" "api" {
   }
   condition {
     path_pattern {
-      values = ["/health", "/findings*", "/logs*", "/chat*", "/simulate*", "/invoke-app*", "/analyze*"]
+      values = ["/health", "/findings*", "/logs*", "/chat*", "/analyze*"]
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "api_extra" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 11
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
+  }
+  condition {
+    path_pattern {
+      values = ["/simulate*", "/invoke-app*"]
     }
   }
 }

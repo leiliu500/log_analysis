@@ -23,7 +23,7 @@ infra/**/*.tfstate.*
 infra/**/*.tfplan
 infra/**/tf.plan
 infra/build/
-infra/**/apply.log
+infra/**/apply*.log
 crash.log
 
 # Logs

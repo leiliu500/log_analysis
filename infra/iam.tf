@@ -18,7 +18,7 @@ resource "aws_iam_role" "lambda" {
 
 resource "aws_iam_role_policy_attachment" "lambda_vpc" {
   role       = aws_iam_role.lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
 resource "aws_iam_role_policy" "lambda_inline" {
@@ -95,6 +95,16 @@ resource "aws_iam_role_policy" "bedrock_agent" {
         Effect   = "Allow"
         Action   = ["lambda:InvokeFunction"]
         Resource = aws_lambda_function.action_group.arn
+      },
+      {
+        # Supervisor router must be able to reach its collaborator agent aliases.
+        Sid    = "CollaborateWithAgents"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeAgent", "bedrock:GetAgentAlias", "bedrock:GetAgent"]
+        Resource = [
+          "arn:${data.aws_partition.current.partition}:bedrock:*:${data.aws_caller_identity.current.account_id}:agent/*",
+          "arn:${data.aws_partition.current.partition}:bedrock:*:${data.aws_caller_identity.current.account_id}:agent-alias/*"
+        ]
       }
     ]
   })
@@ -117,7 +127,7 @@ resource "aws_iam_role" "ecs_execution" {
 
 resource "aws_iam_role_policy_attachment" "ecs_execution" {
   role       = aws_iam_role.ecs_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 resource "aws_iam_role_policy" "ecs_execution_secrets" {
