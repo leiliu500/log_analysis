@@ -23,24 +23,41 @@ export function messageType(xml: string): string {
   return (getTag(xml, 'messageType') ?? '').toUpperCase();
 }
 
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Ensure a message's root element is closed (appends `</root>` if missing). */
+function closeRoot(msg: string): string {
+  const m = msg.replace(/<\?[\s\S]*?\?>/, '').match(/<((?:[\w.-]+:)?[A-Za-z_][\w.-]*)[\s>]/);
+  if (!m) return msg;
+  const close = `</${m[1]}>`;
+  return msg.includes(close) ? msg : `${msg}\n${close}`;
+}
+
 /**
  * Split a blob that may contain several concatenated XML documents into
- * individual message strings. Splits on the root element's closing tag.
+ * individual message strings.
+ *
+ * Splits on each root *opening* tag (matched by LOCAL name so differing
+ * namespace prefixes — ns2: vs NS1: — are handled) rather than the closing tag,
+ * because pasted samples are often truncated at `</payload>` with no root close.
+ * Any `<?xml?>` prologue is folded into its message, and unclosed roots are
+ * closed so the emitted logs are well-formed.
  */
 export function splitMessages(blob: string): string[] {
   const trimmed = blob.trim();
   if (!trimmed) return [];
-  // First real element name (skip <?xml ...?> and comments).
-  const rootMatch = trimmed.replace(/<\?[\s\S]*?\?>/g, '').match(/<([A-Za-z_][\w.:-]*)[\s>]/);
-  if (!rootMatch) return [trimmed]; // not XML — treat as one message
-  const root = rootMatch[1]!;
-  const close = `</${root}>`;
-  if (!trimmed.includes(close)) return [trimmed];
-  return trimmed
-    .split(close)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0)
-    .map((p) => p + close);
+  // Root LOCAL name from the first opening tag (skip any <?xml?> prologue).
+  const first = trimmed.replace(/<\?[\s\S]*?\?>/, '').match(/<(?:[\w.-]+:)?([A-Za-z_][\w.-]*)[\s>]/);
+  if (!first) return [trimmed]; // not XML — treat as one message
+  const local = escapeRe(first[1]!);
+  const boundary = new RegExp(`(?=<(?:[\\w.-]+:)?${local}[\\s>])`, 'g');
+  const parts = trimmed
+    .split(boundary)
+    // A message's <?xml?> prologue trails the previous chunk after the split;
+    // drop it (declarations are optional for our log payloads).
+    .map((p) => p.replace(/<\?xml[^>]*\?>\s*$/i, '').trim())
+    .filter((p) => p.length > 0);
+  return (parts.length ? parts : [trimmed]).map(closeRoot);
 }
 
 /**

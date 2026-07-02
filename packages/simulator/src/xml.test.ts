@@ -29,6 +29,28 @@ test('bumpId increments the last numeric run, preserving format', () => {
   assert.equal(bumpId('noDigits', 2), 'noDigits-2');
 });
 
+test('splitMessages handles truncated roots + mixed prefixes + xml prologue', () => {
+  // Real-world shape: request has no root close and no prologue; ack/response
+  // use a different prefix, an <?xml?> prologue, and also no root close.
+  const blob = `<ns2:cashMessage xmlns:ns2="http://x">
+  <header><messageType>REQUEST</messageType><messageId>FCC-USSS-28090845</messageId></header>
+  <payload></payload>
+<?xml version="1.0" encoding="UTF-8"?><NS1:cashMessage xmlns:NS1="http://x">
+  <header><messageType>ACK</messageType><messageId>SIM-USSS-4764</messageId></header>
+  <payload><cashAcknowledgement><initMessageId>FCC-USSS-28090845</initMessageId></cashAcknowledgement></payload>
+<?xml version="1.0" encoding="UTF-8"?><NS1:cashMessage xmlns:NS1="http://x">
+  <header><messageType>RESPONSE</messageType><messageId>SIM-USSS-4774</messageId></header>
+  <payload><cashAcknowledgement><initMessageId>FCC-USSS-28090845</initMessageId></cashAcknowledgement></payload>`;
+  const parts = splitMessages(blob);
+  assert.equal(parts.length, 3);
+  assert.deepEqual(parts.map(messageType), ['REQUEST', 'ACK', 'RESPONSE']);
+  // Roots are closed and each message keeps its own ids.
+  assert.ok(parts[0]!.includes('</ns2:cashMessage>'));
+  assert.ok(parts[1]!.includes('</NS1:cashMessage>'));
+  assert.equal(getTag(parts[1]!, 'initMessageId'), 'FCC-USSS-28090845');
+  assert.equal(getTag(parts[2]!, 'messageId'), 'SIM-USSS-4774');
+});
+
 test('splitMessages separates concatenated docs', () => {
   const ack = REQ.replace('REQUEST', 'ACK').replace('<messageId>FCC-USSS-28090845</messageId>', '<messageId>ACK-1</messageId>\n    <initMessageId>FCC-USSS-28090845</initMessageId>');
   const parts = splitMessages(REQ + '\n' + ack);
