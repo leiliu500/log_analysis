@@ -16,7 +16,18 @@ function connectionString(): string {
 
 /** Lazily-initialised singleton postgres.js client + drizzle instance. */
 export function getSql(): Sql {
-  if (!_sql) _sql = postgres(connectionString(), { max: 10, prepare: false });
+  if (!_sql) {
+    const url = connectionString();
+    // RDS enforces TLS (rds.force_ssl); local docker Postgres does not support
+    // it. Enable SSL for any non-local host. rejectUnauthorized:false avoids
+    // bundling the RDS CA bundle (traffic is still encrypted).
+    const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url);
+    _sql = postgres(url, {
+      max: 10,
+      prepare: false,
+      ssl: isLocal ? undefined : { rejectUnauthorized: false },
+    });
+  }
   return _sql;
 }
 
