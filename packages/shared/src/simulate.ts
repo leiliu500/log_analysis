@@ -2,32 +2,42 @@ import { z } from 'zod';
 import { LogSourceType } from './logs.js';
 
 /**
- * Instruction to the simulator agent: given a sample request and a sample
- * application response, synthesize realistic logs and write them to the chosen
- * sinks (CloudWatch/Splunk/Grafana/Email). Per requirements (8) and (9).
+ * Instruction to the simulator agent (requirements 8 & 9). The user pastes one
+ * or more sample messages into a single input area — typically XML like an FRB
+ * cashMessage, and optionally its ACK/Response. The simulator reads them,
+ * replicates the flow `count` times with a fresh unique messageId per set, and
+ * keeps each ACK/Response's <initMessageId> matched to its Request's
+ * <messageId>. Messages are written verbatim (aside from the id/time rewrites)
+ * to the chosen sinks.
  */
 export const SimulateRequest = z.object({
-  /** Application being simulated (e.g. "scp", "checkout-service"). */
-  application: z.string(),
-  /** Sample inbound request the app would receive. */
-  sampleRequest: z.record(z.string(), z.unknown()),
-  /** Sample response the app would return. */
-  sampleResponse: z.record(z.string(), z.unknown()),
+  /** Application being simulated (e.g. "scp", "cashMessage"). */
+  application: z.string().default('cashMessage'),
+  /** Raw pasted sample message(s): one or more XML docs (Request/ACK/Response). */
+  samples: z.string().min(1),
   /** Which sinks to write simulated logs into. */
-  sinks: z.array(LogSourceType).min(1),
-  /** How many log lines to generate. */
-  count: z.number().int().min(1).max(10000).default(25),
-  /** Optionally inject anomalies (error bursts, latency spikes). */
-  injectAnomalies: z.boolean().default(false),
-  /** Spread logs across this many minutes (0 = all "now"). */
-  spreadMinutes: z.number().int().min(0).max(1440).default(5),
+  sinks: z.array(LogSourceType).min(1).default(['cloudwatch']),
+  /** How many correlated Request/ACK/Response sets to generate. */
+  count: z.number().int().min(1).max(10000).default(1),
+  /** Spread the generated messages across this many minutes (0 = all "now"). */
+  spreadMinutes: z.number().int().min(0).max(1440).default(0),
 });
 export type SimulateRequest = z.infer<typeof SimulateRequest>;
+
+/** Per-message summary of what the simulator generated. */
+export const SimulatedMessage = z.object({
+  messageType: z.string(),
+  messageId: z.string(),
+  initMessageId: z.string().optional(),
+});
+export type SimulatedMessage = z.infer<typeof SimulatedMessage>;
 
 export const SimulateResult = z.object({
   application: z.string(),
   written: z.record(LogSourceType, z.number().int()),
   batchId: z.string().uuid(),
+  /** The generated messages (type + ids) so the UI can show correlation. */
+  messages: z.array(SimulatedMessage).default([]),
 });
 export type SimulateResult = z.infer<typeof SimulateResult>;
 

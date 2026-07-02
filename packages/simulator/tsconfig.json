@@ -6,7 +6,6 @@
   },
   "references": [
     { "path": "../shared" },
-    { "path": "../analysis" },
     { "path": "../ingestion" }
   ],
   "include": ["src/**/*.ts"]

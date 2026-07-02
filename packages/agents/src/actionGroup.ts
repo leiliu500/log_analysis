@@ -76,13 +76,12 @@ export async function handler(event: BedrockAgentEvent): Promise<unknown> {
       // Trigger the simulator agent.
       case '/simulate': {
         const req = SimulateRequest.parse({
-          application: params.application ?? 'demo-service',
-          sampleRequest: params.sampleRequest ? JSON.parse(params.sampleRequest) : {},
-          sampleResponse: params.sampleResponse ? JSON.parse(params.sampleResponse) : {},
+          application: params.application ?? 'cashMessage',
+          // Raw pasted message(s) (XML/text), written verbatim with id rewrites.
+          samples: params.samples ?? params.sampleRequest ?? '',
           sinks: (params.sinks ?? 'cloudwatch').split(','),
-          count: Number(params.count ?? 25),
-          injectAnomalies: params.injectAnomalies === 'true',
-          spreadMinutes: Number(params.spreadMinutes ?? 5),
+          count: Number(params.count ?? 1),
+          spreadMinutes: Number(params.spreadMinutes ?? 0),
         });
         return envelope(event, 200, await simulate(req));
       }

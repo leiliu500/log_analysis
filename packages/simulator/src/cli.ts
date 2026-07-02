@@ -1,6 +1,8 @@
 /**
- * CLI entrypoint: `npm run simulate -- --app scp --sinks cloudwatch,splunk`
- * Reads a sample request/response from --file (JSON) or uses a default demo.
+ * CLI entrypoint:
+ *   npm run simulate -- --app cashMessage --sinks cloudwatch --count 5 --file sample.xml
+ * `--file` is a raw sample message file (XML or text). Without it, reads the
+ * sample from stdin.
  */
 import { readFileSync } from 'node:fs';
 import { SimulateRequest } from '@log/shared';
@@ -13,19 +15,17 @@ function arg(name: string, fallback?: string): string | undefined {
 
 async function main(): Promise<void> {
   const file = arg('file');
-  const fromFile = file ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  const samples = file ? readFileSync(file, 'utf8') : readFileSync(0, 'utf8');
 
   const req = SimulateRequest.parse({
-    application: arg('app', fromFile.application ?? 'demo-service'),
-    sampleRequest: fromFile.sampleRequest ?? { method: 'POST', path: '/checkout', body: { itemId: 42 } },
-    sampleResponse: fromFile.sampleResponse ?? { status: 200, body: { ok: true } },
+    application: arg('app', 'cashMessage'),
+    samples,
     sinks: (arg('sinks', 'cloudwatch') ?? 'cloudwatch').split(','),
-    count: Number(arg('count', '25')),
-    injectAnomalies: arg('anomalies', 'false') === 'true',
-    spreadMinutes: Number(arg('spread', '5')),
+    count: Number(arg('count', '1')),
+    spreadMinutes: Number(arg('spread', '0')),
   });
 
-  console.log(`Simulating ${req.count} logs for "${req.application}" -> ${req.sinks.join(', ')}`);
+  console.log(`Simulating ${req.count} set(s) for "${req.application}" -> ${req.sinks.join(', ')}`);
   const result = await simulate(req);
   console.log('Done:', JSON.stringify(result, null, 2));
 }

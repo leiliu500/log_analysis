@@ -81,20 +81,24 @@ async function dispatch(
     case 'simulate_logs': {
       const p = route.parameters;
       const req = SimulateRequest.parse({
-        application: route.targetApplication ?? p.application ?? 'demo-service',
-        sampleRequest: p.sampleRequest ?? {},
-        sampleResponse: p.sampleResponse ?? {},
-        sinks: p.sinks ?? (route.sources.length ? route.sources : ['cloudwatch']),
-        count: Number(p.count ?? 25),
-        injectAnomalies: Boolean(p.injectAnomalies ?? false),
-        spreadMinutes: Number(p.spreadMinutes ?? 5),
+        application: route.targetApplication ?? p.application ?? 'cashMessage',
+        // Prefer an extracted samples param; otherwise treat the whole message
+        // (e.g. a pasted XML payload) as the sample.
+        samples: (typeof p.samples === 'string' && p.samples) || message,
+        sinks: (Array.isArray(p.sinks) ? p.sinks : undefined) ?? (route.sources.length ? route.sources : ['cloudwatch']),
+        count: Number(p.count ?? 1),
+        spreadMinutes: Number(p.spreadMinutes ?? 0),
       });
       const result = await simulate(req);
       const written = Object.entries(result.written)
         .map(([k, v]) => `${v} to ${k}`)
         .join(', ');
+      const ids = result.messages
+        .filter((m) => m.messageType === 'REQUEST')
+        .map((m) => m.messageId)
+        .join(', ');
       return {
-        answer: `Simulated logs for "${req.application}" (${written}). They will appear in findings after the next analysis cycle.`,
+        answer: `Simulated ${req.count} set(s) for "${req.application}" (${written} log entries). Request messageIds: ${ids || '(none parsed)'}. They will appear in findings after the next analysis cycle.`,
         context: { findings: [], logs: [], route },
       };
     }

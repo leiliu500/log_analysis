@@ -17,8 +17,6 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.658.0",
-    "@log/analysis": "*",
     "@log/ingestion": "*",
     "@log/shared": "*"
   },
