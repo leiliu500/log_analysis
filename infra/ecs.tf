@@ -61,8 +61,8 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Route API paths to the API service. ALB caps a path_pattern condition at 5
-# values, so the API routes are split across two rules.
+# The API is served under /api/* so it doesn't collide with the Next.js UI
+# routes (/chat, /simulate). Everything else falls through to the web service.
 resource "aws_lb_listener_rule" "api" {
   listener_arn = aws_lb_listener.http.arn
   priority     = 10
@@ -72,21 +72,7 @@ resource "aws_lb_listener_rule" "api" {
   }
   condition {
     path_pattern {
-      values = ["/health", "/findings*", "/logs*", "/chat*", "/analyze*"]
-    }
-  }
-}
-
-resource "aws_lb_listener_rule" "api_extra" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 11
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.api.arn
-  }
-  condition {
-    path_pattern {
-      values = ["/simulate*", "/invoke-app*"]
+      values = ["/api", "/api/*"]
     }
   }
 }
@@ -145,7 +131,7 @@ resource "aws_ecs_task_definition" "web" {
     essential = true
     portMappings = [{ containerPort = 3000 }]
     environment = [
-      { name = "NEXT_PUBLIC_API_BASE_URL", value = "http://${aws_lb.main.dns_name}" }
+      { name = "NEXT_PUBLIC_API_BASE_URL", value = "http://${aws_lb.main.dns_name}/api" }
     ]
     logConfiguration = {
       logDriver = "awslogs"
