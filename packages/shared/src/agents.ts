@@ -9,7 +9,7 @@ export const CollaboratorAgent = z.enum([
   'email-log-agent',
   'analysis-agent',
   'simulator-agent',
-  'app-invoker-agent',
+  'scp-agent',
 ]);
 export type CollaboratorAgent = z.infer<typeof CollaboratorAgent>;
 

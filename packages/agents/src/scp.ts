@@ -10,7 +10,7 @@ function endpoints(): Record<string, string> {
 }
 
 /**
- * app-invoker-agent's tool: call a REAL downstream application endpoint with the
+ * scp-agent's tool: call a REAL downstream application endpoint with the
  * user's request (requirement 10/11). The supervisor routes e.g. "scp" here.
  */
 export async function invokeApplication(req: InvokeAppRequest): Promise<InvokeAppResult> {

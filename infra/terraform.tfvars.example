@@ -6,7 +6,7 @@ region      = "us-east-1"
 # Bedrock foundation model ARN (must be enabled in your account/region).
 bedrock_model_arn = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5-20250101-v1:0"
 
-# Real application endpoints the app-invoker agent can call.
+# Real application endpoints the scp-agent can call.
 app_endpoints_json = "{\"scp\":\"https://scp.example.internal/api/execute\"}"
 
 # Log groups to ingest from CloudWatch.

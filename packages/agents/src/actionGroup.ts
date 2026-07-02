@@ -9,7 +9,7 @@ import { searchFindingsByEmbedding, recentFindings } from '@log/db';
 import { connectorFor } from '@log/ingestion';
 import { simulate } from '@log/simulator';
 import { SimulateRequest, InvokeAppRequest, type LogSourceType } from '@log/shared';
-import { invokeApplication } from './appInvoker.js';
+import { invokeApplication } from './scp.js';
 
 interface BedrockAgentEvent {
   actionGroup: string;

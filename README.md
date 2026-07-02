@@ -11,7 +11,7 @@ deploy the whole thing to AWS.
                  │  Supervisor (SUPERVISOR_ROUTER)                                       │
  user request →  │    ├── analysis-agent      (searchFindings / analyzeLogs)            │
  (chat / flow)   │    ├── simulator-agent     (simulateLogs)                            │
-                 │    └── app-invoker-agent   (invokeApplication → e.g. scp)            │
+                 │    └── scp-agent          (invokeApplication → e.g. scp)            │
                  └───────────────┬──────────────────────────────────────────────────────┘
                                  │ Action Group Lambda (TypeScript, dispatch by apiPath)
         ┌────────────────────────┼───────────────────────────────────────────┐
@@ -41,7 +41,7 @@ deploy the whole thing to AWS.
 | 7 | Chatbot, **scoped** (not global) findings | [packages/api/src/chat.ts](packages/api/src/chat.ts), [web/app/chat](web/app/chat) |
 | 8 | Simulator agent writes to all sinks | [packages/simulator/src/simulator.ts](packages/simulator/src/simulator.ts) |
 | 9 | Chatbot triggers simulator w/ sample req/resp | intent `simulate_logs` in [chat.ts](packages/api/src/chat.ts), UI [web/app/simulate](web/app/simulate) |
-| 10 | Chatbot triggers real app endpoint | intent `invoke_application` → [appInvoker.ts](packages/agents/src/appInvoker.ts) |
+| 10 | Chatbot triggers real app endpoint | intent `invoke_application` → [scp.ts](packages/agents/src/scp.ts) |
 | 11 | Supervisor parses/extracts/routes to collaborator/app (e.g. scp) | [supervisor.ts](packages/agents/src/supervisor.ts) + [infra/bedrock.tf](infra/bedrock.tf) |
 | 12 | Terraform to deploy to AWS | [infra/](infra) |
 | 13 | TypeScript | entire codebase |

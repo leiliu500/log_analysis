@@ -61,7 +61,7 @@ HEC), Grafana Loki (query_range + push), and Email (SES→S3 inbound + SES send)
 ### agents
 - `supervisor.ts` — local Bedrock-Converse router mirroring the native agent's
   instructions (fast path for the API; testable without provisioning).
-- `appInvoker.ts` — calls a real downstream endpoint from `APP_ENDPOINTS_JSON`.
+- `scp.ts` — calls a real downstream endpoint from `APP_ENDPOINTS_JSON` (the scp-agent's tool).
 - `actionGroup.ts` — one Lambda handler backing all agent tools, dispatched by
   `apiPath` (`/findings/search`, `/logs/analyze`, `/simulate`, `/invoke-app`).
 - `ingestPoller.ts` — scheduled ingestion Lambda.
@@ -105,7 +105,7 @@ with an ivfflat cosine index powering scoped retrieval.
 ## 6. Bedrock agent topology (requirements 1 & 11)
 
 `infra/bedrock.tf` provisions a **supervisor** agent (`SUPERVISOR_ROUTER`) with
-three **collaborators** (analysis / simulator / app-invoker), each holding an
+three **collaborators** (analysis / simulator / scp), each holding an
 action group bound to the same TypeScript Lambda via an OpenAPI schema
 (`infra/schemas/actions.openapi.json`). `infra/flow.tf` provisions a Bedrock
 **Flow** (Input → Supervisor Agent → Output). The API can either use the native

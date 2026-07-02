@@ -62,7 +62,7 @@ variable "cloudwatch_log_groups" {
 }
 
 variable "app_endpoints_json" {
-  description = "JSON map of appName -> real endpoint for the app-invoker agent."
+  description = "JSON map of appName -> real endpoint for the scp-agent."
   type        = string
   default     = "{\"scp\":\"https://scp.example.internal/api/execute\"}"
 }

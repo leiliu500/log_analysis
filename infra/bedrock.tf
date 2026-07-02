@@ -5,7 +5,7 @@
 #   supervisor (SUPERVISOR_ROUTER) --routes--> collaborator agents
 #     - analysis-agent      : query findings / analyze logs
 #     - simulator-agent     : generate simulated logs
-#     - app-invoker-agent   : call real application endpoints (e.g. scp)
+#     - scp-agent   : call real application endpoints (e.g. scp)
 #   All collaborators share one action-group Lambda, dispatched by apiPath.
 # ---------------------------------------------------------------------------
 
@@ -74,9 +74,9 @@ resource "aws_bedrockagent_agent_alias" "simulator" {
   depends_on       = [aws_bedrockagent_agent_action_group.simulator_actions]
 }
 
-# ---------------- Collaborator: app-invoker-agent ----------------
-resource "aws_bedrockagent_agent" "app_invoker" {
-  agent_name              = "${local.name}-app-invoker-agent"
+# ---------------- Collaborator: scp-agent ----------------
+resource "aws_bedrockagent_agent" "scp" {
+  agent_name              = "${local.name}-scp-agent"
   agent_resource_role_arn = aws_iam_role.bedrock_agent.arn
   foundation_model        = local.foundation_model
   instruction             = <<-EOT
@@ -85,18 +85,18 @@ resource "aws_bedrockagent_agent" "app_invoker" {
   EOT
 }
 
-resource "aws_bedrockagent_agent_action_group" "app_invoker_actions" {
-  agent_id          = aws_bedrockagent_agent.app_invoker.agent_id
+resource "aws_bedrockagent_agent_action_group" "scp_actions" {
+  agent_id          = aws_bedrockagent_agent.scp.agent_id
   agent_version     = "DRAFT"
   action_group_name = "log-tools"
   action_group_executor { lambda = aws_lambda_function.action_group.arn }
   api_schema { payload = file("${path.module}/schemas/actions.openapi.json") }
 }
 
-resource "aws_bedrockagent_agent_alias" "app_invoker" {
-  agent_id         = aws_bedrockagent_agent.app_invoker.agent_id
+resource "aws_bedrockagent_agent_alias" "scp" {
+  agent_id         = aws_bedrockagent_agent.scp.agent_id
   agent_alias_name = "live"
-  depends_on       = [aws_bedrockagent_agent_action_group.app_invoker_actions]
+  depends_on       = [aws_bedrockagent_agent_action_group.scp_actions]
 }
 
 # ---------------- Supervisor (router) ----------------
@@ -115,7 +115,7 @@ resource "aws_bedrockagent_agent" "supervisor" {
     route to exactly one collaborator:
       - analysis-agent   for questions about logs/findings or on-demand analysis
       - simulator-agent  to generate/simulate logs
-      - app-invoker-agent to call a real application endpoint (e.g. scp)
+      - scp-agent to call a real application endpoint (e.g. scp)
     Do not answer directly; delegate. Pass through the user's parameters.
   EOT
 }
@@ -142,14 +142,14 @@ resource "aws_bedrockagent_agent_collaborator" "simulator" {
   }
 }
 
-resource "aws_bedrockagent_agent_collaborator" "app_invoker" {
+resource "aws_bedrockagent_agent_collaborator" "scp" {
   agent_id                   = aws_bedrockagent_agent.supervisor.agent_id
   agent_version              = "DRAFT"
-  collaborator_name          = "app-invoker-agent"
+  collaborator_name          = "scp-agent"
   collaboration_instruction  = "Delegate requests to invoke a real downstream application endpoint such as scp."
   relay_conversation_history = "TO_COLLABORATOR"
   agent_descriptor {
-    alias_arn = aws_bedrockagent_agent_alias.app_invoker.agent_alias_arn
+    alias_arn = aws_bedrockagent_agent_alias.scp.agent_alias_arn
   }
 }
 
@@ -159,6 +159,6 @@ resource "aws_bedrockagent_agent_alias" "supervisor" {
   depends_on = [
     aws_bedrockagent_agent_collaborator.analysis,
     aws_bedrockagent_agent_collaborator.simulator,
-    aws_bedrockagent_agent_collaborator.app_invoker,
+    aws_bedrockagent_agent_collaborator.scp,
   ]
 }

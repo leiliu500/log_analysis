@@ -9,7 +9,7 @@ Intents:
 - query_findings   -> answer questions about stored logs/findings (targetAgent: analysis-agent)
 - analyze_logs     -> run analysis over a source/time window (targetAgent: <source>-log-agent)
 - simulate_logs    -> generate simulated logs (targetAgent: simulator-agent)
-- invoke_application -> call a real downstream app endpoint, e.g. "scp" (targetAgent: app-invoker-agent)
+- invoke_application -> call a real downstream app endpoint, e.g. "scp" (targetAgent: scp-agent)
 
 Extract targetApplication when a specific app is named (e.g. "scp", "checkout").
 Extract sources (cloudwatch/splunk/grafana/email) mentioned or implied.
