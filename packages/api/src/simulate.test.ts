@@ -65,6 +65,17 @@ test('"(4) … (5) …" numbered format splits even without repeated "simulate"'
   assert.equal(parseAckStatus(segs[1]!), 'failure');
 });
 
+test('"(4) … (5) …" all on ONE line splits (markers anywhere, not just line start)', () => {
+  const prompt =
+    '(4) simulate 3 request/ack/response with success ids 001 (5) 1 request/ack without response with failure';
+  const segs = splitInstructions(prompt);
+  assert.equal(segs.length, 2);
+  assert.deepEqual(parseMessageTypes(segs[0]!), ['REQUEST', 'ACK', 'RESPONSE']);
+  assert.equal(parseAckStatus(segs[0]!), 'success');
+  assert.deepEqual(parseMessageTypes(segs[1]!), ['REQUEST', 'ACK']);
+  assert.equal(parseAckStatus(segs[1]!), 'failure');
+});
+
 test('numbered format with NO "simulate" word still splits', () => {
   const prompt = '(1) 3 request/ack/response success\n(2) 1 request/ack without response failure';
   const segs = splitInstructions(prompt);

@@ -63,11 +63,15 @@ export const hasCashXml = (s: string): boolean => /<(?:[\w.-]+:)?cashMessage[\s>
 export function splitInstructions(prompt: string): string[] {
   if (hasCashXml(prompt)) return [prompt];
 
-  // Numbered/enumerated command markers at the start of a line: "(4)", "4)", "4.".
-  // The digit index (not the leading newline) is the segment start.
-  const numbered = [...prompt.matchAll(/(?:^|\n)[ \t]*\(?\d{1,2}[).]/g)].map(
-    (m) => (m.index ?? 0) + m[0].search(/\(?\d/),
-  );
+  // Enumeration markers, anywhere (not only at line starts, so "(4) … (5) …" on
+  // one line still splits): parenthesized "(4)" anywhere, or "4)"/"4." at a line
+  // start. Mid-line bare numbers ("001 to 004") are intentionally NOT markers.
+  const marks = new Set<number>();
+  for (const m of prompt.matchAll(/\(\d{1,2}\)/g)) if (m.index !== undefined) marks.add(m.index);
+  for (const m of prompt.matchAll(/(?:^|\n)[ \t]*(\d{1,2}[).])/g)) {
+    if (m.index !== undefined) marks.add(m.index + m[0].indexOf(m[1]!));
+  }
+  const numbered = [...marks].sort((a, b) => a - b);
   const sims = [...prompt.matchAll(/\bsimulate\b/gi)]
     .map((m) => m.index)
     .filter((i): i is number => i !== undefined);
@@ -83,6 +87,45 @@ export function splitInstructions(prompt: string): string[] {
     if (seg) segs.push(seg);
   }
   return segs.length ? segs : [prompt];
+}
+
+const SEGMENT_SYSTEM = `You split a user's request into separate cashMessage
+simulation commands. One request may describe SEVERAL distinct simulations — e.g.
+"3 successful request/ack/response starting 001, and 1 request/ack without
+response that fails" is TWO commands. Split on enumerations ("(4)…(5)…"), the word
+"simulate", or conjunctions ("and", "then", ";", a new sentence) that separate
+distinct simulations. Do NOT split a single command (e.g. "request/ack/response"
+is one command, not three).
+
+Return each command as the EXACT verbatim substring of the input, in order,
+together covering every command. A single-command request returns one element.
+
+Respond ONLY with JSON: {"commands":["<verbatim substring>", ...]}`;
+
+/**
+ * Segment a prompt into one text span per command. Deterministic splitting
+ * (numbered markers / repeated "simulate") is tried first because it is exact;
+ * only when that yields a single span do we ask the LLM to segment, which
+ * handles conjunction-joined prose like "3 … success and 1 … failure". Each
+ * returned span is still parsed by the authoritative keyword regexes downstream.
+ */
+export async function segmentCommands(prompt: string): Promise<string[]> {
+  if (hasCashXml(prompt)) return [prompt];
+  const det = splitInstructions(prompt);
+  if (det.length >= 2) return det;
+  try {
+    const out = await converseJson<{ commands?: unknown }>(prompt, {
+      system: SEGMENT_SYSTEM,
+      temperature: 0,
+    });
+    const cmds = Array.isArray(out.commands)
+      ? out.commands.map((c) => String(c).trim()).filter(Boolean)
+      : [];
+    if (cmds.length >= 2) return cmds;
+  } catch {
+    /* fall through to the single deterministic segment */
+  }
+  return det;
 }
 
 /**
@@ -203,7 +246,7 @@ export async function extractCommands(prompt: string): Promise<SimulateCommand[]
     ];
   }
   const out: SimulateCommand[] = [];
-  for (const seg of splitInstructions(prompt)) out.push(await extractOneCommand(seg));
+  for (const seg of await segmentCommands(prompt)) out.push(await extractOneCommand(seg));
   return out;
 }
 
