@@ -23,22 +23,18 @@ const json = (v: unknown) => getSql().json(v as Parameters<Sql['json']>[0]);
 export async function insertParsedLogs(logs: ParsedLog[]): Promise<void> {
   if (!logs.length) return;
   const sqlc = getSql();
-  // Insert in one round-trip; embeddings written via raw vector literal.
-  const rows = logs.map((l) => ({
-    id: l.id,
-    source: l.source,
-    stream: l.stream,
-    ts: l.timestamp,
-    level: l.level,
-    message: l.message,
-    fields: json(l.fields),
-    entities: json(l.entities),
-    fingerprint: l.fingerprint,
-    raw: l.raw,
-    ingested_at: l.ingestedAt,
-    embedding: toVector(l.embedding),
-  }));
-  await sqlc`INSERT INTO parsed_logs ${sqlc(rows)}`;
+  // Per-row inserts in one transaction. sql.json() is used directly in the
+  // template (its supported form); the bulk sql(rows) helper does not serialize
+  // json()-wrapped values correctly.
+  await sqlc.begin(async (tx) => {
+    for (const l of logs) {
+      await tx`INSERT INTO parsed_logs
+        (id, source, stream, ts, level, message, fields, entities, fingerprint, raw, ingested_at, embedding)
+        VALUES (${l.id}, ${l.source}, ${l.stream}, ${l.timestamp}, ${l.level}, ${l.message},
+                ${json(l.fields)}, ${json(l.entities)}, ${l.fingerprint}, ${l.raw}, ${l.ingestedAt},
+                ${toVector(l.embedding)}::vector)`;
+    }
+  });
 }
 
 export interface LogQuery {
@@ -85,24 +81,13 @@ export async function searchLogsByEmbedding(
 // ---------------------------------------------------------------------------
 export async function insertFinding(f: Finding): Promise<void> {
   const sqlc = getSql();
-  await sqlc`INSERT INTO findings ${sqlc({
-    id: f.id,
-    kind: f.kind,
-    severity: f.severity,
-    title: f.title,
-    summary: f.summary,
-    confidence: f.confidence,
-    sources: sqlc.array(f.sources),
-    fingerprint: f.fingerprint,
-    evidence: json(f.evidence),
-    reasoning: json(f.reasoning),
-    recommendations: json(f.recommendations),
-    metadata: json(f.metadata),
-    window_start: f.windowStart,
-    window_end: f.windowEnd,
-    created_at: f.createdAt,
-    embedding: toVector(f.embedding),
-  })}`;
+  await sqlc`INSERT INTO findings
+    (id, kind, severity, title, summary, confidence, sources, fingerprint,
+     evidence, reasoning, recommendations, metadata, window_start, window_end, created_at, embedding)
+    VALUES (${f.id}, ${f.kind}, ${f.severity}, ${f.title}, ${f.summary}, ${f.confidence},
+            ${sqlc.array(f.sources)}, ${f.fingerprint},
+            ${json(f.evidence)}, ${json(f.reasoning)}, ${json(f.recommendations)}, ${json(f.metadata)},
+            ${f.windowStart}, ${f.windowEnd}, ${f.createdAt}, ${toVector(f.embedding)}::vector)`;
 }
 
 export async function recentFindings(limit = 50): Promise<Finding[]> {
