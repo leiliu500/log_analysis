@@ -27,7 +27,9 @@ export async function simulate(req: SimulateRequest): Promise<SimulateResult> {
 
   // The Request drives correlation; if none is typed, treat the first message as it.
   const requestSample = samples.find((m) => messageType(m) === 'REQUEST') ?? samples[0]!;
-  const baseRequestId = getTag(requestSample, 'messageId') ?? `SIM-${req.application}-1`;
+  // startMessageId (from the NL prompt) overrides the sample's id when provided.
+  const baseRequestId =
+    req.startMessageId ?? getTag(requestSample, 'messageId') ?? `SIM-${req.application}-1`;
 
   const now = Date.now();
   const spreadMs = req.spreadMinutes * 60_000;

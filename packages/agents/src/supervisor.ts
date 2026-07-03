@@ -15,6 +15,14 @@ Extract targetApplication when a specific app is named (e.g. "scp", "checkout").
 Extract sources (cloudwatch/splunk/grafana/email) mentioned or implied.
 Put concrete params (timeRange, filters, payload, count, sinks) into parameters.
 
+For simulate_logs, extract into parameters:
+- count: integer number of request/ack/response sets to generate
+  (e.g. "simulate 3 request/ack/response" -> count: 3).
+- startMessageId: the starting messageId if the user gives one
+  (e.g. "with message_id=001 to 003" -> startMessageId: "001";
+   "messageId 5000" -> startMessageId: "5000").
+- sinks: array of sinks if named, else omit.
+
 Respond ONLY with JSON:
 {
  "intent": "...",

@@ -16,8 +16,22 @@ import {
   recentFindings,
 } from '@log/db';
 import { routeRequest, invokeApplication } from '@log/agents';
-import { simulate } from '@log/simulator';
+import { simulate, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/simulator';
 import { connectorFor } from '@log/ingestion';
+
+/** Regex fallbacks so simulation is robust even if the LLM omits a param. */
+function parseCount(message: string, fromLlm: unknown): number {
+  if (typeof fromLlm === 'number' && fromLlm >= 1) return Math.floor(fromLlm);
+  if (typeof fromLlm === 'string' && /^\d+$/.test(fromLlm)) return Number(fromLlm);
+  const m = message.match(/\b(\d{1,4})\s*(?:request|ack|response|set|message|msg|log)/i);
+  return m ? Math.max(1, Number(m[1])) : 1;
+}
+function parseStartId(message: string, fromLlm: unknown): string | undefined {
+  if (typeof fromLlm === 'string' && fromLlm.trim()) return fromLlm.trim();
+  const m = message.match(/message[_\s-]?id\s*(?:=|:|\s|from)\s*([A-Za-z0-9._-]+)/i);
+  return m ? m[1] : undefined;
+}
+const hasCashXml = (s: string): boolean => /<(?:[\w.-]+:)?cashMessage[\s>]/i.test(s);
 
 const ANSWER_SYSTEM = `You are the log-analysis assistant. Answer the user's
 question using ONLY the retrieved findings and logs provided as CONTEXT below.
@@ -80,13 +94,16 @@ async function dispatch(
   switch (route.intent) {
     case 'simulate_logs': {
       const p = route.parameters;
+      // If the user pasted XML, use it as the template; otherwise use the
+      // built-in cashMessage Request/ACK/Response template. The LLM supervisor
+      // supplies count + startMessageId (with regex fallback for robustness).
+      const samples = hasCashXml(message) ? message : DEFAULT_CASHMESSAGE_SAMPLES;
       const req = SimulateRequest.parse({
         application: route.targetApplication ?? p.application ?? 'cashMessage',
-        // Prefer an extracted samples param; otherwise treat the whole message
-        // (e.g. a pasted XML payload) as the sample.
-        samples: (typeof p.samples === 'string' && p.samples) || message,
+        samples,
         sinks: (Array.isArray(p.sinks) ? p.sinks : undefined) ?? (route.sources.length ? route.sources : ['cloudwatch']),
-        count: Number(p.count ?? 1),
+        count: parseCount(message, p.count),
+        startMessageId: parseStartId(message, p.startMessageId),
         spreadMinutes: Number(p.spreadMinutes ?? 0),
       });
       const result = await simulate(req);
@@ -98,7 +115,7 @@ async function dispatch(
         .map((m) => m.messageId)
         .join(', ');
       return {
-        answer: `Simulated ${req.count} set(s) for "${req.application}" (${written} log entries). Request messageIds: ${ids || '(none parsed)'}. They will appear in findings after the next analysis cycle.`,
+        answer: `Simulated ${req.count} request/ack/response set(s) for "${req.application}" (${written} log entries). Request messageIds: ${ids}. Each ACK/Response initMessageId matches its request. They will appear in findings after the next analysis cycle.`,
         context: { findings: [], logs: [], route },
       };
     }

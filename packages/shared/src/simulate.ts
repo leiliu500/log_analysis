@@ -19,6 +19,11 @@ export const SimulateRequest = z.object({
   sinks: z.array(LogSourceType).min(1).default(['cloudwatch']),
   /** How many correlated Request/ACK/Response sets to generate. */
   count: z.number().int().min(1).max(10000).default(1),
+  /**
+   * Optional starting messageId for the first Request (e.g. "001"). Overrides
+   * the sample's messageId; subsequent sets increment it (001, 002, 003…).
+   */
+  startMessageId: z.string().optional(),
   /** Spread the generated messages across this many minutes (0 = all "now"). */
   spreadMinutes: z.number().int().min(0).max(1440).default(0),
 });
