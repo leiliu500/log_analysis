@@ -66,3 +66,9 @@ variable "app_endpoints_json" {
   type        = string
   default     = "{\"scp\":\"https://scp.example.internal/api/execute\"}"
 }
+
+variable "flow_revision" {
+  description = "Bump to force the Bedrock flow to re-prepare, re-version, and re-point its alias."
+  type        = number
+  default     = 1
+}

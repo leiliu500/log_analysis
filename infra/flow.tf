@@ -75,3 +75,44 @@ resource "aws_bedrockagent_flow" "log_analysis" {
     }
   }
 }
+
+# The AWS provider (v6) can create the flow but has NO resources for flow
+# versions or aliases, and it leaves the flow NotPrepared. Drive the remaining
+# deployment steps via the CLI: prepare -> wait Prepared -> create version ->
+# create/update the "live" alias to point at it. Re-runs when the flow changes.
+resource "terraform_data" "flow_deploy" {
+  triggers_replace = [aws_bedrockagent_flow.log_analysis.arn, var.flow_revision]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      set -e
+      FID=${aws_bedrockagent_flow.log_analysis.id}
+      RGN=${var.region}
+      echo "Preparing flow $FID"
+      aws bedrock-agent prepare-flow --flow-identifier "$FID" --region "$RGN" >/dev/null
+      for i in $(seq 1 40); do
+        s=$(aws bedrock-agent get-flow --flow-identifier "$FID" --region "$RGN" --query status --output text)
+        echo "  flow status: $s"
+        [ "$s" = "Prepared" ] && break
+        sleep 3
+      done
+      VER=$(aws bedrock-agent create-flow-version --flow-identifier "$FID" --region "$RGN" --query version --output text)
+      echo "Created flow version $VER"
+      AID=$(aws bedrock-agent list-flow-aliases --flow-identifier "$FID" --region "$RGN" --query "flowAliasSummaries[?name=='live'].id | [0]" --output text)
+      if [ "$AID" = "None" ] || [ -z "$AID" ]; then
+        aws bedrock-agent create-flow-alias --flow-identifier "$FID" --name live --region "$RGN" \
+          --routing-configuration "[{\"flowVersion\":\"$VER\"}]" >/dev/null
+        echo "Created alias 'live' -> v$VER"
+      else
+        aws bedrock-agent update-flow-alias --flow-identifier "$FID" --alias-identifier "$AID" --name live --region "$RGN" \
+          --routing-configuration "[{\"flowVersion\":\"$VER\"}]" >/dev/null
+        echo "Updated alias 'live' -> v$VER"
+      fi
+    EOT
+  }
+}
+
+output "flow_id" {
+  value = aws_bedrockagent_flow.log_analysis.id
+}
