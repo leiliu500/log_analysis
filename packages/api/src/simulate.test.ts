@@ -6,6 +6,7 @@ import {
   parseMessageTypes,
   parseAckStatus,
   splitInstructions,
+  separateSamplesAndInstructions,
 } from './simulate.js';
 
 const REQ4 =
@@ -94,6 +95,35 @@ test('numbered format with NO "simulate" word still splits', () => {
 test('"001 to 004" / mid-line numbers are not treated as command markers', () => {
   const segs = splitInstructions('simulate 3 request/ack/response with message_id=001 to 004');
   assert.equal(segs.length, 1);
+});
+
+test('pasted XML samples + (4)/(5) instructions are separated', () => {
+  const prompt = [
+    '(1) request:',
+    '<ns2:cashMessage xmlns:ns2="x"><header><messageType>REQUEST</messageType></header></ns2:cashMessage>',
+    '(2) ACK:',
+    '<NS1:cashMessage xmlns:NS1="x"><header><messageType>ACK</messageType></header></NS1:cashMessage>',
+    '(3) response:',
+    '<NS1:cashMessage xmlns:NS1="x"><header><messageType>RESPONSE</messageType></header></NS1:cashMessage>',
+    '(4) simulate 3 request/ack/response sets with message_id=001 to 004',
+    'Make sure the first 3 request/ack/response with success and no error',
+    '(5) simulate the 1 request/ack without response and ack with failure',
+  ].join('\n');
+  const { samples, instructions } = separateSamplesAndInstructions(prompt);
+  // Samples keep the XML; labels and prose are gone.
+  assert.ok(/messageType>REQUEST/.test(samples) && /messageType>RESPONSE/.test(samples));
+  assert.ok(!/simulate/i.test(samples));
+  // Instructions keep only the (4)/(5) commands (labels (1)-(3) removed).
+  assert.ok(!/<[^>]+>/.test(instructions));
+  assert.ok(!/\(1\)|\(2\)|\(3\)/.test(instructions));
+  const segs = splitInstructions(instructions);
+  assert.equal(segs.length, 2);
+  assert.deepEqual(parseMessageTypes(segs[0]!), ['REQUEST', 'ACK', 'RESPONSE']);
+  assert.equal(parseAckStatus(segs[0]!), 'success');
+  assert.equal(parseCount(segs[0]!, undefined), 3);
+  assert.equal(parseStartId(segs[0]!, undefined), '001');
+  assert.deepEqual(parseMessageTypes(segs[1]!), ['REQUEST', 'ACK']);
+  assert.equal(parseAckStatus(segs[1]!), 'failure');
 });
 
 test('single command / XML is not split', () => {

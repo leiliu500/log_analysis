@@ -55,6 +55,32 @@ export function parseAckStatus(message: string): 'success' | 'failure' {
 
 export const hasCashXml = (s: string): boolean => /<(?:[\w.-]+:)?cashMessage[\s>]/i.test(s);
 
+/** A bare "(1) request:" / "(3) response :" line that just labels a sample block. */
+const SAMPLE_LABEL =
+  /^\s*\(?\d{1,2}\)?[.:]?\s*(?:request|req|ack|acknowledg(?:e)?ment|response|resp|message|msg)\s*:?\s*$/i;
+
+/**
+ * A pasted prompt often mixes XML sample template(s) with the natural-language
+ * simulate instructions. Separate them so each is handled correctly: lines
+ * containing XML angle-brackets are the sample template; the remaining prose
+ * (minus bare "(1) request:" style labels) is the instruction text that gets
+ * split into commands. Without this, any pasted XML made the whole blob parse
+ * as one command (mixing "(4) success" with "(5) failure").
+ */
+export function separateSamplesAndInstructions(prompt: string): {
+  samples: string;
+  instructions: string;
+} {
+  const xml: string[] = [];
+  const instr: string[] = [];
+  for (const line of prompt.split(/\r?\n/)) {
+    if (/[<>]/.test(line)) xml.push(line);
+    else if (SAMPLE_LABEL.test(line)) continue;
+    else instr.push(line);
+  }
+  return { samples: xml.join('\n').trim(), instructions: instr.join('\n').trim() };
+}
+
 /**
  * Split a prompt containing several commands into one segment per command, so
  * each is parsed with its own count/types/ackStatus and params never bleed
@@ -277,9 +303,13 @@ export async function handleSimulatePrompt(
   input: unknown,
 ): Promise<{ results: SimulatePromptOutcome[] }> {
   const { prompt } = z.object({ prompt: z.string().min(1) }).parse(input);
-  const samples = hasCashXml(prompt) ? prompt : DEFAULT_CASHMESSAGE_SAMPLES;
+  // Pasted XML is the template; the prose lines are the commands. Parse each
+  // from its own text so "(4) success" and "(5) failure" don't merge.
+  const { samples: xmlSamples, instructions } = separateSamplesAndInstructions(prompt);
+  const samples = xmlSamples && hasCashXml(xmlSamples) ? xmlSamples : DEFAULT_CASHMESSAGE_SAMPLES;
+  const commandText = instructions || prompt;
   const results: SimulatePromptOutcome[] = [];
-  for (const spec of await extractCommands(prompt)) {
+  for (const spec of await extractCommands(commandText)) {
     const req = SimulateRequest.parse({
       application: spec.application ?? 'cashMessage',
       samples,
