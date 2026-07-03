@@ -51,6 +51,57 @@ export interface LogAnswer {
   };
 }
 
+type Enriched = { log: ParsedLog; meta: { type?: string; messageId?: string; initMessageId?: string } };
+
+/** The cashMessage type the question is about, if any. */
+function askedType(message: string): 'REQUEST' | 'ACK' | 'RESPONSE' | undefined {
+  const m = message.toLowerCase();
+  if (/\brequests?\b/.test(m)) return 'REQUEST';
+  if (/\bresponses?\b/.test(m)) return 'RESPONSE';
+  if (/\backs?\b|acknowledg/.test(m)) return 'ACK';
+  return undefined;
+}
+
+/**
+ * Answer count / "list messageId" questions DETERMINISTICALLY from the parsed
+ * logs — never via the LLM — so the ids and counts are always the real ones in
+ * the window (the model otherwise fabricates plausible-looking ids). Returns
+ * null for open-ended questions, which fall through to the grounded LLM path.
+ */
+export function directAnswer(
+  message: string,
+  source: string,
+  windowMinutes: number,
+  enriched: Enriched[],
+): string | null {
+  const m = message.toLowerCase();
+  const isCount = /\bhow many\b|\bnumber of\b|\bcount\b|\btotal\b/.test(m);
+  const wantsIds = /messageid|message id|\bids?\b|list|show|which|what are/.test(m);
+  if (!isCount && !wantsIds) return null;
+
+  const type = askedType(message);
+  const matched = type ? enriched.filter((e) => e.meta.type === type) : enriched;
+  const label = type ? `${type} message(s)` : 'log entr(y/ies)';
+  const win = `the last ${windowMinutes} minute(s)`;
+
+  if (matched.length === 0) {
+    return `No ${type ?? 'log'} ${type ? 'messages' : 'entries'} were found on ${source} in ${win}.`;
+  }
+
+  const ids = matched.map((e) => e.meta.messageId).filter((x): x is string => !!x && x !== '-');
+  const lines = [`${matched.length} ${label} on ${source} in ${win}.`];
+  // List the ids (with timestamps) when asked, or whenever the set is small.
+  if ((wantsIds || matched.length <= 50) && ids.length) {
+    lines.push('');
+    for (const e of matched.slice(0, 200)) {
+      const ts = new Date(e.log.timestamp).toISOString();
+      const init = e.meta.initMessageId ? `, initMessageId=${e.meta.initMessageId}` : '';
+      lines.push(`- ${ts} ${e.meta.type ?? e.log.level.toUpperCase()} messageId=${e.meta.messageId ?? '-'}${init}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 /**
  * The analysis-agent's core skill: pull raw logs from a source over a recent
  * window, compute deterministic aggregates, and let the model answer the user's
@@ -84,7 +135,18 @@ export async function answerLogQuestion(
     `Count by level: ${JSON.stringify(byLevel)}`,
   ].join('\n');
 
-  // Per-message table (with ids) so the model can list messageIds when asked.
+  // Count / "list messageId" questions are answered deterministically from the
+  // real logs so ids and counts are never fabricated by the model.
+  const direct = directAnswer(message, source, windowMinutes, enriched);
+  if (direct !== null) {
+    return {
+      answer: direct,
+      logs: parsed.slice(0, 50),
+      meta: { source, windowMinutes, total: parsed.length, byMessageType, byLevel },
+    };
+  }
+
+  // Open-ended questions: let the model reason, but grounded in the real table.
   const table = enriched
     .slice(0, 500)
     .map(({ log, meta }) => {
