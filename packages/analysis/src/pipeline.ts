@@ -1,11 +1,50 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, RawLogRecord, Severity } from '@log/shared';
+import type { Finding, ParsedLog, RawLogRecord, Severity, LogSourceType } from '@log/shared';
 import { insertParsedLogs, insertFinding, insertAlert } from '@log/db';
 import { parseBatch } from './parser.js';
 import { scoreAndLearn, isAnomalous, type AnomalyScore } from './learn.js';
 import { correlate } from './correlate.js';
 import { reasonAboutCluster } from './reason.js';
 import { embed } from './bedrock.js';
+
+/** Deterministic anomaly finding (no LLM) from a scored fingerprint burst. */
+function anomalyFinding(
+  score: AnomalyScore,
+  evidence: ParsedLog[],
+  windowMs: number,
+  now: number,
+): Finding {
+  const severity: Severity =
+    score.zScore >= 5 || score.count >= 25 ? 'high' : score.isNew || score.zScore >= 3 ? 'medium' : 'low';
+  const reason = score.isNew
+    ? `New log pattern appeared ${score.count} time(s) in this window.`
+    : `Volume rose to ${score.observedRate.toFixed(1)}/min vs baseline ${score.baselineRate.toFixed(1)}/min (z=${score.zScore.toFixed(1)}).`;
+  return {
+    id: randomUUID(),
+    kind: 'anomaly',
+    severity,
+    title: `Unusual activity: ${score.sample.slice(0, 70)}`,
+    summary: `${reason} ${score.count} occurrence(s) on ${score.source}.`,
+    confidence: Math.min(0.95, 0.5 + Math.min(score.zScore, 5) / 10 + (score.isNew ? 0.2 : 0)),
+    sources: [score.source as LogSourceType],
+    fingerprint: score.fingerprint,
+    evidence: evidence.slice(0, 10).map((l) => ({
+      logId: l.id,
+      source: l.source,
+      stream: l.stream,
+      timestamp: l.timestamp,
+      excerpt: l.message.slice(0, 200),
+    })),
+    reasoning: [reason, `Log signature: ${score.fingerprint}.`],
+    recommendations: score.isNew
+      ? ['Confirm whether this new log pattern is expected.']
+      : ['Investigate the cause of the volume change.'],
+    metadata: { anomaly: score },
+    windowStart: now - windowMs,
+    windowEnd: now,
+    createdAt: now,
+  };
+}
 
 export interface PipelineOptions {
   /** Sliding window used for rate/anomaly math. */
@@ -55,37 +94,53 @@ export async function runPipeline(
 
   const scores = await scoreAndLearn(parsed, windowMs);
   const anomalous = scores.filter(isAnomalous);
-  const anomalyByFp = new Map(anomalous.map((a) => [a.fingerprint, a]));
-
-  // Correlate all parsed logs, then keep clusters that either contain an
-  // anomalous fingerprint or are cross-source (interesting on their own).
-  const clusters = correlate(parsed, windowMs)
-    .filter(
-      (c) =>
-        c.sources.length >= 2 ||
-        c.logs.some((l) => anomalyByFp.has(l.fingerprint)),
-    )
-    .slice(0, maxReasoned);
 
   const findings: Finding[] = [];
-  for (const cluster of clusters) {
-    const anomaly = cluster.logs
-      .map((l) => anomalyByFp.get(l.fingerprint))
-      .find(Boolean);
+  const now = Date.now();
+
+  const alert = async (f: Finding): Promise<void> => {
+    if (ALERT_SEVERITIES.includes(f.severity)) {
+      await insertAlert({
+        id: randomUUID(),
+        findingId: f.id,
+        severity: f.severity,
+        channel: 'dashboard',
+        status: 'pending',
+        createdAt: now,
+      });
+    }
+  };
+
+  // 1) Deterministic anomaly findings — guarantees the dashboard surfaces every
+  //    detected burst / new pattern, even for single-source traffic.
+  const byFp = new Map<string, ParsedLog[]>();
+  for (const l of parsed) {
+    const arr = byFp.get(l.fingerprint);
+    if (arr) arr.push(l);
+    else byFp.set(l.fingerprint, [l]);
+  }
+  for (const score of anomalous) {
+    const finding = anomalyFinding(score, byFp.get(score.fingerprint) ?? [], windowMs, now);
     try {
-      const finding = await reasonAboutCluster(cluster, { anomaly });
+      finding.embedding = await embed(`${finding.title}\n${finding.summary}`);
+    } catch {
+      /* embeddings best-effort */
+    }
+    await insertFinding(finding);
+    await alert(finding);
+    findings.push(finding);
+  }
+
+  // 2) Cross-source correlation clusters -> LLM reasoning (richer findings).
+  const clusters = correlate(parsed, windowMs)
+    .filter((c) => c.sources.length >= 2)
+    .slice(0, maxReasoned);
+  for (const cluster of clusters) {
+    try {
+      const finding = await reasonAboutCluster(cluster);
       await insertFinding(finding);
+      await alert(finding);
       findings.push(finding);
-      if (ALERT_SEVERITIES.includes(finding.severity)) {
-        await insertAlert({
-          id: randomUUID(),
-          findingId: finding.id,
-          severity: finding.severity,
-          channel: 'dashboard',
-          status: 'pending',
-          createdAt: Date.now(),
-        });
-      }
     } catch (err) {
       console.error('reasoning failed for cluster', cluster.key, err);
     }
