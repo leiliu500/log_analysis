@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   recentFindings,
   deleteAllFindings,
+  deleteAllLogs,
   queryLogs,
   ensureSession,
   sessionHistory,
@@ -55,6 +56,13 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
   api.delete('/findings', async () => {
     const deleted = await deleteAllFindings();
     return { deleted };
+  });
+
+  // Reset stored data: findings + parsed logs. Removes stale/seeded rows so the
+  // chatbot and dashboard reflect only live logs.
+  api.delete('/data', async () => {
+    const [findingsDeleted, logsDeleted] = await Promise.all([deleteAllFindings(), deleteAllLogs()]);
+    return { findingsDeleted, logsDeleted };
   });
 
   const LogsQuery = z.object({

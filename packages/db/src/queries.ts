@@ -109,6 +109,13 @@ export async function deleteAllFindings(): Promise<number> {
   return rows.length;
 }
 
+/** Delete every parsed log row. Returns the count removed. */
+export async function deleteAllLogs(): Promise<number> {
+  const sqlc = getSql();
+  const rows = await sqlc`DELETE FROM parsed_logs RETURNING id`;
+  return rows.length;
+}
+
 /** True if a finding with this fingerprint was created at/after `since` (ms). */
 export async function findingExistsByFingerprint(
   fingerprint: string,
