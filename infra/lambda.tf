@@ -64,12 +64,16 @@ resource "aws_lambda_function" "ingest_poller" {
 }
 
 # Allow the Bedrock Agent to invoke the action-group Lambda.
+# Allow the supervisor AND every collaborator agent to invoke the action-group
+# Lambda. Each collaborator's action group calls this Lambda under its own agent
+# ARN, so a supervisor-only permission denied them ("Access denied while
+# invoking Lambda"). Scope to all Bedrock agents in this account.
 resource "aws_lambda_permission" "bedrock_invoke" {
   statement_id  = "AllowBedrockAgentInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.action_group.function_name
   principal     = "bedrock.amazonaws.com"
-  source_arn    = aws_bedrockagent_agent.supervisor.agent_arn
+  source_arn    = "arn:${data.aws_partition.current.partition}:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:agent/*"
 }
 
 # Scheduled ingestion every 5 minutes (always-on analysis pipeline).
