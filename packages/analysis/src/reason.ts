@@ -4,15 +4,25 @@ import { converseJson, embed } from './bedrock.js';
 import type { AnomalyScore } from './learn.js';
 import type { Cluster } from './correlate.js';
 
-const REASONING_SYSTEM = `You are a senior SRE log-analysis agent. You receive
-a cluster of correlated log lines (possibly from multiple sources) plus
-statistical context. Produce a rigorous, evidence-grounded finding.
+const REASONING_SYSTEM = `You are a log-analysis agent. You are given actual log
+lines. Describe a finding based STRICTLY and ONLY on the literal content of those
+log lines.
 
-Rules:
-- Reason step by step; do not speculate beyond the evidence.
-- Assign severity by real user/business impact.
-- confidence is 0..1 and must reflect how well the evidence supports the claim.
-- Only cite log excerpts that actually appear in the input.
+HARD RULES — follow exactly:
+- Use ONLY facts that literally appear in the provided log lines.
+- Quote the exact log text you are referring to (verbatim) in the summary.
+- Do NOT invent, infer, guess, or assume anything not written in the logs:
+  no root causes, no cause-and-effect ("caused by"), no error types, no
+  technologies/languages/frameworks, no stack traces, no business impact.
+- Do NOT assume the application is Java or any specific stack.
+- reasoning[] must contain only restatements/quotes of the log content, not
+  hypotheses.
+- recommendations[] must be a single generic step like "Investigate the logged
+  message." Do not invent remediation for causes not in the logs.
+- If the log lines do not clearly show an error/problem, set severity "info" and
+  say the logs show no explicit error.
+- The title must paraphrase the actual logged message, not a narrative.
+
 Respond ONLY with JSON matching:
 {
   "kind": "anomaly|correlation|inference|reasoning|pattern",

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Finding, ParsedLog, RawLogRecord, Severity } from '@log/shared';
-import { insertParsedLogs, insertFinding, insertAlert } from '@log/db';
+import { insertParsedLogs, insertFinding, insertAlert, findingExistsByFingerprint } from '@log/db';
 import { parseBatch } from './parser.js';
 import { scoreAndLearn, isAnomalous, type AnomalyScore } from './learn.js';
 import { correlate, type Cluster } from './correlate.js';
@@ -27,6 +27,9 @@ export interface PipelineResult {
 }
 
 const ALERT_SEVERITIES: Severity[] = ['high', 'critical'];
+
+/** Suppress re-reporting the same fingerprint within this window (poller runs every 5 min). */
+const DEDUP_WINDOW_MS = 60 * 60_000;
 
 /**
  * End-to-end log processing for one batch. Findings are produced only for real
@@ -81,7 +84,15 @@ export async function runPipeline(
     }
   };
 
+  // Skip anomalies already reported recently so the 5-minute poller does not
+  // pile up duplicate findings for the same signature/transaction.
+  const dedupSince = now - DEDUP_WINDOW_MS;
+  const isDuplicate = (fingerprint: string): Promise<boolean> =>
+    findingExistsByFingerprint(fingerprint, dedupSince);
+
   const reasonCluster = async (cluster: Cluster): Promise<void> => {
+    const fp = cluster.logs[0]?.fingerprint ?? cluster.key;
+    if (await isDuplicate(fp)) return;
     try {
       const finding = await reasonAboutCluster(cluster);
       await insertFinding(finding);
@@ -103,6 +114,7 @@ export async function runPipeline(
     0,
     maxReasoned,
   )) {
+    if (await isDuplicate(`tx:${tx.id}`)) continue;
     try {
       const finding = await reasonAboutTransaction(tx, reason, now, windowMs);
       await insertFinding(finding);

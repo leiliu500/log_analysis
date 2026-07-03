@@ -111,12 +111,23 @@ interface ModelTxFinding {
   recommendations: string[];
 }
 
-const TX_SYSTEM = `You are an SRE analyzing FRB cashMessage transactions. A
-transaction is identified by a messageId; a NORMAL one has a REQUEST, an ACK, and
-a RESPONSE sharing that id (ACK/RESPONSE carry it as initMessageId) with a success
-ackCode. Sending a REQUEST is normal and an idle window is normal. You are given
-a transaction that has been flagged as anomalous, with the reason. Produce a
-finding. Respond ONLY with JSON:
+const TX_SYSTEM = `You analyze FRB cashMessage transactions. A transaction is
+identified by a messageId; a normal one has a REQUEST plus an ACK and a RESPONSE
+carrying that id as initMessageId with a success ackCode. You are given the
+OBSERVED facts of one transaction (which message types are present, the ackCodes,
+timestamps) and the reason it was flagged.
+
+HARD RULES — follow exactly:
+- Use ONLY the observed facts provided. State exactly which message types are
+  present/missing and the literal ackCode value(s).
+- Do NOT invent, infer or guess root causes, error types, technologies, stack
+  traces, or business impact. Do NOT say a technology or exception type.
+- The title/summary must state the plain observed fact (e.g. "REQUEST <id> has
+  no ACK or RESPONSE" or "ackCode=FAILED"), not a narrative or hypothesis.
+- recommendations[] must be a single generic step referencing the missing/failed
+  message only.
+
+Respond ONLY with JSON:
 {"severity":"info|low|medium|high|critical","title":string,"summary":string,
  "confidence":0..1,"reasoning":string[],"recommendations":string[]}`;
 
@@ -151,7 +162,7 @@ Sources: ${[...tx.sources].join(', ')}`;
     summary: mf.summary,
     confidence: Math.max(0, Math.min(1, mf.confidence ?? 0.7)),
     sources: [...tx.sources],
-    fingerprint: `tx:${reason.split(' ').slice(0, 3).join('-').toLowerCase()}`,
+    fingerprint: `tx:${tx.id}`,
     evidence: tx.logs.slice(0, 10).map((l) => ({
       logId: l.id,
       source: l.source,

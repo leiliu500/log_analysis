@@ -91,6 +91,17 @@ export async function insertFinding(f: Finding): Promise<void> {
             ${f.windowStart}, ${f.windowEnd}, ${f.createdAt}, ${toVector(f.embedding)}::vector)`;
 }
 
+/** True if a finding with this fingerprint was created at/after `since` (ms). */
+export async function findingExistsByFingerprint(
+  fingerprint: string,
+  since: number,
+): Promise<boolean> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT 1 FROM findings
+    WHERE fingerprint = ${fingerprint} AND created_at >= ${since} LIMIT 1`;
+  return rows.length > 0;
+}
+
 export async function recentFindings(limit = 50): Promise<Finding[]> {
   const db = getDb();
   const rows = await db
