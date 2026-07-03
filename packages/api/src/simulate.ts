@@ -102,24 +102,21 @@ export interface SimulateCommand {
   application?: string;
 }
 
-const EXTRACT_SYSTEM = `You convert a user's natural-language request into structured
-cashMessage simulation commands. Domain: an FRB cashMessage transaction has a
-REQUEST and optionally an ACK and a RESPONSE, correlated by messageId. A user may
-give SEVERAL commands in one prompt (often numbered); return one object per
-distinct command, in order.
+const EXTRACT_ONE_SYSTEM = `You convert ONE natural-language cashMessage simulation
+command into structured parameters. Domain: an FRB cashMessage transaction has a
+REQUEST and optionally an ACK and a RESPONSE, correlated by messageId.
 
-For each command extract:
+Extract for THIS single command:
 - count: integer number of sets/transactions to generate (default 1).
 - messageTypes: subset of ["REQUEST","ACK","RESPONSE"] to generate per set.
   "request/ack/response" or unspecified -> all three; "without response" ->
   ["REQUEST","ACK"]; "request only" -> ["REQUEST"].
-- ackStatus: "success" or "failure" (the ackCode on ACK/RESPONSE).
-  "with failure"/"failed"/"reject"/"with error" -> "failure";
-  "success"/"no error"/"successful" -> "success". Default "success".
-- startMessageId: the starting messageId if the user gives one (e.g. "001"), else null.
+- ackStatus: "success" or "failure". "with failure"/"failed"/"reject"/"with error"
+  -> "failure"; "success"/"no error"/"successful" -> "success". Default "success".
+- startMessageId: the starting messageId if given (e.g. "001"), else null.
 
 Respond ONLY with JSON:
-{"commands":[{"count":int,"messageTypes":[...],"ackStatus":"success|failure","startMessageId":string|null}]}`;
+{"count":int,"messageTypes":[...],"ackStatus":"success|failure","startMessageId":string|null}`;
 
 function normalizeCommand(c: Record<string, unknown>): SimulateCommand {
   const rawTypes = Array.isArray(c.messageTypes) ? c.messageTypes : [];
@@ -136,30 +133,64 @@ function normalizeCommand(c: Record<string, unknown>): SimulateCommand {
   };
 }
 
+/** Unambiguous success/failure keyword in the text (not negated). */
+function explicitAck(seg: string): 'success' | 'failure' | undefined {
+  const m = seg.toLowerCase();
+  const failure =
+    /(?<!\b(?:no|without|zero|not)\s+)(fail(?:ure|ed)?|reject(?:ed)?|\bnack\b|unsuccessful|declined|with\s+error)/.test(m);
+  if (failure) return 'failure';
+  if (/\b(success(ful)?|no error|no fail)/.test(m)) return 'success';
+  return undefined;
+}
+
 /**
- * Use the LLM to understand the request and extract one or more simulation
- * commands. Falls back to deterministic regex parsing if the model is
- * unavailable or returns nothing usable.
+ * Understand ONE command with the LLM, then let unambiguous deterministic
+ * signals win so the model can't flip them (success/failure, "without response").
+ */
+async function extractOneCommand(seg: string): Promise<SimulateCommand> {
+  const rxTypes = parseMessageTypes(seg);
+  const rxCount = parseCount(seg, undefined);
+  const rxStart = parseStartId(seg, undefined);
+  const rxAck = explicitAck(seg);
+
+  let llm: SimulateCommand | undefined;
+  try {
+    llm = normalizeCommand(
+      await converseJson<Record<string, unknown>>(seg, { system: EXTRACT_ONE_SYSTEM, temperature: 0 }),
+    );
+  } catch {
+    /* llm stays undefined */
+  }
+
+  return {
+    count: rxCount || llm?.count || 1,
+    // An explicit "without X"/"request only" (rxTypes < 3) is authoritative.
+    messageTypes: rxTypes.length < 3 ? rxTypes : llm?.messageTypes ?? rxTypes,
+    // Explicit success/failure keyword wins; else trust the LLM.
+    ackStatus: rxAck ?? llm?.ackStatus ?? 'success',
+    startMessageId: rxStart ?? llm?.startMessageId,
+  };
+}
+
+/**
+ * Split the prompt deterministically into one command per "simulate", then have
+ * the LLM understand each single command. Splitting per-command (not one big LLM
+ * call) prevents the model from merging/mixing multiple instructions.
  */
 export async function extractCommands(prompt: string): Promise<SimulateCommand[]> {
-  if (!hasCashXml(prompt)) {
-    try {
-      const raw = await converseJson<{ commands?: Record<string, unknown>[] }>(prompt, {
-        system: EXTRACT_SYSTEM,
-        temperature: 0,
-      });
-      const cmds = (raw.commands ?? []).map(normalizeCommand);
-      if (cmds.length) return cmds;
-    } catch {
-      /* fall back to regex below */
-    }
+  if (hasCashXml(prompt)) {
+    return [
+      {
+        count: parseCount(prompt, undefined),
+        messageTypes: parseMessageTypes(prompt),
+        ackStatus: parseAckStatus(prompt),
+        startMessageId: parseStartId(prompt, undefined),
+      },
+    ];
   }
-  return splitInstructions(prompt).map((seg) => ({
-    count: parseCount(seg, undefined),
-    messageTypes: parseMessageTypes(seg),
-    ackStatus: parseAckStatus(seg),
-    startMessageId: parseStartId(seg, undefined),
-  }));
+  const out: SimulateCommand[] = [];
+  for (const seg of splitInstructions(prompt)) out.push(await extractOneCommand(seg));
+  return out;
 }
 
 function describe(c: SimulateCommand): string {
