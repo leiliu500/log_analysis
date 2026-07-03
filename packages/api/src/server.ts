@@ -13,6 +13,7 @@ import { simulate } from '@log/simulator';
 import { invokeApplication } from '@log/agents';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
 import { handleChat } from './chat.js';
+import { handleSimulatePrompt } from './simulate.js';
 
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
@@ -65,7 +66,20 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     return { messages: await sessionHistory(sessionId, 100) };
   });
 
-  // -------- Simulator (requirements 8 & 9) --------
+  // -------- Simulator: natural-language (LLM/supervisor-driven) --------
+  // The Simulator UI posts a plain sentence here; the supervisor LLM understands
+  // it (count, startMessageId, ...) and the Simulator Agent runs. Returns the
+  // routing decision + result so the UI can show what the LLM understood.
+  api.post('/simulate/prompt', async (req, reply) => {
+    try {
+      return await handleSimulatePrompt(req.body);
+    } catch (err) {
+      reply.code(400);
+      return { error: (err as Error).message };
+    }
+  });
+
+  // -------- Simulator: structured (direct SimulateRequest) --------
   api.post('/simulate', async (req, reply) => {
     try {
       const parsed = SimulateRequest.parse(req.body);

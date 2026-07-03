@@ -1,43 +1,39 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import type { SimulateResult } from '@log/shared';
+import type { SimulateResult, RouteDecision } from '@log/shared';
 import { api } from '../../lib/api';
-
-const SOURCES = ['cloudwatch', 'splunk', 'grafana', 'email'] as const;
 
 interface Turn {
   input: string;
+  route?: RouteDecision;
   result?: SimulateResult;
   error?: string;
 }
 
+const EXAMPLES = [
+  'Simulate 4 request/ack/response with message_id=001 to 004',
+  'simulate 10 cashMessage request/ack/response to cloudwatch',
+  'generate 3 request/ack/response starting messageId FCC-USSS-28090845',
+];
+
 export default function SimulatePage() {
-  const [samples, setSamples] = useState('');
-  const [application, setApplication] = useState('cashMessage');
-  const [count, setCount] = useState(1);
-  const [sinks, setSinks] = useState<string[]>(['cloudwatch']);
+  const [input, setInput] = useState('');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
-  async function send() {
-    const input = samples.trim();
-    if (!input || busy || sinks.length === 0) return;
+  async function send(text?: string) {
+    const prompt = (text ?? input).trim();
+    if (!prompt || busy) return;
     setBusy(true);
-    setTurns((t) => [...t, { input }]);
-    setSamples('');
+    setTurns((t) => [...t, { input: prompt }]);
+    setInput('');
     try {
-      const result = await api.simulate({
-        application,
-        samples: input,
-        sinks,
-        count,
-        spreadMinutes: 0,
-      });
-      setTurns((t) => [...t.slice(0, -1), { input, result }]);
+      const { route, result } = await api.simulatePrompt(prompt);
+      setTurns((t) => [...t.slice(0, -1), { input: prompt, route, result }]);
     } catch (e) {
-      setTurns((t) => [...t.slice(0, -1), { input, error: String(e) }]);
+      setTurns((t) => [...t.slice(0, -1), { input: prompt, error: String(e) }]);
     } finally {
       setBusy(false);
       requestAnimationFrame(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }));
@@ -47,93 +43,71 @@ export default function SimulatePage() {
   return (
     <div className="mx-auto flex h-screen max-w-3xl flex-col p-6">
       <h1 className="mb-1 text-xl font-semibold text-white">Simulator Agent</h1>
-      <p className="mb-4 text-xs text-slate-400">
-        Paste one or more sample messages (XML like an FRB cashMessage, plus optional
-        ACK/Response) into the box below. The agent replicates the flow{' '}
-        <b>{count}</b> time(s), giving each set a unique <code>messageId</code> and
-        keeping every ACK/Response <code>initMessageId</code> matched to its request.
+      <p className="mb-3 text-xs text-slate-400">
+        Ask in plain English. The <b>Supervisor Agent (LLM)</b> understands your request —
+        how many sets, the starting messageId — and delegates to the Simulator Agent, which
+        writes correlated Request/ACK/Response messages (matched <code>initMessageId</code>)
+        to the sink. No count field — the number comes from your sentence.
       </p>
 
       {/* Transcript */}
       <div className="flex-1 space-y-4 overflow-auto rounded-xl border border-edge bg-panel p-4">
         {turns.length === 0 && (
-          <p className="text-sm text-slate-500">Paste a sample message to get started.</p>
+          <div className="text-sm text-slate-500">
+            Try one:
+            <ul className="mt-2 space-y-1">
+              {EXAMPLES.map((ex) => (
+                <li key={ex}>
+                  <button
+                    className="text-left text-sky-400 hover:underline"
+                    onClick={() => void send(ex)}
+                  >
+                    “{ex}”
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {turns.map((t, i) => (
           <div key={i} className="space-y-2">
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-xl bg-edge/60 p-3 text-xs text-slate-300">
-              {t.input.length > 1200 ? t.input.slice(0, 1200) + '\n…' : t.input}
-            </pre>
+            <div className="text-right">
+              <span className="inline-block rounded-2xl bg-sky-600 px-4 py-2 text-sm text-white">
+                {t.input}
+              </span>
+            </div>
+            {t.route && (
+              <div className="text-xs text-slate-400">
+                🤖 LLM understood → intent <code>{t.route.intent}</code>, agent{' '}
+                <code>{t.route.targetAgent}</code>, params{' '}
+                <code>{JSON.stringify(t.route.parameters)}</code>
+              </div>
+            )}
             {t.result && <ResultCard result={t.result} />}
             {t.error && <div className="text-sm text-red-400">⚠️ {t.error}</div>}
           </div>
         ))}
-        {busy && <div className="text-sm text-slate-500">Simulating…</div>}
+        {busy && <div className="text-sm text-slate-500">Supervisor is routing…</div>}
         <div ref={endRef} />
       </div>
 
-      {/* Controls */}
-      <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-slate-400">
-        <label className="flex items-center gap-2">
-          app
-          <input
-            className="w-32 rounded-lg border border-edge bg-panel px-2 py-1"
-            value={application}
-            onChange={(e) => setApplication(e.target.value)}
-          />
-        </label>
-        <label className="flex items-center gap-2">
-          count
-          <input
-            type="number"
-            min={1}
-            className="w-20 rounded-lg border border-edge bg-panel px-2 py-1"
-            value={count}
-            onChange={(e) => setCount(Math.max(1, Number(e.target.value)))}
-          />
-        </label>
-        <div className="flex gap-1">
-          {SOURCES.map((s) => (
-            <button
-              key={s}
-              onClick={() =>
-                setSinks((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]))
-              }
-              className={`rounded-lg border px-2 py-1 text-xs ${
-                sinks.includes(s)
-                  ? 'border-sky-500 bg-sky-600/30 text-white'
-                  : 'border-edge text-slate-400'
-              }`}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Single input area */}
-      <div className="mt-2 flex gap-2">
-        <textarea
-          className="h-28 flex-1 rounded-xl border border-edge bg-panel p-3 font-mono text-xs outline-none focus:border-sky-500"
-          placeholder="Paste sample XML message(s) here…"
-          value={samples}
-          onChange={(e) => setSamples(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              void send();
-            }
-          }}
+      {/* Single natural-language input */}
+      <div className="mt-3 flex gap-2">
+        <input
+          className="flex-1 rounded-xl border border-edge bg-panel px-4 py-3 text-sm outline-none focus:border-sky-500"
+          placeholder="e.g. Simulate 4 request/ack/response with message_id=001 to 004"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), void send())}
         />
         <button
-          className="self-end rounded-xl bg-sky-600 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
-          onClick={send}
-          disabled={busy || sinks.length === 0}
+          className="rounded-xl bg-sky-600 px-5 text-sm font-medium text-white disabled:opacity-50"
+          onClick={() => void send()}
+          disabled={busy}
         >
-          {busy ? '…' : 'Simulate'}
+          Send
         </button>
       </div>
-      <p className="mt-1 text-[11px] text-slate-500">⌘/Ctrl + Enter to simulate</p>
     </div>
   );
 }
@@ -142,10 +116,12 @@ function ResultCard({ result }: { result: SimulateResult }) {
   const written = Object.entries(result.written)
     .map(([k, v]) => `${v}→${k}`)
     .join(', ');
+  const sets = result.messages.filter((m) => m.messageType === 'REQUEST').length;
   return (
     <div className="card text-sm">
       <div className="mb-2 text-slate-300">
-        Wrote <b>{written || '0'}</b> log entries · app <code>{result.application}</code>
+        Generated <b>{sets}</b> set(s) · wrote <b>{written || '0'}</b> · app{' '}
+        <code>{result.application}</code>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
