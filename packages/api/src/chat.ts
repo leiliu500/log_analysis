@@ -99,7 +99,11 @@ async function dispatch(
       // supplies count + startMessageId (with regex fallback for robustness).
       const samples = hasCashXml(message) ? message : DEFAULT_CASHMESSAGE_SAMPLES;
       const req = SimulateRequest.parse({
-        application: route.targetApplication ?? p.application ?? 'cashMessage',
+        // Use || (not ??) so an empty targetApplication falls back to cashMessage.
+        application:
+          route.targetApplication?.trim() ||
+          (typeof p.application === 'string' ? p.application.trim() : '') ||
+          'cashMessage',
         samples,
         sinks: (Array.isArray(p.sinks) ? p.sinks : undefined) ?? (route.sources.length ? route.sources : ['cloudwatch']),
         count: parseCount(message, p.count),
