@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(curl -s --max-time 120 -X POST http://log-analysis-prod-alb-1452837156.us-gov-west-1.elb.amazonaws.com/api/chat -H 'Content-Type: application/json' --data-binary @C:/ProgramData/UserDataFolders/S-1-5-21-1010238134-1704489833-482217759-42393/AppData/Local/Temp/1/claude/d--Lei-Liu-log-analysis/fc2098c9-aec9-425b-b3d4-4bcf978ff4f6/scratchpad/q.json)",
+      "Bash(node --import tsx --test packages/agents/src/supervisor.test.ts)",
+      "Bash(node --import tsx --test packages/api/src/analyze.test.ts packages/api/src/simulate.test.ts)"
+    ]
+  }
+}
