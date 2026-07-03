@@ -5,4 +5,5 @@ export * from './parser.js';
 export * from './learn.js';
 export * from './correlate.js';
 export * from './reason.js';
+export * from './transactions.js';
 export * from './pipeline.js';
