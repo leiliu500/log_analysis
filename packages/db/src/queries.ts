@@ -31,8 +31,8 @@ export async function insertParsedLogs(logs: ParsedLog[]): Promise<void> {
       await tx`INSERT INTO parsed_logs
         (id, source, stream, ts, level, message, fields, entities, fingerprint, raw, ingested_at, embedding)
         VALUES (${l.id}, ${l.source}, ${l.stream}, ${l.timestamp}, ${l.level}, ${l.message},
-                ${json(l.fields)}, ${json(l.entities)}, ${l.fingerprint}, ${l.raw}, ${l.ingestedAt},
-                ${toVector(l.embedding)}::vector)`;
+                ${JSON.stringify(l.fields ?? {})}::jsonb, ${JSON.stringify(l.entities ?? {})}::jsonb,
+                ${l.fingerprint}, ${l.raw}, ${l.ingestedAt}, ${toVector(l.embedding)}::vector)`;
     }
   });
 }
@@ -85,8 +85,9 @@ export async function insertFinding(f: Finding): Promise<void> {
     (id, kind, severity, title, summary, confidence, sources, fingerprint,
      evidence, reasoning, recommendations, metadata, window_start, window_end, created_at, embedding)
     VALUES (${f.id}, ${f.kind}, ${f.severity}, ${f.title}, ${f.summary}, ${f.confidence},
-            ${sqlc.array(f.sources)}, ${f.fingerprint},
-            ${json(f.evidence)}, ${json(f.reasoning)}, ${json(f.recommendations)}, ${json(f.metadata)},
+            ${f.sources}, ${f.fingerprint},
+            ${JSON.stringify(f.evidence ?? [])}::jsonb, ${JSON.stringify(f.reasoning ?? [])}::jsonb,
+            ${JSON.stringify(f.recommendations ?? [])}::jsonb, ${JSON.stringify(f.metadata ?? {})}::jsonb,
             ${f.windowStart}, ${f.windowEnd}, ${f.createdAt}, ${toVector(f.embedding)}::vector)`;
 }
 
