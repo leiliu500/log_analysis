@@ -46,6 +46,11 @@ export async function simulate(req: SimulateRequest): Promise<SimulateResult> {
 
     for (const sample of samples) {
       const type = messageType(sample) || (sample === requestSample ? 'REQUEST' : 'MESSAGE');
+      // Only emit the requested message types (e.g. omit RESPONSE for a
+      // "request/ack without response" simulation).
+      if ((type === 'REQUEST' || type === 'ACK' || type === 'RESPONSE') && !req.messageTypes.includes(type)) {
+        continue;
+      }
       let out = sample;
       let ownId: string;
 
@@ -59,6 +64,8 @@ export async function simulate(req: SimulateRequest): Promise<SimulateResult> {
         const sampleOwnId = getTag(sample, 'messageId');
         ownId = sampleOwnId ? bumpId(sampleOwnId, i) : `${requestId}-${type}`;
         if (sampleOwnId) out = setTag(out, 'messageId', ownId);
+        // Apply the requested ack status (failure -> FAILED ackCode).
+        if (req.ackStatus === 'failure') out = setTag(out, 'ackCode', 'FAILED');
       }
 
       // Freshen sendTime if present so log timestamps look current.

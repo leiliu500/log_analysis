@@ -20,6 +20,16 @@ export const SimulateRequest = z.object({
   /** How many correlated Request/ACK/Response sets to generate. */
   count: z.number().int().min(1).max(10000).default(1),
   /**
+   * Which message types to emit per set. Default is a complete transaction;
+   * e.g. ['REQUEST','ACK'] simulates a request/ack WITHOUT a response.
+   */
+  messageTypes: z
+    .array(z.enum(['REQUEST', 'ACK', 'RESPONSE']))
+    .min(1)
+    .default(['REQUEST', 'ACK', 'RESPONSE']),
+  /** ackCode written on ACK/RESPONSE — 'failure' produces a failed transaction. */
+  ackStatus: z.enum(['success', 'failure']).default('success'),
+  /**
    * Optional starting messageId for the first Request (e.g. "001"). Overrides
    * the sample's messageId; subsequent sets increment it (001, 002, 003…).
    */
