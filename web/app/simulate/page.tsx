@@ -4,10 +4,15 @@ import { useRef, useState } from 'react';
 import type { SimulateResult, RouteDecision } from '@log/shared';
 import { api } from '../../lib/api';
 
+interface Outcome {
+  instruction: string;
+  route: RouteDecision;
+  result: SimulateResult;
+}
+
 interface Turn {
   input: string;
-  route?: RouteDecision;
-  result?: SimulateResult;
+  results?: Outcome[];
   error?: string;
 }
 
@@ -30,8 +35,8 @@ export default function SimulatePage() {
     setTurns((t) => [...t, { input: prompt }]);
     setInput('');
     try {
-      const { route, result } = await api.simulatePrompt(prompt);
-      setTurns((t) => [...t.slice(0, -1), { input: prompt, route, result }]);
+      const { results } = await api.simulatePrompt(prompt);
+      setTurns((t) => [...t.slice(0, -1), { input: prompt, results }]);
     } catch (e) {
       setTurns((t) => [...t.slice(0, -1), { input: prompt, error: String(e) }]);
     } finally {
@@ -76,14 +81,20 @@ export default function SimulatePage() {
                 {t.input}
               </span>
             </div>
-            {t.route && (
-              <div className="text-xs text-slate-400">
-                🤖 LLM understood → intent <code>{t.route.intent}</code>, agent{' '}
-                <code>{t.route.targetAgent}</code>, params{' '}
-                <code>{JSON.stringify(t.route.parameters)}</code>
+            {t.results?.map((o, j) => (
+              <div key={j} className="space-y-1">
+                {t.results!.length > 1 && (
+                  <div className="text-xs text-slate-500">
+                    Command {j + 1}: “{o.instruction.slice(0, 80)}”
+                  </div>
+                )}
+                <div className="text-xs text-slate-400">
+                  🤖 LLM understood → intent <code>{o.route.intent}</code>, agent{' '}
+                  <code>{o.route.targetAgent}</code>
+                </div>
+                <ResultCard result={o.result} />
               </div>
-            )}
-            {t.result && <ResultCard result={t.result} />}
+            ))}
             {t.error && <div className="text-sm text-red-400">⚠️ {t.error}</div>}
           </div>
         ))}

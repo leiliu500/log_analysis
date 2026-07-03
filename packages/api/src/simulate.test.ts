@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCount, parseStartId, parseMessageTypes, parseAckStatus } from './simulate.js';
+import {
+  parseCount,
+  parseStartId,
+  parseMessageTypes,
+  parseAckStatus,
+  splitInstructions,
+} from './simulate.js';
 
 const REQ4 =
   'simulate 3 request/ack/response sets with message_id=001 to 004. Make sure the first 3 request/ack/response with success and no error';
@@ -27,6 +33,25 @@ test('message-type phrase variants', () => {
   assert.deepEqual(parseMessageTypes('simulate 2 request only'), ['REQUEST']);
   assert.deepEqual(parseMessageTypes('request/ack without response'), ['REQUEST', 'ACK']);
   assert.deepEqual(parseMessageTypes('simulate 5 request/ack/response'), ['REQUEST', 'ACK', 'RESPONSE']);
+});
+
+test('(4)+(5) in one prompt split into two independent commands', () => {
+  const combined = `${REQ4}\n${REQ5}`;
+  const segs = splitInstructions(combined);
+  assert.equal(segs.length, 2);
+  // Command 1 = the 3 success sets; failure from (5) must NOT leak in.
+  assert.equal(parseAckStatus(segs[0]!), 'success');
+  assert.equal(parseCount(segs[0]!, undefined), 3);
+  assert.deepEqual(parseMessageTypes(segs[0]!), ['REQUEST', 'ACK', 'RESPONSE']);
+  // Command 2 = 1 request/ack (no response), failure.
+  assert.equal(parseAckStatus(segs[1]!), 'failure');
+  assert.equal(parseCount(segs[1]!, undefined), 1);
+  assert.deepEqual(parseMessageTypes(segs[1]!), ['REQUEST', 'ACK']);
+});
+
+test('single command / XML is not split', () => {
+  assert.equal(splitInstructions(REQ4).length, 1);
+  assert.equal(splitInstructions('<ns2:cashMessage>simulate looking text</ns2:cashMessage>').length, 1);
 });
 
 test('ack status negation', () => {

@@ -51,6 +51,27 @@ export function parseAckStatus(message: string): 'success' | 'failure' {
 export const hasCashXml = (s: string): boolean => /<(?:[\w.-]+:)?cashMessage[\s>]/i.test(s);
 
 /**
+ * Split a prompt containing several "simulate …" commands into one segment per
+ * command, so each is parsed with its own count/types/ackStatus. A prompt with
+ * one command (or pasted XML) returns a single segment. XML payloads are never
+ * split (they contain no "simulate" keyword).
+ */
+export function splitInstructions(prompt: string): string[] {
+  if (hasCashXml(prompt)) return [prompt];
+  const idxs = [...prompt.matchAll(/\bsimulate\b/gi)]
+    .map((m) => m.index)
+    .filter((i): i is number => i !== undefined);
+  if (idxs.length <= 1) return [prompt];
+  const segs: string[] = [];
+  for (let k = 0; k < idxs.length; k++) {
+    const to = k + 1 < idxs.length ? idxs[k + 1]! : prompt.length;
+    const seg = prompt.slice(idxs[k]!, to).trim();
+    if (seg) segs.push(seg);
+  }
+  return segs.length ? segs : [prompt];
+}
+
+/**
  * Build a SimulateRequest from a natural-language message + the supervisor's
  * routing decision. count/startMessageId come from the LLM (regex fallback);
  * the sample template is the pasted XML if present, else the built-in one.
@@ -77,12 +98,24 @@ export function buildSimulateRequest(message: string, route: RouteDecision): Sim
  * the Supervisor (LLM) to understand it, then run the Simulator Agent. Returns
  * the routing decision (so the UI can show what the LLM understood) + result.
  */
+export interface SimulatePromptOutcome {
+  instruction: string;
+  route: RouteDecision;
+  result: SimulateResult;
+}
+
 export async function handleSimulatePrompt(
   input: unknown,
-): Promise<{ route: RouteDecision; result: SimulateResult }> {
+): Promise<{ results: SimulatePromptOutcome[] }> {
   const { prompt } = z.object({ prompt: z.string().min(1) }).parse(input);
-  const route = await routeRequest(prompt);
-  const req = buildSimulateRequest(prompt, route);
-  const result = await simulate(req);
-  return { route, result };
+  // A prompt may contain several "simulate …" commands; run each independently
+  // so params (count, message types, ack status) don't bleed across them.
+  const results: SimulatePromptOutcome[] = [];
+  for (const instruction of splitInstructions(prompt)) {
+    const route = await routeRequest(instruction);
+    const req = buildSimulateRequest(instruction, route);
+    const result = await simulate(req);
+    results.push({ instruction, route, result });
+  }
+  return { results };
 }

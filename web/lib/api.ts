@@ -24,7 +24,9 @@ export const api = {
     req<SimulateResult>('/simulate', { method: 'POST', body: JSON.stringify(body) }),
   /** Natural-language simulate: the supervisor LLM parses the prompt. */
   simulatePrompt: (prompt: string) =>
-    req<{ route: RouteDecision; result: SimulateResult }>('/simulate/prompt', {
+    req<{
+      results: { instruction: string; route: RouteDecision; result: SimulateResult }[];
+    }>('/simulate/prompt', {
       method: 'POST',
       body: JSON.stringify({ prompt }),
     }),
