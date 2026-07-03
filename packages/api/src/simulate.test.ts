@@ -49,6 +49,35 @@ test('(4)+(5) in one prompt split into two independent commands', () => {
   assert.deepEqual(parseMessageTypes(segs[1]!), ['REQUEST', 'ACK']);
 });
 
+test('"(4) … (5) …" numbered format splits even without repeated "simulate"', () => {
+  // Only the (4) line says "simulate"; (5) does not. Numbered markers must still split.
+  const prompt =
+    '(4) simulate 3 request/ack/response with message_id=001, all with success and no error\n' +
+    '(5) 1 request/ack without response and ack with failure';
+  const segs = splitInstructions(prompt);
+  assert.equal(segs.length, 2);
+  assert.equal(parseCount(segs[0]!, undefined), 3);
+  assert.deepEqual(parseMessageTypes(segs[0]!), ['REQUEST', 'ACK', 'RESPONSE']);
+  assert.equal(parseAckStatus(segs[0]!), 'success');
+  assert.equal(parseStartId(segs[0]!, undefined), '001');
+  assert.equal(parseCount(segs[1]!, undefined), 1);
+  assert.deepEqual(parseMessageTypes(segs[1]!), ['REQUEST', 'ACK']);
+  assert.equal(parseAckStatus(segs[1]!), 'failure');
+});
+
+test('numbered format with NO "simulate" word still splits', () => {
+  const prompt = '(1) 3 request/ack/response success\n(2) 1 request/ack without response failure';
+  const segs = splitInstructions(prompt);
+  assert.equal(segs.length, 2);
+  assert.deepEqual(parseMessageTypes(segs[1]!), ['REQUEST', 'ACK']);
+  assert.equal(parseAckStatus(segs[1]!), 'failure');
+});
+
+test('"001 to 004" / mid-line numbers are not treated as command markers', () => {
+  const segs = splitInstructions('simulate 3 request/ack/response with message_id=001 to 004');
+  assert.equal(segs.length, 1);
+});
+
 test('single command / XML is not split', () => {
   assert.equal(splitInstructions(REQ4).length, 1);
   assert.equal(splitInstructions('<ns2:cashMessage>simulate looking text</ns2:cashMessage>').length, 1);

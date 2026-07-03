@@ -51,21 +51,35 @@ export function parseAckStatus(message: string): 'success' | 'failure' {
 export const hasCashXml = (s: string): boolean => /<(?:[\w.-]+:)?cashMessage[\s>]/i.test(s);
 
 /**
- * Split a prompt containing several "simulate …" commands into one segment per
- * command, so each is parsed with its own count/types/ackStatus. A prompt with
- * one command (or pasted XML) returns a single segment. XML payloads are never
- * split (they contain no "simulate" keyword).
+ * Split a prompt containing several commands into one segment per command, so
+ * each is parsed with its own count/types/ackStatus and params never bleed
+ * across commands. Boundaries are, in order of preference:
+ *   1. line-leading enumeration markers like "(4)", "5)", "3." — the user's
+ *      numbered format, reliable even when only one line says "simulate";
+ *   2. otherwise repeated "simulate" keywords.
+ * A single-command prompt (or pasted XML) returns one segment. Content before
+ * the first marker (e.g. "simulate the following:") is dropped as preamble.
  */
 export function splitInstructions(prompt: string): string[] {
   if (hasCashXml(prompt)) return [prompt];
-  const idxs = [...prompt.matchAll(/\bsimulate\b/gi)]
+
+  // Numbered/enumerated command markers at the start of a line: "(4)", "4)", "4.".
+  // The digit index (not the leading newline) is the segment start.
+  const numbered = [...prompt.matchAll(/(?:^|\n)[ \t]*\(?\d{1,2}[).]/g)].map(
+    (m) => (m.index ?? 0) + m[0].search(/\(?\d/),
+  );
+  const sims = [...prompt.matchAll(/\bsimulate\b/gi)]
     .map((m) => m.index)
     .filter((i): i is number => i !== undefined);
-  if (idxs.length <= 1) return [prompt];
+
+  // Prefer numbered markers; fall back to "simulate" repetitions.
+  const starts = numbered.length >= 2 ? numbered : sims.length >= 2 ? sims : [];
+  if (starts.length < 2) return [prompt];
+
   const segs: string[] = [];
-  for (let k = 0; k < idxs.length; k++) {
-    const to = k + 1 < idxs.length ? idxs[k + 1]! : prompt.length;
-    const seg = prompt.slice(idxs[k]!, to).trim();
+  for (let k = 0; k < starts.length; k++) {
+    const to = k + 1 < starts.length ? starts[k + 1]! : prompt.length;
+    const seg = prompt.slice(starts[k]!, to).trim();
     if (seg) segs.push(seg);
   }
   return segs.length ? segs : [prompt];
