@@ -18,16 +18,25 @@ export function extractWindowMinutes(message: string, fromLlm: unknown): number 
 }
 
 const ANALYZE_SYSTEM = `You are the log-analysis agent. Answer the user's question
-using ONLY the provided log aggregates and sample lines for the given time window.
-When the question asks "how many", give the exact number from the aggregates. If
-the data is insufficient, say what is missing. Never invent counts. Be concise.`;
+using ONLY the provided AGGREGATES and the MESSAGES table for the given time
+window. When asked "how many", give the exact number from the aggregates. When
+asked to list/show messageId (or initMessageId), read them from the MESSAGES
+table and list each one (e.g. as a bulleted list). Never invent values. If the
+data is insufficient, say what is missing. Be concise.`;
 
-/** Count messageType occurrences (works for the FRB cashMessage XML logs). */
-function messageTypeOf(log: ParsedLog): string | undefined {
-  const m = log.raw.match(/<(?:[\w.-]+:)?messageType>\s*([^<]+?)\s*<\/(?:[\w.-]+:)?messageType>/i);
-  if (m) return m[1]!.toUpperCase();
-  const f = log.fields?.messageType;
-  return typeof f === 'string' ? f.toUpperCase() : undefined;
+function xmlTag(raw: string, tag: string): string | undefined {
+  const m = raw.match(new RegExp(`<(?:[\\w.-]+:)?${tag}>\\s*([^<]+?)\\s*</(?:[\\w.-]+:)?${tag}>`, 'i'));
+  return m ? m[1] : undefined;
+}
+
+/** Message metadata pulled from the FRB cashMessage XML logs. */
+function metaOf(log: ParsedLog): {
+  type?: string;
+  messageId?: string;
+  initMessageId?: string;
+} {
+  const type = xmlTag(log.raw, 'messageType')?.toUpperCase() ?? (typeof log.fields?.messageType === 'string' ? (log.fields.messageType as string).toUpperCase() : undefined);
+  return { type, messageId: xmlTag(log.raw, 'messageId'), initMessageId: xmlTag(log.raw, 'initMessageId') };
 }
 
 export interface LogAnswer {
@@ -61,10 +70,10 @@ export async function answerLogQuestion(
 
   const byMessageType: Record<string, number> = {};
   const byLevel: Record<string, number> = {};
-  for (const l of parsed) {
-    const mt = messageTypeOf(l);
-    if (mt) byMessageType[mt] = (byMessageType[mt] ?? 0) + 1;
-    byLevel[l.level] = (byLevel[l.level] ?? 0) + 1;
+  const enriched = parsed.map((l) => ({ log: l, meta: metaOf(l) }));
+  for (const { log, meta } of enriched) {
+    if (meta.type) byMessageType[meta.type] = (byMessageType[meta.type] ?? 0) + 1;
+    byLevel[log.level] = (byLevel[log.level] ?? 0) + 1;
   }
 
   const summary = [
@@ -75,14 +84,18 @@ export async function answerLogQuestion(
     `Count by level: ${JSON.stringify(byLevel)}`,
   ].join('\n');
 
-  const sample = parsed
-    .slice(0, 25)
-    .map((l) => `[${new Date(l.timestamp).toISOString()}] ${l.level} ${l.message.slice(0, 160)}`)
+  // Per-message table (with ids) so the model can list messageIds when asked.
+  const table = enriched
+    .slice(0, 500)
+    .map(({ log, meta }) => {
+      const init = meta.initMessageId ? ` initMessageId=${meta.initMessageId}` : '';
+      return `[${new Date(log.timestamp).toISOString()}] ${meta.type ?? log.level.toUpperCase()} messageId=${meta.messageId ?? '-'}${init}`;
+    })
     .join('\n');
 
   const answer = await converse(
-    `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nSAMPLE LOG LINES:\n${sample || '(none)'}`,
-    { system: ANALYZE_SYSTEM, temperature: 0 },
+    `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}`,
+    { system: ANALYZE_SYSTEM, temperature: 0, maxTokens: 2500 },
   );
 
   return {
