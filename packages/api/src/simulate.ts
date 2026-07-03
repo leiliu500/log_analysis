@@ -9,7 +9,12 @@ import { simulate, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/simulator';
  * the set count); the LLM value is only a fallback.
  */
 export function parseCount(message: string, fromLlm: unknown): number {
-  const m = message.match(/\b(\d{1,4})\s*(?:request|ack|response|set|message|msg|log|transaction)/i);
+  // "N [adjective ]request/ack/…" — allow up to two words (e.g. "3 successful
+  // request") between the number and the noun, but never "to" so an id range
+  // like "001 to 004" is not read as a count.
+  const m = message.match(
+    /\b(\d{1,4})\s+(?:(?!to\b)[A-Za-z]+\s+){0,2}(?:request|ack|response|set|message|msg|log|transaction)/i,
+  );
   if (m) return Math.max(1, Number(m[1]));
   if (typeof fromLlm === 'number' && fromLlm >= 1) return Math.floor(fromLlm);
   if (typeof fromLlm === 'string' && /^\d+$/.test(fromLlm)) return Number(fromLlm);

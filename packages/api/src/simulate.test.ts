@@ -29,6 +29,13 @@ test('count phrase beats an LLM id-range mistake', () => {
   assert.equal(parseCount('simulate 3 request/ack/response with message_id=001 to 004', 4), 3);
 });
 
+test('count tolerates an adjective, ignores id ranges', () => {
+  assert.equal(parseCount('generate 3 successful request/ack/response starting at 001', undefined), 3);
+  assert.equal(parseCount('3 new request/ack/response', undefined), 3);
+  // "001 to 004" alone must not be read as a count of 1.
+  assert.equal(parseCount('with message_id=001 to 004. Make sure the first 3 request', undefined), 3);
+});
+
 test('message-type phrase variants', () => {
   assert.deepEqual(parseMessageTypes('simulate 2 request only'), ['REQUEST']);
   assert.deepEqual(parseMessageTypes('request/ack without response'), ['REQUEST', 'ACK']);
