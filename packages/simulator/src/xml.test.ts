@@ -51,6 +51,28 @@ test('splitMessages handles truncated roots + mixed prefixes + xml prologue', ()
   assert.equal(getTag(parts[2]!, 'messageId'), 'SIM-USSS-4774');
 });
 
+test('splitMessages ignores leading labels and trailing junk (no extra message)', () => {
+  const blob = `(1) Sample Request:
+<ns2:cashMessage xmlns:ns2="http://x">
+  <header><messageType>REQUEST</messageType><messageId>FCC-USSS-28090845</messageId></header>
+  <payload></payload>
+(2) Sample ACK:
+<?xml version="1.0"?><NS1:cashMessage xmlns:NS1="http://x">
+  <header><messageType>ACK</messageType><messageId>SIM-USSS-4764</messageId></header>
+  <payload><cashAcknowledgement><initMessageId>FCC-USSS-28090845</initMessageId></cashAcknowledgement></payload>
+(3) Sample Response:
+<?xml version="1.0"?><NS1:cashMessage xmlns:NS1="http://x">
+  <header><messageType>RESPONSE</messageType><messageId>SIM-USSS-4774</messageId></header>
+  <payload><cashAcknowledgement><initMessageId>FCC-USSS-28090845</initMessageId></cashAcknowledgement></payload>
+`;
+  const parts = splitMessages(blob);
+  assert.equal(parts.length, 3); // NOT 4 — the leading/label text is dropped
+  assert.deepEqual(parts.map(messageType), ['REQUEST', 'ACK', 'RESPONSE']);
+  // No label text leaked into a message, and roots are closed.
+  assert.ok(!parts[0]!.includes('Sample ACK'));
+  assert.ok(parts[0]!.trim().endsWith('</ns2:cashMessage>'));
+});
+
 test('splitMessages separates concatenated docs', () => {
   const ack = REQ.replace('REQUEST', 'ACK').replace('<messageId>FCC-USSS-28090845</messageId>', '<messageId>ACK-1</messageId>\n    <initMessageId>FCC-USSS-28090845</initMessageId>');
   const parts = splitMessages(REQ + '\n' + ack);

@@ -50,14 +50,30 @@ export function splitMessages(blob: string): string[] {
   const first = trimmed.replace(/<\?[\s\S]*?\?>/, '').match(/<(?:[\w.-]+:)?([A-Za-z_][\w.-]*)[\s>]/);
   if (!first) return [trimmed]; // not XML — treat as one message
   const local = escapeRe(first[1]!);
-  const boundary = new RegExp(`(?=<(?:[\\w.-]+:)?${local}[\\s>])`, 'g');
-  const parts = trimmed
-    .split(boundary)
-    // A message's <?xml?> prologue trails the previous chunk after the split;
-    // drop it (declarations are optional for our log payloads).
-    .map((p) => p.replace(/<\?xml[^>]*\?>\s*$/i, '').trim())
-    .filter((p) => p.length > 0);
-  return (parts.length ? parts : [trimmed]).map(closeRoot);
+
+  // Positions of every root-open tag (prefix-agnostic). A message runs from one
+  // root-open to the next; anything before the first (labels, blank lines) is
+  // ignored, and trailing junk after a message's last close tag is dropped.
+  const openRe = new RegExp(`<(?:[\\w.-]+:)?${local}[\\s>]`, 'g');
+  const starts = [...trimmed.matchAll(openRe)]
+    .map((m) => m.index)
+    .filter((i): i is number => i !== undefined);
+  if (starts.length === 0) return [closeRoot(trimmed)];
+
+  const messages: string[] = [];
+  for (let k = 0; k < starts.length; k++) {
+    const to = k + 1 < starts.length ? starts[k + 1]! : trimmed.length;
+    let chunk = trimmed.slice(starts[k]!, to).trim();
+    // Cut anything after the message's last closing tag (a following message's
+    // label / <?xml?> prologue that got included in this slice).
+    const lastClose = chunk.lastIndexOf('</');
+    if (lastClose >= 0) {
+      const gt = chunk.indexOf('>', lastClose);
+      if (gt >= 0) chunk = chunk.slice(0, gt + 1);
+    }
+    messages.push(closeRoot(chunk));
+  }
+  return messages;
 }
 
 /**
