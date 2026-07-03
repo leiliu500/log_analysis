@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { SimulateRequest, type RouteDecision, type SimulateResult } from '@log/shared';
-import { routeRequest } from '@log/agents';
+import { converseJson } from '@log/analysis';
 import { simulate, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/simulator';
 
 /**
@@ -93,29 +93,112 @@ export function buildSimulateRequest(message: string, route: RouteDecision): Sim
   });
 }
 
+/** One simulation command as understood from the user's request. */
+export interface SimulateCommand {
+  count: number;
+  messageTypes: ('REQUEST' | 'ACK' | 'RESPONSE')[];
+  ackStatus: 'success' | 'failure';
+  startMessageId?: string;
+  application?: string;
+}
+
+const EXTRACT_SYSTEM = `You convert a user's natural-language request into structured
+cashMessage simulation commands. Domain: an FRB cashMessage transaction has a
+REQUEST and optionally an ACK and a RESPONSE, correlated by messageId. A user may
+give SEVERAL commands in one prompt (often numbered); return one object per
+distinct command, in order.
+
+For each command extract:
+- count: integer number of sets/transactions to generate (default 1).
+- messageTypes: subset of ["REQUEST","ACK","RESPONSE"] to generate per set.
+  "request/ack/response" or unspecified -> all three; "without response" ->
+  ["REQUEST","ACK"]; "request only" -> ["REQUEST"].
+- ackStatus: "success" or "failure" (the ackCode on ACK/RESPONSE).
+  "with failure"/"failed"/"reject"/"with error" -> "failure";
+  "success"/"no error"/"successful" -> "success". Default "success".
+- startMessageId: the starting messageId if the user gives one (e.g. "001"), else null.
+
+Respond ONLY with JSON:
+{"commands":[{"count":int,"messageTypes":[...],"ackStatus":"success|failure","startMessageId":string|null}]}`;
+
+function normalizeCommand(c: Record<string, unknown>): SimulateCommand {
+  const rawTypes = Array.isArray(c.messageTypes) ? c.messageTypes : [];
+  const types = rawTypes
+    .map((t) => String(t).toUpperCase())
+    .filter((t): t is 'REQUEST' | 'ACK' | 'RESPONSE' => ['REQUEST', 'ACK', 'RESPONSE'].includes(t));
+  const sid = typeof c.startMessageId === 'string' && c.startMessageId.trim() ? c.startMessageId.trim() : undefined;
+  return {
+    count: Math.max(1, Math.floor(Number(c.count) || 1)),
+    messageTypes: types.length ? types : ['REQUEST', 'ACK', 'RESPONSE'],
+    ackStatus: c.ackStatus === 'failure' ? 'failure' : 'success',
+    startMessageId: sid,
+    application: typeof c.application === 'string' ? c.application : undefined,
+  };
+}
+
 /**
- * Natural-language simulate path for the Simulator UI: route the prompt through
- * the Supervisor (LLM) to understand it, then run the Simulator Agent. Returns
- * the routing decision (so the UI can show what the LLM understood) + result.
+ * Use the LLM to understand the request and extract one or more simulation
+ * commands. Falls back to deterministic regex parsing if the model is
+ * unavailable or returns nothing usable.
  */
+export async function extractCommands(prompt: string): Promise<SimulateCommand[]> {
+  if (!hasCashXml(prompt)) {
+    try {
+      const raw = await converseJson<{ commands?: Record<string, unknown>[] }>(prompt, {
+        system: EXTRACT_SYSTEM,
+        temperature: 0,
+      });
+      const cmds = (raw.commands ?? []).map(normalizeCommand);
+      if (cmds.length) return cmds;
+    } catch {
+      /* fall back to regex below */
+    }
+  }
+  return splitInstructions(prompt).map((seg) => ({
+    count: parseCount(seg, undefined),
+    messageTypes: parseMessageTypes(seg),
+    ackStatus: parseAckStatus(seg),
+    startMessageId: parseStartId(seg, undefined),
+  }));
+}
+
+function describe(c: SimulateCommand): string {
+  const ack = c.ackStatus === 'failure' ? 'ack FAILED' : 'ack success';
+  const ids = c.startMessageId ? ` from id ${c.startMessageId}` : '';
+  return `${c.count} × ${c.messageTypes.join('+')}, ${ack}${ids}`;
+}
+
+/** What the simulator produced for one command, plus how it was understood. */
 export interface SimulatePromptOutcome {
   instruction: string;
-  route: RouteDecision;
+  spec: SimulateCommand;
   result: SimulateResult;
 }
 
+/**
+ * Natural-language simulate path for the Simulator UI. The LLM parses the prompt
+ * into structured commands; each runs independently so params don't bleed across
+ * commands. (buildSimulateRequest/RouteDecision remain for the chatbot path.)
+ */
 export async function handleSimulatePrompt(
   input: unknown,
 ): Promise<{ results: SimulatePromptOutcome[] }> {
   const { prompt } = z.object({ prompt: z.string().min(1) }).parse(input);
-  // A prompt may contain several "simulate …" commands; run each independently
-  // so params (count, message types, ack status) don't bleed across them.
+  const samples = hasCashXml(prompt) ? prompt : DEFAULT_CASHMESSAGE_SAMPLES;
   const results: SimulatePromptOutcome[] = [];
-  for (const instruction of splitInstructions(prompt)) {
-    const route = await routeRequest(instruction);
-    const req = buildSimulateRequest(instruction, route);
+  for (const spec of await extractCommands(prompt)) {
+    const req = SimulateRequest.parse({
+      application: spec.application ?? 'cashMessage',
+      samples,
+      sinks: ['cloudwatch'],
+      count: spec.count,
+      messageTypes: spec.messageTypes,
+      ackStatus: spec.ackStatus,
+      startMessageId: spec.startMessageId,
+      spreadMinutes: 0,
+    });
     const result = await simulate(req);
-    results.push({ instruction, route, result });
+    results.push({ instruction: describe(spec), spec, result });
   }
   return { results };
 }

@@ -1,12 +1,17 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import type { SimulateResult, RouteDecision } from '@log/shared';
+import type { SimulateResult } from '@log/shared';
 import { api } from '../../lib/api';
 
 interface Outcome {
   instruction: string;
-  route: RouteDecision;
+  spec: {
+    count: number;
+    messageTypes: string[];
+    ackStatus: 'success' | 'failure';
+    startMessageId?: string;
+  };
   result: SimulateResult;
 }
 
@@ -84,13 +89,15 @@ export default function SimulatePage() {
             {t.results?.map((o, j) => (
               <div key={j} className="space-y-1">
                 {t.results!.length > 1 && (
-                  <div className="text-xs text-slate-500">
-                    Command {j + 1}: “{o.instruction.slice(0, 80)}”
-                  </div>
+                  <div className="text-xs text-slate-500">Command {j + 1}</div>
                 )}
                 <div className="text-xs text-slate-400">
-                  🤖 LLM understood → intent <code>{o.route.intent}</code>, agent{' '}
-                  <code>{o.route.targetAgent}</code>
+                  🤖 LLM understood → <code>{o.spec.count}</code> ×{' '}
+                  <code>{o.spec.messageTypes.join('+')}</code>, ack{' '}
+                  <code>{o.spec.ackStatus}</code>
+                  {o.spec.startMessageId ? (
+                    <> , ids from <code>{o.spec.startMessageId}</code></>
+                  ) : null}
                 </div>
                 <ResultCard result={o.result} />
               </div>

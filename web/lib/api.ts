@@ -22,10 +22,19 @@ export const api = {
     }),
   simulate: (body: unknown) =>
     req<SimulateResult>('/simulate', { method: 'POST', body: JSON.stringify(body) }),
-  /** Natural-language simulate: the supervisor LLM parses the prompt. */
+  /** Natural-language simulate: the LLM parses the prompt into command specs. */
   simulatePrompt: (prompt: string) =>
     req<{
-      results: { instruction: string; route: RouteDecision; result: SimulateResult }[];
+      results: {
+        instruction: string;
+        spec: {
+          count: number;
+          messageTypes: string[];
+          ackStatus: 'success' | 'failure';
+          startMessageId?: string;
+        };
+        result: SimulateResult;
+      }[];
     }>('/simulate/prompt', {
       method: 'POST',
       body: JSON.stringify({ prompt }),
