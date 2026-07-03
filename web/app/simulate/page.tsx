@@ -91,23 +91,30 @@ export default function SimulatePage() {
         <div ref={endRef} />
       </div>
 
-      {/* Single natural-language input */}
+      {/* Single natural-language input (multi-line; paste XML, Shift+Enter for newline) */}
       <div className="mt-3 flex gap-2">
-        <input
-          className="flex-1 rounded-xl border border-edge bg-panel px-4 py-3 text-sm outline-none focus:border-sky-500"
-          placeholder="e.g. Simulate 4 request/ack/response with message_id=001 to 004"
+        <textarea
+          rows={3}
+          className="flex-1 resize-y rounded-xl border border-edge bg-panel px-4 py-3 font-mono text-xs outline-none focus:border-sky-500"
+          placeholder="e.g. Simulate 4 request/ack/response with message_id=001 to 004  —  or paste XML"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), void send())}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
         />
         <button
-          className="rounded-xl bg-sky-600 px-5 text-sm font-medium text-white disabled:opacity-50"
+          className="self-end rounded-xl bg-sky-600 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
           onClick={() => void send()}
           disabled={busy}
         >
           Send
         </button>
       </div>
+      <p className="mt-1 text-[11px] text-slate-500">Enter to send · Shift+Enter for a new line</p>
     </div>
   );
 }

@@ -80,15 +80,21 @@ export default function ChatPage() {
       </div>
 
       <div className="mt-3 flex gap-2">
-        <input
-          className="flex-1 rounded-xl border border-edge bg-panel px-4 py-3 text-sm outline-none focus:border-sky-500"
-          placeholder="Ask about your logs and findings…"
+        <textarea
+          rows={2}
+          className="flex-1 resize-y rounded-xl border border-edge bg-panel px-4 py-3 text-sm outline-none focus:border-sky-500"
+          placeholder="Ask about your logs and findings… (Shift+Enter for a new line)"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), send())}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
         />
         <button
-          className="rounded-xl bg-sky-600 px-5 text-sm font-medium text-white disabled:opacity-50"
+          className="self-end rounded-xl bg-sky-600 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
           onClick={send}
           disabled={busy}
         >
