@@ -7,19 +7,26 @@ import { runPipeline } from '@log/analysis';
 import { allConnectors } from '@log/ingestion';
 import { pruneFindingsOlderThan } from '@log/db';
 
-interface ScheduleEvent {
+export interface AnalyzeOptions {
   windowMinutes?: number;
   /** Findings older than this are removed so the dashboard stays current. */
   findingsTtlMinutes?: number;
 }
 
-export async function handler(event: ScheduleEvent = {}): Promise<{
+export interface AnalyzeResult {
   bySource: Record<string, { parsed: number; findings: number }>;
   pruned: number;
-}> {
-  const windowMinutes = event.windowMinutes ?? 5;
-  const ttlMinutes =
-    event.findingsTtlMinutes ?? Number(process.env.FINDINGS_TTL_MINUTES ?? 30);
+}
+
+/**
+ * Pull a recent window of logs from every source and run the analysis pipeline
+ * (the Analysis Agent's log processing: parse → detect anomalies → LLM reason →
+ * persist findings). Shared by the scheduled poller and the on-demand dashboard
+ * refresh so both report the same, current findings.
+ */
+export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<AnalyzeResult> {
+  const windowMinutes = opts.windowMinutes ?? 5;
+  const ttlMinutes = opts.findingsTtlMinutes ?? Number(process.env.FINDINGS_TTL_MINUTES ?? 30);
   const since = Date.now() - windowMinutes * 60_000;
   const bySource: Record<string, { parsed: number; findings: number }> = {};
 
@@ -53,4 +60,9 @@ export async function handler(event: ScheduleEvent = {}): Promise<{
   );
 
   return { bySource, pruned };
+}
+
+/** EventBridge entry point — the always-on scheduled analysis. */
+export async function handler(event: AnalyzeOptions = {}): Promise<AnalyzeResult> {
+  return analyzeAllSources(event);
 }

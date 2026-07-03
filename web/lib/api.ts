@@ -14,7 +14,13 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  findings: () => req<{ findings: Finding[] }>('/findings?limit=100'),
+  /** Loading the dashboard re-runs analysis across all sources, then returns findings. */
+  findings: () =>
+    req<{
+      findings: Finding[];
+      analysis?: { bySource: Record<string, { parsed: number; findings: number }>; pruned: number };
+    }>('/findings?limit=100'),
+  clearFindings: () => req<{ deleted: number }>('/findings', { method: 'DELETE' }),
   chat: (sessionId: string, message: string) =>
     req<ChatResponse>('/chat', {
       method: 'POST',

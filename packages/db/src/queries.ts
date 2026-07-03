@@ -102,6 +102,13 @@ export async function pruneFindingsOlderThan(cutoff: number): Promise<number> {
   return rows.length;
 }
 
+/** Delete every finding (and cascade their alerts). Returns the count removed. */
+export async function deleteAllFindings(): Promise<number> {
+  const sqlc = getSql();
+  const rows = await sqlc`DELETE FROM findings RETURNING id`;
+  return rows.length;
+}
+
 /** True if a finding with this fingerprint was created at/after `since` (ms). */
 export async function findingExistsByFingerprint(
   fingerprint: string,

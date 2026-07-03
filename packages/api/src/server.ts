@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { z } from 'zod';
 import {
   recentFindings,
+  deleteAllFindings,
   queryLogs,
   ensureSession,
   sessionHistory,
@@ -10,7 +11,7 @@ import {
 import { runPipeline } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
 import { simulate } from '@log/simulator';
-import { invokeApplication } from '@log/agents';
+import { invokeApplication, analyzeAllSources } from '@log/agents';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
 import { handleChat } from './chat.js';
 import { handleSimulatePrompt } from './simulate.js';
@@ -31,9 +32,29 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
   api.get('/health', async () => ({ ok: true, ts: Date.now() }));
 
   // -------- Dashboard: findings, logs --------
+  // Every dashboard load re-runs the analysis: pull the latest logs from all
+  // sources and run the pipeline (Analysis Agent) so the returned findings
+  // reflect current logs, not a stale snapshot. `?analyze=false` skips the run
+  // (used by internal/polling callers). `?window=<minutes>` sets the log window.
   api.get('/findings', async (req) => {
-    const limit = Number((req.query as { limit?: string }).limit ?? 50);
-    return { findings: await recentFindings(limit) };
+    const q = req.query as { limit?: string; analyze?: string; window?: string };
+    const limit = Number(q.limit ?? 50);
+    let analysis: Awaited<ReturnType<typeof analyzeAllSources>> | undefined;
+    if (q.analyze !== 'false') {
+      try {
+        analysis = await analyzeAllSources({ windowMinutes: Number(q.window ?? 5) });
+      } catch (err) {
+        req.log.error(err, 'live findings analysis failed');
+      }
+    }
+    return { findings: await recentFindings(limit), analysis };
+  });
+
+  // Clear the findings table (and cascade alerts). Used by the dashboard's
+  // "Clear findings" control and for resetting the database.
+  api.delete('/findings', async () => {
+    const deleted = await deleteAllFindings();
+    return { deleted };
   });
 
   const LogsQuery = z.object({
