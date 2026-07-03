@@ -91,6 +91,17 @@ export async function insertFinding(f: Finding): Promise<void> {
             ${f.windowStart}, ${f.windowEnd}, ${f.createdAt}, ${toVector(f.embedding)}::vector)`;
 }
 
+/**
+ * Delete findings (and their alerts, via cascade) created before `cutoff` (ms).
+ * Keeps the Findings & Anomalies dashboard reflecting only recent analysis so it
+ * doesn't show anomalies whose logs have aged out. Returns the count removed.
+ */
+export async function pruneFindingsOlderThan(cutoff: number): Promise<number> {
+  const sqlc = getSql();
+  const rows = await sqlc`DELETE FROM findings WHERE created_at < ${cutoff} RETURNING id`;
+  return rows.length;
+}
+
 /** True if a finding with this fingerprint was created at/after `since` (ms). */
 export async function findingExistsByFingerprint(
   fingerprint: string,

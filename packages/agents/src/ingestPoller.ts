@@ -5,17 +5,32 @@
  */
 import { runPipeline } from '@log/analysis';
 import { allConnectors } from '@log/ingestion';
+import { pruneFindingsOlderThan } from '@log/db';
 
 interface ScheduleEvent {
   windowMinutes?: number;
+  /** Findings older than this are removed so the dashboard stays current. */
+  findingsTtlMinutes?: number;
 }
 
 export async function handler(event: ScheduleEvent = {}): Promise<{
   bySource: Record<string, { parsed: number; findings: number }>;
+  pruned: number;
 }> {
   const windowMinutes = event.windowMinutes ?? 5;
+  const ttlMinutes =
+    event.findingsTtlMinutes ?? Number(process.env.FINDINGS_TTL_MINUTES ?? 30);
   const since = Date.now() - windowMinutes * 60_000;
   const bySource: Record<string, { parsed: number; findings: number }> = {};
+
+  // Expire findings whose logs have aged out, so the dashboard reflects only
+  // recent analysis (a finding only shows while its logs are recent).
+  let pruned = 0;
+  try {
+    pruned = await pruneFindingsOlderThan(Date.now() - ttlMinutes * 60_000);
+  } catch (err) {
+    console.error('prune findings failed', err);
+  }
 
   await Promise.all(
     allConnectors().map(async (connector) => {
@@ -37,5 +52,5 @@ export async function handler(event: ScheduleEvent = {}): Promise<{
     }),
   );
 
-  return { bySource };
+  return { bySource, pruned };
 }

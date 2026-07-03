@@ -29,7 +29,7 @@ export interface PipelineResult {
 const ALERT_SEVERITIES: Severity[] = ['high', 'critical'];
 
 /** Suppress re-reporting the same fingerprint within this window (poller runs every 5 min). */
-const DEDUP_WINDOW_MS = 60 * 60_000;
+const DEDUP_WINDOW_MS = 30 * 60_000;
 
 /**
  * End-to-end log processing for one batch. Findings are produced only for real
