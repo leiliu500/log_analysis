@@ -6,45 +6,8 @@ import { scoreAndLearn, isAnomalous, type AnomalyScore } from './learn.js';
 import { correlate, type Cluster } from './correlate.js';
 import { reasonAboutCluster } from './reason.js';
 import { embed } from './bedrock.js';
-import {
-  buildTransactions,
-  incompleteTransactions,
-  reasonAboutTransaction,
-} from './transactions.js';
-
-// Production error/exception signals. Normal request traffic and idle windows
-// are NOT anomalies; errors, exceptions, timeouts, failures and 5xx are.
-const ERROR_RE =
-  /\b(exception|errno|error|failed|failure|timeout|timed out|refused|unavailable|unauthorized|denied|rejected|panic|fatal|traceback|stack ?trace|unhandled)\b/i;
-
-/** Is this a production error/exception log worth flagging? */
-export function isErrorLog(l: ParsedLog): boolean {
-  if (l.level === 'error' || l.level === 'fatal') return true;
-  const status = Number((l.fields as Record<string, unknown> | undefined)?.statusCode);
-  if (status >= 500 && status < 600) return true;
-  return ERROR_RE.test(l.message);
-}
-
-/** Group error logs by fingerprint into synthetic clusters for LLM reasoning. */
-function errorClusters(logs: ParsedLog[]): Cluster[] {
-  const byFp = new Map<string, ParsedLog[]>();
-  for (const l of logs) {
-    const arr = byFp.get(l.fingerprint);
-    if (arr) arr.push(l);
-    else byFp.set(l.fingerprint, [l]);
-  }
-  return [...byFp.values()].map((group) => {
-    const sorted = group.sort((a, b) => a.timestamp - b.timestamp);
-    return {
-      key: `error:${sorted[0]!.fingerprint}`,
-      reason: `${sorted.length} error/exception log(s)`,
-      logs: sorted,
-      sources: [...new Set(sorted.map((l) => l.source))],
-      windowStart: sorted[0]!.timestamp,
-      windowEnd: sorted[sorted.length - 1]!.timestamp,
-    };
-  });
-}
+import { detectLogAnomalies } from './anomalies.js';
+import { buildTransactions, transactionAnomalies, reasonAboutTransaction } from './transactions.js';
 
 export interface PipelineOptions {
   /** Sliding window used for rate/anomaly math. */
@@ -129,19 +92,19 @@ export async function runPipeline(
     }
   };
 
-  // A) Error / exception anomalies.
-  for (const cluster of errorClusters(parsed.filter(isErrorLog)).slice(0, maxReasoned)) {
+  // A) Production log anomalies (errors, exceptions, timeouts, 5xx/4xx, auth,
+  //    rate-limit, resource exhaustion, crashes, data-integrity, latency).
+  for (const cluster of detectLogAnomalies(parsed).slice(0, maxReasoned)) {
     await reasonCluster(cluster);
   }
 
-  // B) Incomplete cashMessage transactions.
-  const incomplete = incompleteTransactions(buildTransactions(parsed), txGraceMs, now).slice(
+  // B) Transaction anomalies (incomplete / duplicate / rejected cashMessages).
+  for (const { tx, reason } of transactionAnomalies(buildTransactions(parsed), txGraceMs, now).slice(
     0,
     maxReasoned,
-  );
-  for (const tx of incomplete) {
+  )) {
     try {
-      const finding = await reasonAboutTransaction(tx, now, windowMs);
+      const finding = await reasonAboutTransaction(tx, reason, now, windowMs);
       await insertFinding(finding);
       await alert(finding);
       findings.push(finding);
