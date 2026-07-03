@@ -21,6 +21,28 @@ export function FindingCard({ f }: { f: Finding }) {
       </div>
       <h3 className="font-semibold text-white">{f.title}</h3>
       <p className="mt-1 text-sm text-slate-300">{f.summary}</p>
+
+      {/* Source logs — the exact log lines this finding is based on. */}
+      {f.evidence.length > 0 && (
+        <details className="mt-3 text-sm" open>
+          <summary className="cursor-pointer text-slate-400">
+            Source logs ({f.evidence.length}) — this finding is derived only from these
+          </summary>
+          <div className="mt-2 space-y-2">
+            {f.evidence.map((e, i) => (
+              <div key={i} className="rounded-lg border border-edge bg-edge/40 p-2">
+                <div className="mb-1 text-xs text-slate-500">
+                  {new Date(e.timestamp).toLocaleString()} · {e.source} · {e.stream}
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-xs text-slate-300">
+                  {e.excerpt}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
       {f.reasoning.length > 0 && (
         <details className="mt-3 text-sm">
           <summary className="cursor-pointer text-slate-400">Reasoning ({f.reasoning.length} steps)</summary>

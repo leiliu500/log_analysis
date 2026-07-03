@@ -101,7 +101,7 @@ ${renderLogs(cluster.logs)}`;
       source: l.source,
       stream: l.stream,
       timestamp: l.timestamp,
-      excerpt: l.message.slice(0, 300),
+      excerpt: l.message.slice(0, 800),
     })),
     reasoning: mf.reasoning ?? [],
     recommendations: mf.recommendations ?? [],
