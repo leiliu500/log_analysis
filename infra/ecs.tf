@@ -101,6 +101,7 @@ resource "aws_ecs_task_definition" "api" {
       { name = "AWS_REGION", value = var.region },
       { name = "DATABASE_URL", value = local.database_url },
       { name = "APP_ENDPOINTS_JSON", value = var.app_endpoints_json },
+      { name = "CLOUDWATCH_LOG_GROUPS", value = join(",", var.cloudwatch_log_groups) },
       { name = "BEDROCK_MODEL_ID", value = local.foundation_model },
       { name = "BEDROCK_EMBED_MODEL_ID", value = "amazon.titan-embed-text-v2:0" },
       { name = "BEDROCK_SUPERVISOR_AGENT_ID", value = aws_bedrockagent_agent.supervisor.agent_id },

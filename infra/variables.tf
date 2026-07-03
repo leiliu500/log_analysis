@@ -57,8 +57,10 @@ variable "web_image" {
 }
 
 variable "cloudwatch_log_groups" {
+  # Entries may use a "*" suffix as a prefix wildcard, expanded via
+  # DescribeLogGroups. "/sim/*" covers all simulated-application log groups.
   type    = list(string)
-  default = ["/aws/lambda/my-app"]
+  default = ["/sim/*"]
 }
 
 variable "app_endpoints_json" {

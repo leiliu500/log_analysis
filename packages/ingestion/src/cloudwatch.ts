@@ -5,6 +5,7 @@ import {
   CreateLogGroupCommand,
   CreateLogStreamCommand,
   DescribeLogStreamsCommand,
+  DescribeLogGroupsCommand,
 } from '@aws-sdk/client-cloudwatch-logs';
 import type { RawLogRecord } from '@log/shared';
 import type { LogConnector, PullOptions } from './connector.js';
@@ -23,9 +24,35 @@ export class CloudWatchConnector implements LogConnector {
     this.client = new CloudWatchLogsClient({ region });
   }
 
+  /**
+   * Resolve configured entries to concrete log-group names. An entry containing
+   * "*" (e.g. "/sim/*") is expanded via DescribeLogGroups so simulated app
+   * groups like "/sim/cashMessage" are discovered automatically.
+   */
+  private async resolveGroups(): Promise<string[]> {
+    const out: string[] = [];
+    for (const entry of this.logGroups) {
+      if (!entry.includes('*')) {
+        out.push(entry);
+        continue;
+      }
+      const prefix = entry.slice(0, entry.indexOf('*'));
+      let token: string | undefined;
+      do {
+        const res = await this.client.send(
+          new DescribeLogGroupsCommand({ logGroupNamePrefix: prefix, nextToken: token }),
+        );
+        for (const lg of res.logGroups ?? []) if (lg.logGroupName) out.push(lg.logGroupName);
+        token = res.nextToken;
+      } while (token);
+    }
+    return [...new Set(out)];
+  }
+
   async pull(opts: PullOptions): Promise<RawLogRecord[]> {
     const out: RawLogRecord[] = [];
-    for (const group of this.logGroups) {
+    const groups = await this.resolveGroups();
+    for (const group of groups) {
       let token: string | undefined;
       do {
         const res = await this.client.send(

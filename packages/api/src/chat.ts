@@ -4,10 +4,9 @@ import {
   type ChatResponse,
   type ChatContext,
   type RouteDecision,
-  SimulateRequest,
   InvokeAppRequest,
 } from '@log/shared';
-import { converse, embed, runPipeline } from '@log/analysis';
+import { converse, embed } from '@log/analysis';
 import {
   ensureSession,
   appendMessage,
@@ -17,8 +16,8 @@ import {
 } from '@log/db';
 import { routeRequest, invokeApplication } from '@log/agents';
 import { simulate } from '@log/simulator';
-import { connectorFor } from '@log/ingestion';
 import { buildSimulateRequest } from './simulate.js';
+import { answerLogQuestion } from './analyze.js';
 
 const ANSWER_SYSTEM = `You are the log-analysis assistant. Answer the user's
 question using ONLY the retrieved findings and logs provided as CONTEXT below.
@@ -108,14 +107,9 @@ async function dispatch(
     }
 
     case 'analyze_logs': {
-      const source = route.sources[0] ?? 'cloudwatch';
-      const since = Date.now() - 15 * 60_000;
-      const records = await connectorFor(source).pull({ since, limit: 2000 });
-      const result = await runPipeline(records, { windowMs: 15 * 60_000 });
-      return {
-        answer: `Analyzed ${result.parsed} ${source} logs; found ${result.findings.length} findings and ${result.anomalies.length} anomalies. Ask me about any of them.`,
-        context: { findings: result.findings, logs: [], route },
-      };
+      // Pull raw logs over the requested window and answer the question.
+      const { answer, logs } = await answerLogQuestion(message, route);
+      return { answer, context: { findings: [], logs, route } };
     }
 
     case 'query_findings':

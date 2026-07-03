@@ -168,7 +168,7 @@ resource "aws_iam_role_policy" "ecs_task" {
       },
       {
         Effect   = "Allow"
-        Action   = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:PutLogEvents", "logs:CreateLogStream", "logs:CreateLogGroup", "logs:DescribeLogStreams"]
+        Action   = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:PutLogEvents", "logs:CreateLogStream", "logs:CreateLogGroup", "logs:DescribeLogStreams", "logs:DescribeLogGroups"]
         Resource = "*"
       },
       {
