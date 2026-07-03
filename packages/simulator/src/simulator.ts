@@ -89,6 +89,7 @@ export async function simulate(req: SimulateRequest): Promise<SimulateResult> {
         messageType: type,
         messageId: ownId,
         initMessageId: type === 'REQUEST' ? undefined : requestId,
+        ackCode: type === 'REQUEST' ? undefined : getTag(out, 'ackCode'),
       });
       offset += 1;
     }

@@ -44,6 +44,8 @@ export const SimulatedMessage = z.object({
   messageType: z.string(),
   messageId: z.string(),
   initMessageId: z.string().optional(),
+  /** ackCode written on ACK/RESPONSE (e.g. OK, PROCESSED_SUCCESSFULLY, FAILED). */
+  ackCode: z.string().optional(),
 });
 export type SimulatedMessage = z.infer<typeof SimulatedMessage>;
 

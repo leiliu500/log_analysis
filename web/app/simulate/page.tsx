@@ -124,11 +124,27 @@ function ResultCard({ result }: { result: SimulateResult }) {
     .map(([k, v]) => `${v}→${k}`)
     .join(', ');
   const sets = result.messages.filter((m) => m.messageType === 'REQUEST').length;
+  // What was actually generated — makes "without response" / "ack failure" obvious.
+  const types = [...new Set(result.messages.map((m) => m.messageType))];
+  const perSet = ['REQUEST', 'ACK', 'RESPONSE'].filter((t) => types.includes(t));
+  const missing = ['REQUEST', 'ACK', 'RESPONSE'].filter((t) => !types.includes(t));
+  const failed = result.messages.some((m) => m.ackCode && !/^(OK|SUCCESS|PROCESSED_SUCCESSFULLY|ACCEPTED|COMPLETE)/i.test(m.ackCode));
   return (
     <div className="card text-sm">
-      <div className="mb-2 text-slate-300">
+      <div className="mb-1 text-slate-300">
         Generated <b>{sets}</b> set(s) · wrote <b>{written || '0'}</b> · app{' '}
         <code>{result.application}</code>
+      </div>
+      <div className="mb-2 flex flex-wrap gap-2 text-xs">
+        <span className="rounded bg-edge px-2 py-0.5">per set: {perSet.join(' + ')}</span>
+        {missing.length > 0 && (
+          <span className="rounded bg-orange-500/20 px-2 py-0.5 text-orange-300">
+            without {missing.join(' & ')}
+          </span>
+        )}
+        <span className={`rounded px-2 py-0.5 ${failed ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+          ack: {failed ? 'FAILURE' : 'success'}
+        </span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
@@ -136,7 +152,8 @@ function ResultCard({ result }: { result: SimulateResult }) {
             <tr>
               <th className="pr-4">type</th>
               <th className="pr-4">messageId</th>
-              <th>initMessageId</th>
+              <th className="pr-4">initMessageId</th>
+              <th>ackCode</th>
             </tr>
           </thead>
           <tbody className="font-mono text-slate-300">
@@ -144,8 +161,11 @@ function ResultCard({ result }: { result: SimulateResult }) {
               <tr key={i}>
                 <td className="pr-4">{m.messageType}</td>
                 <td className="pr-4">{m.messageId}</td>
-                <td className={m.initMessageId ? 'text-emerald-400' : 'text-slate-600'}>
+                <td className={`pr-4 ${m.initMessageId ? 'text-emerald-400' : 'text-slate-600'}`}>
                   {m.initMessageId ?? '—'}
+                </td>
+                <td className={m.ackCode && /fail|reject|error/i.test(m.ackCode) ? 'text-red-400' : 'text-slate-400'}>
+                  {m.ackCode ?? '—'}
                 </td>
               </tr>
             ))}
