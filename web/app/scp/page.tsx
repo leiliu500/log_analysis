@@ -20,26 +20,40 @@ interface Result {
   latencyMs: number;
 }
 
+interface Attached {
+  name: string;
+  contentBase64: string;
+  contentType?: string;
+  size: number;
+}
+
 export default function ScpPage() {
   const [url, setUrl] = useState('');
   const [payload, setPayload] = useState(SAMPLE_PAYLOAD);
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [file, setFile] = useState<Attached | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // (1) Attach file: load its text into the JSON payload box.
+  // (1) Attach file: kept SEPARATE from the payload; sent as the `file` field.
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
     setError(null);
-    const text = await f.text();
-    setPayload(text);
-    setFileName(f.name);
+    const buf = await f.arrayBuffer();
+    let binary = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    setFile({
+      name: f.name,
+      contentBase64: btoa(binary),
+      contentType: f.type || undefined,
+      size: f.size,
+    });
   }
 
-  // (4) Submit: POST the JSON payload to the scp endpoint URL.
+  // (4) Submit: POST multipart { payload: <JSON>, file: <attached> } to the URL.
   async function submit() {
     if (busy) return;
     setError(null);
@@ -58,7 +72,13 @@ export default function ScpPage() {
     }
     setBusy(true);
     try {
-      const r = await api.invokeApp({ application: 'scp', url: endpoint, request });
+      const r = await api.invokeApp({
+        application: 'scp',
+        url: endpoint,
+        request,
+        file: file ? { name: file.name, contentBase64: file.contentBase64, contentType: file.contentType } : undefined,
+        asForm: true,
+      });
       setResult(r);
     } catch (err) {
       setError(String(err));
@@ -71,8 +91,9 @@ export default function ScpPage() {
     <div className="mx-auto max-w-3xl p-8">
       <h1 className="mb-1 text-2xl font-semibold text-white">SCP</h1>
       <p className="mb-6 text-sm text-slate-400">
-        Trigger the real <b>scp</b> application: attach or type a JSON payload, set the endpoint URL,
-        and submit an HTTP <code>POST</code>. The request is proxied through the API (scp-agent).
+        Trigger the real <b>scp</b> application. Submit posts <code>multipart/form-data</code> with
+        two fields — <code>payload</code> (the JSON) and <code>file</code> (the attachment) — to the
+        endpoint URL. Proxied through the API (scp-agent).
       </p>
 
       {/* (3) Endpoint URL */}
@@ -86,7 +107,10 @@ export default function ScpPage() {
         onChange={(e) => setUrl(e.target.value)}
       />
 
-      {/* (1) Attach file */}
+      {/* (1) Attach file — sent as the `file` form field, separate from payload */}
+      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+        file
+      </label>
       <div className="mb-4 flex items-center gap-3">
         <button
           type="button"
@@ -95,13 +119,22 @@ export default function ScpPage() {
         >
           📎 Attach file
         </button>
-        <input ref={fileRef} type="file" accept=".json,.txt,application/json" hidden onChange={onFile} />
-        {fileName && <span className="text-xs text-slate-400">Loaded: {fileName}</span>}
+        <input ref={fileRef} type="file" hidden onChange={onFile} />
+        {file ? (
+          <span className="text-xs text-slate-400">
+            {file.name} ({file.size} bytes)
+            <button className="ml-2 text-red-400 hover:underline" onClick={() => setFile(null)}>
+              remove
+            </button>
+          </span>
+        ) : (
+          <span className="text-xs text-slate-500">no file attached (optional)</span>
+        )}
       </div>
 
-      {/* (2) JSON payload */}
+      {/* (2) JSON payload — sent as the `payload` form field */}
       <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-        JSON payload
+        payload (JSON)
       </label>
       <textarea
         rows={14}

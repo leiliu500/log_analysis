@@ -45,8 +45,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ prompt }),
     }),
-  /** POST a JSON payload to a real app endpoint (e.g. scp) via the API. */
-  invokeApp: (body: { application?: string; url?: string; request: unknown }) =>
+  /** POST a JSON payload (+ optional file) to a real app endpoint (e.g. scp). */
+  invokeApp: (body: {
+    application?: string;
+    url?: string;
+    request: unknown;
+    file?: { name: string; contentBase64: string; contentType?: string };
+    asForm?: boolean;
+  }) =>
     req<{ application: string; status: number; response: unknown; latencyMs: number }>('/invoke-app', {
       method: 'POST',
       body: JSON.stringify(body),

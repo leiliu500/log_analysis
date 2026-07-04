@@ -58,12 +58,25 @@ export const SimulateResult = z.object({
 });
 export type SimulateResult = z.infer<typeof SimulateResult>;
 
+/** An attached file to send alongside the payload (content base64-encoded). */
+export const AttachedFile = z.object({
+  name: z.string(),
+  contentBase64: z.string(),
+  contentType: z.string().optional(),
+});
+export type AttachedFile = z.infer<typeof AttachedFile>;
+
 /** Instruction to invoke a REAL application endpoint. Per requirement (10). */
 export const InvokeAppRequest = z.object({
   application: z.string().default('scp'),
   /** Explicit endpoint URL. When set it overrides the server's configured map. */
   url: z.string().url().optional(),
+  /** The JSON payload (sent as the `payload` field when multipart). */
   request: z.record(z.string(), z.unknown()),
+  /** Optional file to upload as the `file` field. */
+  file: AttachedFile.optional(),
+  /** POST as multipart/form-data with `payload` + `file` fields (vs JSON body). */
+  asForm: z.boolean().optional(),
 });
 export type InvokeAppRequest = z.infer<typeof InvokeAppRequest>;
 
