@@ -6,7 +6,8 @@
       "Bash(node --import tsx --test packages/agents/src/supervisor.test.ts)",
       "Bash(node --import tsx --test packages/api/src/analyze.test.ts packages/api/src/simulate.test.ts)",
       "Bash(python -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\('intent:',d.get\\('route',{}\\).get\\('intent'\\)\\);print\\(d.get\\('answer',d\\)\\)\")",
-      "Bash(node --import tsx --test packages/api/src/*.test.ts packages/agents/src/*.test.ts)"
+      "Bash(node --import tsx --test packages/api/src/*.test.ts packages/agents/src/*.test.ts)",
+      "Bash(xargs grep -ln \"invokeApplication\")"
     ]
   }
 }

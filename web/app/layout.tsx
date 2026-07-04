@@ -24,6 +24,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/simulate">
                 Simulator
               </Link>
+              <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/scp">
+                SCP
+              </Link>
             </nav>
             <p className="mt-8 text-xs text-slate-500">
               Bedrock agents · CloudWatch · Splunk · Grafana · Email

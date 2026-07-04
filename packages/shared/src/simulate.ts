@@ -60,7 +60,9 @@ export type SimulateResult = z.infer<typeof SimulateResult>;
 
 /** Instruction to invoke a REAL application endpoint. Per requirement (10). */
 export const InvokeAppRequest = z.object({
-  application: z.string(),
+  application: z.string().default('scp'),
+  /** Explicit endpoint URL. When set it overrides the server's configured map. */
+  url: z.string().url().optional(),
   request: z.record(z.string(), z.unknown()),
 });
 export type InvokeAppRequest = z.infer<typeof InvokeAppRequest>;

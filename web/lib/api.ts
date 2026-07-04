@@ -45,9 +45,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ prompt }),
     }),
-  invokeApp: (application: string, request: unknown) =>
-    req<unknown>('/invoke-app', {
+  /** POST a JSON payload to a real app endpoint (e.g. scp) via the API. */
+  invokeApp: (body: { application?: string; url?: string; request: unknown }) =>
+    req<{ application: string; status: number; response: unknown; latencyMs: number }>('/invoke-app', {
       method: 'POST',
-      body: JSON.stringify({ application, request }),
+      body: JSON.stringify(body),
     }),
 };

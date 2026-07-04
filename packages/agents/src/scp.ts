@@ -14,11 +14,12 @@ function endpoints(): Record<string, string> {
  * user's request (requirement 10/11). The supervisor routes e.g. "scp" here.
  */
 export async function invokeApplication(req: InvokeAppRequest): Promise<InvokeAppResult> {
+  // An explicit URL (e.g. entered in the SCP UI) wins over the configured map.
   const map = endpoints();
-  const url = map[req.application];
+  const url = req.url ?? map[req.application];
   if (!url) {
     throw new Error(
-      `No endpoint configured for application "${req.application}". Known: ${Object.keys(map).join(', ') || '(none)'}`,
+      `No endpoint for application "${req.application}". Provide a url, or configure one. Known: ${Object.keys(map).join(', ') || '(none)'}`,
     );
   }
   const started = Date.now();
