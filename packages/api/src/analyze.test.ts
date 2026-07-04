@@ -45,6 +45,11 @@ test('specific messageId status', () => {
   assert.ok(/REQUEST ✓/.test(a) && /ACK ✓ \(ackCode=FAILED\)/.test(a) && /RESPONSE ✗/.test(a));
 });
 
+test('explicit messageId not in window → truthful not-found', () => {
+  const a = directAnswer('does messageId=DOES-NOT-EXIST only have ACK', 'cloudwatch', 60, SCENARIO)!;
+  assert.match(a, /No message with messageId=DOES-NOT-EXIST/);
+});
+
 test('window parsing: "last 10 minutes"', () => {
   assert.equal(extractWindowMinutes('How many requests sent in the last 10 minutes', undefined), 10);
   assert.equal(extractWindowMinutes('past 2 hours', undefined), 120);

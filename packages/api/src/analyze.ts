@@ -135,7 +135,10 @@ export function directAnswer(
   };
   const reqIds = enriched.filter((e) => e.meta.type === 'REQUEST').map((e) => e.meta.messageId);
   const allIds = enriched.map((e) => e.meta.messageId);
-  const mentioned = reqIds.find(mentionsId) ?? allIds.find(mentionsId);
+  // An explicit "messageId=X" / "message id X" is authoritative even if X isn't
+  // in the window (then we say so), so the answer is about the id actually asked.
+  const explicitId = message.match(/message[_\s-]?id\s*[=:]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/i)?.[1];
+  const mentioned = explicitId ?? reqIds.find(mentionsId) ?? allIds.find(mentionsId);
   if (mentioned) {
     const txs = correlate(enriched);
     const t = txs.get(mentioned);
