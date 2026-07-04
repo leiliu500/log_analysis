@@ -53,13 +53,20 @@ export interface LogAnswer {
 
 type Enriched = { log: ParsedLog; meta: { type?: string; messageId?: string; initMessageId?: string } };
 
-/** The cashMessage type the question is about, if any. */
-function askedType(message: string): 'REQUEST' | 'ACK' | 'RESPONSE' | undefined {
+type MsgType = 'REQUEST' | 'ACK' | 'RESPONSE';
+
+/**
+ * Which cashMessage type(s) the question is about. A question may name several
+ * ("ACK and responses" → both), so this returns every type mentioned; an empty
+ * result means "all types" (e.g. "how many messages/logs").
+ */
+export function askedTypes(message: string): MsgType[] {
   const m = message.toLowerCase();
-  if (/\brequests?\b/.test(m)) return 'REQUEST';
-  if (/\bresponses?\b/.test(m)) return 'RESPONSE';
-  if (/\backs?\b|acknowledg/.test(m)) return 'ACK';
-  return undefined;
+  const t: MsgType[] = [];
+  if (/\brequests?\b/.test(m)) t.push('REQUEST');
+  if (/\backs?\b|acknowledg/.test(m)) t.push('ACK');
+  if (/\bresponses?\b/.test(m)) t.push('RESPONSE');
+  return t;
 }
 
 /**
@@ -79,17 +86,27 @@ export function directAnswer(
   const wantsIds = /messageid|message id|\bids?\b|list|show|which|what are/.test(m);
   if (!isCount && !wantsIds) return null;
 
-  const type = askedType(message);
-  const matched = type ? enriched.filter((e) => e.meta.type === type) : enriched;
-  const label = type ? `${type} message(s)` : 'log entr(y/ies)';
+  const types = askedTypes(message);
+  const matched = types.length
+    ? enriched.filter((e) => e.meta.type && types.includes(e.meta.type as MsgType))
+    : enriched;
   const win = `the last ${windowMinutes} minute(s)`;
 
   if (matched.length === 0) {
-    return `No ${type ?? 'log'} ${type ? 'messages' : 'entries'} were found on ${source} in ${win}.`;
+    const what = types.length ? `${types.join('/')} messages` : 'log entries';
+    return `No ${what} were found on ${source} in ${win}.`;
   }
 
+  // Header: when several types are asked, break the total down per type.
+  const header =
+    types.length > 1
+      ? `${matched.length} messages (${types
+          .map((t) => `${matched.filter((e) => e.meta.type === t).length} ${t}`)
+          .join(', ')}) on ${source} in ${win}.`
+      : `${matched.length} ${types[0] ? `${types[0]} message(s)` : 'log entr(y/ies)'} on ${source} in ${win}.`;
+
   const ids = matched.map((e) => e.meta.messageId).filter((x): x is string => !!x && x !== '-');
-  const lines = [`${matched.length} ${label} on ${source} in ${win}.`];
+  const lines = [header];
   // List the ids (with timestamps) when asked, or whenever the set is small.
   if ((wantsIds || matched.length <= 50) && ids.length) {
     lines.push('');

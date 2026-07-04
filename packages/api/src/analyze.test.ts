@@ -37,6 +37,21 @@ test('"show all messageId" lists every id', () => {
   assert.ok(a.includes('001') && a.includes('IM-4764') && a.includes('IM-4774'));
 });
 
+test('"how many ACK and responses" counts BOTH types (not just one)', () => {
+  const rows = [
+    mk('ACK', 'A1', '001'),
+    mk('ACK', 'A2', '002'),
+    mk('RESPONSE', 'R1', '001'),
+    mk('RESPONSE', 'R2', '002'),
+    ...REQS,
+  ];
+  const a = directAnswer('How many ACK and responses received in last 1 hour', 'cloudwatch', 60, rows)!;
+  // 2 ACK + 2 RESPONSE = 4, requests excluded.
+  assert.match(a, /^4 messages \(2 ACK, 2 RESPONSE\)/);
+  for (const id of ['A1', 'A2', 'R1', 'R2']) assert.ok(a.includes(id), `missing ${id}`);
+  assert.ok(!a.includes('FCC-USSS-28090845'), 'REQUEST id must not be listed');
+});
+
 test('open-ended question falls through to the LLM (null)', () => {
   assert.equal(directAnswer('why did the transaction fail', 'cloudwatch', 10, ALL), null);
 });
