@@ -4,13 +4,46 @@ import type { ParsedLog } from '@log/shared';
 import { directAnswer, extractWindowMinutes } from './analyze.js';
 
 // Minimal enriched rows like answerLogQuestion builds.
-const mk = (type: string, id: string, init?: string, ts = 1783119462910) => ({
+const mk = (type: string, id: string, init?: string, ackCode?: string, ts = 1783119462910) => ({
   log: { timestamp: ts, level: 'info', message: '', raw: '' } as unknown as ParsedLog,
-  meta: { type, messageId: id, initMessageId: init },
+  meta: { type, messageId: id, initMessageId: init, ackCode },
 });
 
 const REQS = [mk('REQUEST', '001'), mk('REQUEST', '002'), mk('REQUEST', '003'), mk('REQUEST', 'FCC-USSS-28090845')];
 const ALL = [...REQS, mk('ACK', 'IM-4764', '001'), mk('RESPONSE', 'IM-4774', '001')];
+
+// Scenario: 001 is a complete success tx; FCC-... has only a FAILED ack, no response.
+const SCENARIO = [
+  mk('REQUEST', '001'),
+  mk('ACK', 'IM-4764', '001', 'OK'),
+  mk('RESPONSE', 'IM-4774', '001', 'PROCESSED_SUCCESSFULLY'),
+  mk('REQUEST', 'FCC-USSS-28090845'),
+  mk('ACK', 'IM-4765', 'FCC-USSS-28090845', 'FAILED'),
+];
+
+test('failure question: reports the FAILED ack', () => {
+  const a = directAnswer('Are there any exception or error or failure', 'cloudwatch', 60, SCENARIO)!;
+  assert.match(a, /^Yes/);
+  assert.ok(a.includes('FAILED') && a.includes('FCC-USSS-28090845'));
+});
+
+test('failure question with none: truthful No', () => {
+  const ok = [mk('REQUEST', '001'), mk('ACK', 'A', '001', 'OK'), mk('RESPONSE', 'R', '001', 'PROCESSED_SUCCESSFULLY')];
+  const a = directAnswer('any ACK failure', 'cloudwatch', 60, ok)!;
+  assert.match(a, /^No —/);
+});
+
+test('completeness: which message only has ACK and no response', () => {
+  const a = directAnswer('Which message only has ACK and no response', 'cloudwatch', 60, SCENARIO)!;
+  assert.ok(a.includes('FCC-USSS-28090845') && /no RESPONSE/i.test(a));
+  assert.ok(!a.includes('messageId=001 —'), '001 is complete, must not be listed');
+});
+
+test('specific messageId status', () => {
+  const a = directAnswer('does messageId=FCC-USSS-28090845 only has ACK with failure', 'cloudwatch', 60, SCENARIO)!;
+  assert.match(a, /messageId=FCC-USSS-28090845:/);
+  assert.ok(/REQUEST ✓/.test(a) && /ACK ✓ \(ackCode=FAILED\)/.test(a) && /RESPONSE ✗/.test(a));
+});
 
 test('window parsing: "last 10 minutes"', () => {
   assert.equal(extractWindowMinutes('How many requests sent in the last 10 minutes', undefined), 10);

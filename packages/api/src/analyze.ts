@@ -14,7 +14,7 @@ export function extractWindowMinutes(message: string, fromLlm: unknown): number 
     if (unit.startsWith('day')) return n * 1440;
     return n;
   }
-  return 15;
+  return 60;
 }
 
 const ANALYZE_SYSTEM = `You are the log-analysis agent. Answer the user's question
@@ -34,10 +34,21 @@ function metaOf(log: ParsedLog): {
   type?: string;
   messageId?: string;
   initMessageId?: string;
+  ackCode?: string;
 } {
   const type = xmlTag(log.raw, 'messageType')?.toUpperCase() ?? (typeof log.fields?.messageType === 'string' ? (log.fields.messageType as string).toUpperCase() : undefined);
-  return { type, messageId: xmlTag(log.raw, 'messageId'), initMessageId: xmlTag(log.raw, 'initMessageId') };
+  return {
+    type,
+    messageId: xmlTag(log.raw, 'messageId'),
+    initMessageId: xmlTag(log.raw, 'initMessageId'),
+    ackCode: xmlTag(log.raw, 'ackCode'),
+  };
 }
+
+/** An ackCode present and NOT a success code counts as a failure. */
+const isSuccessAck = (c?: string): boolean =>
+  !!c && /^(ok|success(ful)?|processed(_successfully)?|accepted|complete[d]?)/i.test(c.trim());
+const isFailAck = (c?: string): boolean => !!c && !isSuccessAck(c);
 
 export interface LogAnswer {
   answer: string;
@@ -51,7 +62,38 @@ export interface LogAnswer {
   };
 }
 
-type Enriched = { log: ParsedLog; meta: { type?: string; messageId?: string; initMessageId?: string } };
+type Meta = { type?: string; messageId?: string; initMessageId?: string; ackCode?: string };
+type Enriched = { log: ParsedLog; meta: Meta };
+
+const ts = (e: Enriched): string => new Date(e.log.timestamp).toISOString();
+const fmt = (e: Enriched): string =>
+  `- ${ts(e)} ${e.meta.type ?? e.log.level.toUpperCase()} messageId=${e.meta.messageId ?? '-'}` +
+  `${e.meta.initMessageId ? `, initMessageId=${e.meta.initMessageId}` : ''}` +
+  `${e.meta.ackCode ? `, ackCode=${e.meta.ackCode}` : ''}`;
+
+/** One request correlated with its ACK/RESPONSE messages (by initMessageId). */
+interface Tx {
+  reqId: string;
+  hasReq: boolean;
+  acks: Enriched[];
+  responses: Enriched[];
+}
+
+/** Correlate REQUEST ↔ ACK/RESPONSE by messageId/initMessageId. */
+function correlate(enriched: Enriched[]): Map<string, Tx> {
+  const map = new Map<string, Tx>();
+  const get = (id: string): Tx => {
+    let t = map.get(id);
+    if (!t) map.set(id, (t = { reqId: id, hasReq: false, acks: [], responses: [] }));
+    return t;
+  };
+  for (const e of enriched) {
+    if (e.meta.type === 'REQUEST' && e.meta.messageId) get(e.meta.messageId).hasReq = true;
+    else if (e.meta.type === 'ACK' && e.meta.initMessageId) get(e.meta.initMessageId).acks.push(e);
+    else if (e.meta.type === 'RESPONSE' && e.meta.initMessageId) get(e.meta.initMessageId).responses.push(e);
+  }
+  return map;
+}
 
 type MsgType = 'REQUEST' | 'ACK' | 'RESPONSE';
 
@@ -82,6 +124,73 @@ export function directAnswer(
   enriched: Enriched[],
 ): string | null {
   const m = message.toLowerCase();
+  const win = `the last ${windowMinutes} minute(s)`;
+
+  // (a) A specific messageId mentioned → describe that transaction end-to-end.
+  // Require a whole-token, length>=3 match so short ids don't match inside words.
+  const mentionsId = (id: string | undefined): id is string => {
+    if (!id || id.length < 3) return false;
+    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^A-Za-z0-9._-])${esc}([^A-Za-z0-9._-]|$)`).test(message);
+  };
+  const reqIds = enriched.filter((e) => e.meta.type === 'REQUEST').map((e) => e.meta.messageId);
+  const allIds = enriched.map((e) => e.meta.messageId);
+  const mentioned = reqIds.find(mentionsId) ?? allIds.find(mentionsId);
+  if (mentioned) {
+    const txs = correlate(enriched);
+    const t = txs.get(mentioned);
+    const self = enriched.find((e) => e.meta.messageId === mentioned);
+    if (!t && !self) return `No message with messageId=${mentioned} was found on ${source} in ${win}.`;
+    const acks = t?.acks ?? [];
+    const resps = t?.responses ?? [];
+    const ackPart = acks.length
+      ? `ACK ✓ (ackCode=${acks.map((e) => e.meta.ackCode ?? '-').join(', ')})`
+      : 'ACK ✗';
+    const respPart = resps.length
+      ? `RESPONSE ✓ (ackCode=${resps.map((e) => e.meta.ackCode ?? '-').join(', ')})`
+      : 'RESPONSE ✗';
+    const reqPart = t?.hasReq || self?.meta.type === 'REQUEST' ? 'REQUEST ✓' : 'REQUEST ✗';
+    const ackFailed = acks.some((e) => isFailAck(e.meta.ackCode));
+    const note =
+      acks.length && !resps.length
+        ? ackFailed
+          ? ' — this request has only a FAILED ACK and no RESPONSE.'
+          : ' — this request has an ACK but no RESPONSE.'
+        : '';
+    return [`messageId=${mentioned}: ${reqPart}, ${ackPart}, ${respPart}.${note}`, '', ...[...acks, ...resps].map(fmt)]
+      .join('\n')
+      .trim();
+  }
+
+  // (b) Failure / error / exception questions → messages with a failed ackCode.
+  if (/\b(exception|errors?|failure|failures|failed|faults?|reject(ed)?|nack|unsuccessful|declined|problems?)\b/.test(m)) {
+    const failed = enriched.filter((e) => isFailAck(e.meta.ackCode));
+    const ackCoded = enriched.filter((e) => e.meta.ackCode).length;
+    if (!failed.length) {
+      return `No — no failures/errors on ${source} in ${win}. All ${ackCoded} ACK/RESPONSE ackCode(s) indicate success.`;
+    }
+    return [`Yes — ${failed.length} message(s) with a failed ackCode on ${source} in ${win}:`, '', ...failed.map(fmt)].join('\n');
+  }
+
+  // (c) Completeness: which message has an ACK but NO RESPONSE (incomplete tx).
+  if (
+    /(incomplete|only\s+(has\s+)?ack|ack\s+(but|and|with)?\s*(no|without|missing)\s+response|(no|without|missing)\s+response|which\s+(message|request|one).*(no|without|only|missing))/.test(
+      m,
+    )
+  ) {
+    const txs = correlate(enriched);
+    const incomplete = [...txs.values()].filter((t) => t.hasReq && t.acks.length > 0 && t.responses.length === 0);
+    if (!incomplete.length) {
+      return `No — every request that has an ACK also has a RESPONSE on ${source} in ${win}. No message has an ACK without a response.`;
+    }
+    const lines = [`${incomplete.length} message(s) with an ACK but NO RESPONSE on ${source} in ${win}:`, ''];
+    for (const t of incomplete) {
+      const codes = t.acks.map((e) => e.meta.ackCode ?? '-').join(', ');
+      lines.push(`- messageId=${t.reqId} — ACK present (ackCode=${codes}), no RESPONSE`);
+    }
+    return lines.join('\n');
+  }
+
   const isCount = /\bhow many\b|\bnumber of\b|\bcount\b|\btotal\b/.test(m);
   const wantsIds = /messageid|message id|\bids?\b|list|show|which|what are/.test(m);
   if (!isCount && !wantsIds) return null;
@@ -90,7 +199,6 @@ export function directAnswer(
   const matched = types.length
     ? enriched.filter((e) => e.meta.type && types.includes(e.meta.type as MsgType))
     : enriched;
-  const win = `the last ${windowMinutes} minute(s)`;
 
   if (matched.length === 0) {
     const what = types.length ? `${types.join('/')} messages` : 'log entries';

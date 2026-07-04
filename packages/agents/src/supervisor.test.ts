@@ -10,6 +10,10 @@ test('count/window log questions are analytical (→ analyze_logs)', () => {
     'show messageIds for the recent 15 minutes',
     'which responses were sent in the last 30 minutes',
     'requests in the last 2 hours',
+    'Are there any exception or error or failure',
+    'any ACK failure',
+    'Which message only has ACK and no response',
+    'does messageId=FCC-USSS-28090845 only has ACK with failure',
   ]) {
     assert.equal(isAnalyticalLogQuery(q), true, q);
   }

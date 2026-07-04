@@ -51,13 +51,17 @@ Respond ONLY with JSON:
 export function isAnalyticalLogQuery(message: string): boolean {
   const s = message.toLowerCase();
   if (/\bsimulate\b|\binvoke\b/.test(s)) return false;
+  // Questions about the findings/anomalies store itself stay on query_findings.
+  if (/\bfindings?\b|\banomal(y|ies)\b/.test(s)) return false;
   // "requests/acks/responses/messages/logs/transactions/messageId" — raw-log subjects.
   const subject =
     /\brequests?\b|\bresponses?\b|\backs?\b|\bmessages?\b|\bmessage[_\s-]?id|\blogs?\b|\btransactions?\b/.test(s);
-  if (!subject) return false; // e.g. "how many findings" stays query_findings
   const quant = /\bhow many\b|\bhow much\b|\bnumber of\b|\bcount\b|\blist\b|\bshow\b|\bwhich\b/.test(s);
   const window = /\b(last|past|recent|within|latest|previous)\s+\d+\s*(second|sec|minute|min|hour|hr|day)/.test(s);
-  return quant || window;
+  // Failure / completeness questions about logs (may omit a count word or window).
+  const problem = /\b(exception|errors?|failure|failures|failed|faults?|reject(ed)?|nack|unsuccessful|declined)\b/.test(s);
+  const completeness = /(no|without|missing|only)\b[^.?!]*\b(response|ack)\b|incomplete/.test(s);
+  return (subject && (quant || window)) || problem || completeness;
 }
 
 /** Force analyze_logs for analytical log queries the LLM router may misroute. */
