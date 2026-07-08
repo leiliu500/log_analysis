@@ -34,7 +34,9 @@ export async function simulate(req: SimulateRequest): Promise<SimulateResult> {
   const now = Date.now();
   const spreadMs = req.spreadMinutes * 60_000;
   const batchId = randomUUID();
-  const stream = `/sim/${req.application}`;
+  // Write into the requested target log group (explicit name or content type)
+  // when given; otherwise the default per-application simulated stream.
+  const stream = req.logGroup?.trim() || `/sim/${req.application}`;
 
   const records: RawLogRecord[] = [];
   const summary: SimulatedMessage[] = [];

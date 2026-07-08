@@ -18,12 +18,12 @@ resource "aws_cloudwatch_log_group" "ingest" {
 
 locals {
   lambda_env = {
-    DATABASE_URL          = local.database_url
+    DATABASE_URL = local.database_url
     # AWS_REGION is auto-set by the Lambda runtime; do not override it here.
-    BEDROCK_MODEL_ID      = local.foundation_model
+    BEDROCK_MODEL_ID       = local.foundation_model
     BEDROCK_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
-    CLOUDWATCH_LOG_GROUPS = join(",", var.cloudwatch_log_groups)
-    APP_ENDPOINTS_JSON    = var.app_endpoints_json
+    CLOUDWATCH_LOG_GROUPS  = join(",", concat(var.cloudwatch_log_groups, var.application_log_groups))
+    APP_ENDPOINTS_JSON     = var.app_endpoints_json
   }
 }
 

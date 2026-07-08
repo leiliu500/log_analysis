@@ -30,3 +30,8 @@ output "ecr_web_repo" {
 output "action_group_lambda" {
   value = aws_lambda_function.action_group.function_name
 }
+
+output "application_log_groups" {
+  description = "Named application log groups the simulator writes to."
+  value       = [for lg in aws_cloudwatch_log_group.application : lg.name]
+}

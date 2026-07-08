@@ -11,6 +11,7 @@ interface Outcome {
     messageTypes: string[];
     ackStatus: 'success' | 'failure';
     startMessageId?: string;
+    logGroup?: string;
   };
   result: SimulateResult;
 }
@@ -97,6 +98,9 @@ export default function SimulatePage() {
                   <code>{o.spec.ackStatus}</code>
                   {o.spec.startMessageId ? (
                     <> , ids from <code>{o.spec.startMessageId}</code></>
+                  ) : null}
+                  {o.spec.logGroup ? (
+                    <> , log group <code>{o.spec.logGroup}</code></>
                   ) : null}
                 </div>
                 <ResultCard result={o.result} />

@@ -36,6 +36,12 @@ export const SimulateRequest = z.object({
   startMessageId: z.string().optional(),
   /** Spread the generated messages across this many minutes (0 = all "now"). */
   spreadMinutes: z.number().int().min(0).max(1440).default(0),
+  /**
+   * Target CloudWatch log group to write into. When set (from an explicit
+   * log-group name or a resolved content type) it overrides the default
+   * per-application "/sim/<application>" stream.
+   */
+  logGroup: z.string().optional(),
 });
 export type SimulateRequest = z.infer<typeof SimulateRequest>;
 

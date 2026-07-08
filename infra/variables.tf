@@ -63,6 +63,18 @@ variable "cloudwatch_log_groups" {
   default = ["/sim/*"]
 }
 
+variable "application_log_groups" {
+  # Fixed, named CloudWatch log groups for the SCP/ESB applications. The
+  # simulator writes to these (by target log group or content type) and the
+  # ingestion pipeline reads from them.
+  type = list(string)
+  default = [
+    "adt-d2-scp-log-group",
+    "adt-d2-scp-restapp-log-group",
+    "esb-cloudwatch-logs-agent-cash",
+  ]
+}
+
 variable "app_endpoints_json" {
   description = "JSON map of appName -> real endpoint for the scp-agent."
   type        = string

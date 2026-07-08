@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SimulateRequest, type RouteDecision, type SimulateResult } from '@log/shared';
+import { SimulateRequest, parseLogGroup, type RouteDecision, type SimulateResult } from '@log/shared';
 import { converseJson } from '@log/analysis';
 import { simulate, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/simulator';
 
@@ -178,6 +178,8 @@ export function buildSimulateRequest(message: string, route: RouteDecision): Sim
     ackStatus: parseAckStatus(message),
     startMessageId: parseStartId(message, p.startMessageId),
     spreadMinutes: Number(p.spreadMinutes ?? 0),
+    logGroup:
+      (typeof p.logGroup === 'string' ? p.logGroup : undefined) ?? parseLogGroup(message),
   });
 }
 
@@ -188,6 +190,8 @@ export interface SimulateCommand {
   ackStatus: 'success' | 'failure';
   startMessageId?: string;
   application?: string;
+  /** Target CloudWatch log group (from an explicit name or a content type). */
+  logGroup?: string;
 }
 
 const EXTRACT_ONE_SYSTEM = `You convert ONE natural-language cashMessage simulation
@@ -257,6 +261,7 @@ async function extractOneCommand(seg: string): Promise<SimulateCommand> {
     // Explicit success/failure keyword wins; else trust the LLM.
     ackStatus: rxAck ?? llm?.ackStatus ?? 'success',
     startMessageId: rxStart ?? llm?.startMessageId,
+    logGroup: parseLogGroup(seg),
   };
 }
 
@@ -273,6 +278,7 @@ export async function extractCommands(prompt: string): Promise<SimulateCommand[]
         messageTypes: parseMessageTypes(prompt),
         ackStatus: parseAckStatus(prompt),
         startMessageId: parseStartId(prompt, undefined),
+        logGroup: parseLogGroup(prompt),
       },
     ];
   }
@@ -284,7 +290,8 @@ export async function extractCommands(prompt: string): Promise<SimulateCommand[]
 function describe(c: SimulateCommand): string {
   const ack = c.ackStatus === 'failure' ? 'ack FAILED' : 'ack success';
   const ids = c.startMessageId ? ` from id ${c.startMessageId}` : '';
-  return `${c.count} × ${c.messageTypes.join('+')}, ${ack}${ids}`;
+  const lg = c.logGroup ? ` -> ${c.logGroup}` : '';
+  return `${c.count} × ${c.messageTypes.join('+')}, ${ack}${ids}${lg}`;
 }
 
 /** What the simulator produced for one command, plus how it was understood. */
@@ -308,8 +315,12 @@ export async function handleSimulatePrompt(
   const { samples: xmlSamples, instructions } = separateSamplesAndInstructions(prompt);
   const samples = xmlSamples && hasCashXml(xmlSamples) ? xmlSamples : DEFAULT_CASHMESSAGE_SAMPLES;
   const commandText = instructions || prompt;
+  // A target log group named once for the whole prompt applies to every command
+  // that doesn't name its own.
+  const promptLogGroup = parseLogGroup(commandText);
   const results: SimulatePromptOutcome[] = [];
   for (const spec of await extractCommands(commandText)) {
+    spec.logGroup = spec.logGroup ?? promptLogGroup;
     const req = SimulateRequest.parse({
       application: spec.application ?? 'cashMessage',
       samples,
@@ -319,6 +330,7 @@ export async function handleSimulatePrompt(
       ackStatus: spec.ackStatus,
       startMessageId: spec.startMessageId,
       spreadMinutes: 0,
+      logGroup: spec.logGroup,
     });
     const result = await simulate(req);
     results.push({ instruction: describe(spec), spec, result });

@@ -8,6 +8,7 @@ import {
   splitInstructions,
   separateSamplesAndInstructions,
 } from './simulate.js';
+import { parseLogGroup, resolveLogGroup } from '@log/shared';
 
 const REQ4 =
   'simulate 3 request/ack/response sets with message_id=001 to 004. Make sure the first 3 request/ack/response with success and no error';
@@ -136,4 +137,30 @@ test('ack status negation', () => {
   assert.equal(parseAckStatus('ack with failure'), 'failure');
   assert.equal(parseAckStatus('rejected transaction'), 'failure');
   assert.equal(parseAckStatus('all successful, no errors'), 'success');
+});
+
+test('resolveLogGroup accepts explicit names and content types', () => {
+  assert.equal(resolveLogGroup('adt-d2-scp-log-group'), 'adt-d2-scp-log-group');
+  assert.equal(resolveLogGroup('scp'), 'adt-d2-scp-log-group');
+  assert.equal(resolveLogGroup('scp-restapp'), 'adt-d2-scp-restapp-log-group');
+  assert.equal(resolveLogGroup('rest app'), 'adt-d2-scp-restapp-log-group');
+  assert.equal(resolveLogGroup('esb'), 'esb-cloudwatch-logs-agent-cash');
+  assert.equal(resolveLogGroup('unknown'), undefined);
+  assert.equal(resolveLogGroup(undefined), undefined);
+});
+
+test('parseLogGroup detects target from natural language', () => {
+  // Explicit log-group name wins.
+  assert.equal(
+    parseLogGroup('simulate 3 request/ack/response to esb-cloudwatch-logs-agent-cash'),
+    'esb-cloudwatch-logs-agent-cash',
+  );
+  // Content types.
+  assert.equal(parseLogGroup('write 2 scp restapp logs'), 'adt-d2-scp-restapp-log-group');
+  assert.equal(parseLogGroup('simulate 5 scp request/ack/response'), 'adt-d2-scp-log-group');
+  assert.equal(parseLogGroup('generate cash agent logs to esb'), 'esb-cloudwatch-logs-agent-cash');
+  // "restapp" must beat the bare "scp" match.
+  assert.equal(parseLogGroup('scp restapp'), 'adt-d2-scp-restapp-log-group');
+  // Bare cashMessage keeps the default stream (no target detected).
+  assert.equal(parseLogGroup('simulate 10 cashMessage request/ack/response'), undefined);
 });
