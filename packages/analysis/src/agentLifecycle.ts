@@ -142,6 +142,8 @@ export interface AdvanceResult {
   spawned: number;
   advanced: number;
   closed: number;
+  /** Agents that transitioned to failed/error THIS cycle (→ new Findings). */
+  failures: Agent[];
 }
 
 /**
@@ -171,8 +173,19 @@ export async function advanceAgents(
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
   await upsertAgents(toPersist);
 
+  // Agents that newly closed as failed/error this cycle — a request agent that
+  // was active (or brand new) and is now terminally bad. These become Findings.
+  const failures: Agent[] = [];
+  for (const id of step.changed) {
+    const post = step.agents.get(id)!;
+    const pre = known.get(id);
+    if ((post.status === 'failed' || post.status === 'error') && (!pre || pre.active)) {
+      failures.push(post);
+    }
+  }
+
   const historyTtlMin = Number(process.env.INGEST_AGENT_HISTORY_TTL_MINUTES ?? 1440);
   await pruneClosedAgentsOlderThan(now - historyTtlMin * 60_000);
 
-  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed };
+  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed, failures };
 }

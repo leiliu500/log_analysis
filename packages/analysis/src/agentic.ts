@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, RawLogRecord, Severity } from '@log/shared';
+import type { Agent, Finding, LogSourceType, ParsedLog, RawLogRecord, Severity } from '@log/shared';
 import { insertParsedLogs, insertFinding, insertAlert, findingExistsByFingerprint } from '@log/db';
 import { parseBatch } from './parser.js';
 import { scoreAndLearn } from './learn.js';
@@ -160,18 +160,6 @@ export async function dispatchAgentic(records: RawLogRecord[], opts: AgenticOpti
   await insertParsedLogs(parsed);
   await scoreAndLearn(parsed, windowMs);
 
-  // --- 1) request/ack/response lifecycle (stateful, persistent across cycles).
-  //     Resilient: a missing `agents` table (pre-migration) must not break the
-  //     findings path below.
-  let life = { spawned: 0, advanced: 0, closed: 0 };
-  try {
-    life = await advanceAgents(parsed, { now, timeoutMs: opts.agentTimeoutMs });
-  } catch (err) {
-    console.error('agentic: lifecycle advance skipped', (err as Error).message);
-  }
-
-  // --- 2) non-transaction anomalies → one finding-agent each, bounded fan-out.
-  const units = planAgentUnits(parsed, { windowMs }).slice(0, maxAgents);
   const ctx: AgentCtx = {
     dedupSince: now - DEDUP_WINDOW_MS,
     claimed: new Set<string>(),
@@ -188,9 +176,38 @@ export async function dispatchAgentic(records: RawLogRecord[], opts: AgenticOpti
       }
     },
   };
+
+  // --- 1) request/ack/response lifecycle (stateful, persistent across cycles).
+  //     Resilient: a missing `agents` table (pre-migration) must not break the
+  //     findings path below.
+  let life = { spawned: 0, advanced: 0, closed: 0, failures: [] as Agent[] };
+  try {
+    life = await advanceAgents(parsed, { now, timeoutMs: opts.agentTimeoutMs });
+  } catch (err) {
+    console.error('agentic: lifecycle advance skipped', (err as Error).message);
+  }
+
+  // A terminally failed/errored agent is also an anomaly Finding, so the
+  // dashboard severity tiles + Findings list reconcile with Agent History.
+  const findings: Finding[] = [];
+  for (const agent of life.failures) {
+    try {
+      const fp = `tx:${agent.messageId}`;
+      if (await findingExistsByFingerprint(fp, ctx.dedupSince)) continue;
+      const f = agentFailureFinding(agent, now, windowMs);
+      await insertFinding(f);
+      await ctx.alert(f);
+      findings.push(f);
+    } catch (err) {
+      console.error('agentic: failure finding skipped', (err as Error).message);
+    }
+  }
+
+  // --- 2) non-transaction anomalies → one finding-agent each, bounded fan-out.
+  const units = planAgentUnits(parsed, { windowMs }).slice(0, maxAgents);
   const settled = await runPool(units, concurrency, (u) => runAgent(u, ctx));
   const outcomes = settled.map((s) => s.outcome);
-  const findings = settled.map((s) => s.finding).filter((f): f is Finding => !!f);
+  for (const s of settled) if (s.finding) findings.push(s.finding);
 
   return {
     parsed: parsed.length,
@@ -199,5 +216,40 @@ export async function dispatchAgentic(records: RawLogRecord[], opts: AgenticOpti
     closed: life.closed,
     outcomes,
     findings,
+  };
+}
+
+/** A deterministic Finding for a terminally failed/errored lifecycle agent. */
+function agentFailureFinding(a: Agent, now: number, windowMs: number): Finding {
+  const failed = a.status === 'failed';
+  return {
+    id: randomUUID(),
+    kind: 'anomaly',
+    severity: failed ? 'high' : 'medium',
+    title: `Transaction ${a.messageId} ${failed ? 'failed' : 'did not complete'}`,
+    summary:
+      a.detail ??
+      (failed ? `Transaction ${a.messageId} failed.` : `Transaction ${a.messageId} timed out.`),
+    confidence: 0.9,
+    sources: a.source ? [a.source as LogSourceType] : [],
+    fingerprint: `tx:${a.messageId}`,
+    evidence: [],
+    reasoning: [a.detail ?? (failed ? 'ACK/RESPONSE carried a failure ackCode.' : 'No ACK/RESPONSE received in time.')],
+    recommendations: [
+      failed
+        ? 'Investigate the failed ACK/RESPONSE for this messageId.'
+        : 'Check why the ACK/RESPONSE was not received for this messageId.',
+    ],
+    metadata: {
+      messageId: a.messageId,
+      agentStatus: a.status,
+      ackCode: a.ackCode,
+      requestTs: a.requestTs,
+      ackTs: a.ackTs,
+      responseTs: a.responseTs,
+    },
+    windowStart: now - windowMs,
+    windowEnd: now,
+    createdAt: now,
   };
 }
