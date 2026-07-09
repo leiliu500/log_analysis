@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { SimulateRequest, parseLogGroup, type RouteDecision, type SimulateResult } from '@log/shared';
 import { converseJson } from '@log/analysis';
+import { routeRequest } from '@log/agents';
 import { simulate, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/simulator';
 
 /**
@@ -301,17 +302,49 @@ export interface SimulatePromptOutcome {
   result: SimulateResult;
 }
 
+export interface SimulatePromptResponse {
+  /** The Supervisor Agent's routing decision for this request. */
+  route: RouteDecision;
+  results: SimulatePromptOutcome[];
+  /** Plain-language summary of what ran and what happens next. */
+  note: string;
+}
+
 /**
- * Natural-language simulate path for the Simulator UI. The LLM parses the prompt
- * into structured commands; each runs independently so params don't bleed across
- * commands. (buildSimulateRequest/RouteDecision remain for the chatbot path.)
+ * A prompt counts as a simulate request when the Supervisor routes it to the
+ * simulator, or it unmistakably asks to simulate / carries a cashMessage sample.
+ * The fallback guards against an occasional Supervisor misroute so the Simulator
+ * UI still works, without ever reaching for another agent.
  */
-export async function handleSimulatePrompt(
-  input: unknown,
-): Promise<{ results: SimulatePromptOutcome[] }> {
+function isSimulateRequest(prompt: string, route: RouteDecision): boolean {
+  if (route.intent === 'simulate_logs') return true;
+  return hasCashXml(prompt) || /\b(simulate|generate|create)\b/i.test(prompt);
+}
+
+/**
+ * Natural-language simulate path for the Simulator UI. Send flows through the
+ * Supervisor Agent (routeRequest) and then ONLY the Simulator Agent — this
+ * endpoint structurally cannot invoke the analysis or scp agents. It writes
+ * simulated logs to the target CloudWatch log group and returns; it never runs
+ * analysis. The scheduled poller ingests + analyzes at the next interval and the
+ * Dashboard reflects the resulting findings.
+ */
+export async function handleSimulatePrompt(input: unknown): Promise<SimulatePromptResponse> {
   const { prompt } = z.object({ prompt: z.string().min(1) }).parse(input);
-  // Pasted XML is the template; the prose lines are the commands. Parse each
-  // from its own text so "(4) success" and "(5) failure" don't merge.
+
+  // 1) Supervisor Agent routes the request.
+  const route = await routeRequest(prompt);
+  if (!isSimulateRequest(prompt, route)) {
+    return {
+      route,
+      results: [],
+      note: `The Supervisor routed this to "${route.intent}", not simulation. The Simulator only creates simulated logs, so nothing ran and no other agent was invoked. Rephrase as a simulate request, e.g. "simulate 3 request/ack/response to adt-d2-scp-log-group".`,
+    };
+  }
+
+  // 2) Simulator Agent: parse the prompt into commands and write correlated
+  //    messages to the target log group. Pasted XML is the template; the prose
+  //    lines are the commands, parsed per-command so params don't bleed.
   const { samples: xmlSamples, instructions } = separateSamplesAndInstructions(prompt);
   const samples = xmlSamples && hasCashXml(xmlSamples) ? xmlSamples : DEFAULT_CASHMESSAGE_SAMPLES;
   const commandText = instructions || prompt;
@@ -335,5 +368,17 @@ export async function handleSimulatePrompt(
     const result = await simulate(req);
     results.push({ instruction: describe(spec), spec, result });
   }
-  return { results };
+
+  const groups = [...new Set(results.map((r) => r.spec.logGroup).filter((g): g is string => !!g))];
+  const wrote = results.reduce(
+    (n, r) => n + Object.values(r.result.written).reduce((a, b) => a + b, 0),
+    0,
+  );
+  return {
+    route,
+    results,
+    note: `Simulator Agent wrote ${wrote} log entr${wrote === 1 ? 'y' : 'ies'}${
+      groups.length ? ` to ${groups.join(', ')}` : ''
+    }. No analysis ran now — the scheduled poller will ingest and analyze these at the next polling interval, then update the Dashboard.`,
+  };
 }

@@ -7,34 +7,48 @@ import { FindingCard } from '../components/FindingCard';
 
 const ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
-type Analysis = { bySource: Record<string, { parsed: number; findings: number }>; pruned: number };
+type Analysis = {
+  bySource: Record<string, { parsed: number; spawned?: number; findings: number }>;
+  pruned: number;
+};
+
+const REFRESH_MS = 30_000;
 
 export default function Dashboard() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [analysis, setAnalysis] = useState<Analysis | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  // Each load asks the API to re-run the Analysis Agent over the latest logs
-  // from every source, then returns the current findings.
-  const load = useCallback(async () => {
-    setLoading(true);
+  // Read current findings. Findings are produced by the scheduled ingestion
+  // poller (agentic analysis) — `analyze=false` just reads them. `analyze=true`
+  // is the explicit "Analyze now" override.
+  const fetchFindings = useCallback(async (analyze: boolean) => {
     setError(null);
     try {
-      const r = await api.findings();
+      const r = await api.findings(analyze);
       setFindings(r.findings);
-      setAnalysis(r.analysis);
+      if (r.analysis) setAnalysis(r.analysis);
     } catch (e) {
       setError(String(e));
-    } finally {
-      setLoading(false);
     }
   }, []);
 
+  // Initial read + silent auto-refresh so the Dashboard reflects each poll cycle.
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchFindings(false).finally(() => setLoading(false));
+    const id = setInterval(() => void fetchFindings(false), REFRESH_MS);
+    return () => clearInterval(id);
+  }, [fetchFindings]);
+
+  async function analyzeNow() {
+    if (analyzing) return;
+    setAnalyzing(true);
+    await fetchFindings(true);
+    setAnalyzing(false);
+  }
 
   async function clearAll() {
     if (clearing) return;
@@ -59,6 +73,9 @@ export default function Dashboard() {
   const totalParsed = analysis
     ? Object.values(analysis.bySource).reduce((n, s) => n + s.parsed, 0)
     : undefined;
+  const totalSpawned = analysis
+    ? Object.values(analysis.bySource).reduce((n, s) => n + (s.spawned ?? 0), 0)
+    : undefined;
 
   return (
     <div className="p-8">
@@ -66,11 +83,11 @@ export default function Dashboard() {
         <h1 className="text-2xl font-semibold text-white">Findings & Anomalies</h1>
         <div className="flex gap-2">
           <button
-            onClick={() => void load()}
-            disabled={loading}
+            onClick={() => void analyzeNow()}
+            disabled={analyzing || loading}
             className="rounded-lg bg-sky-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
           >
-            {loading ? 'Analyzing…' : 'Re-analyze'}
+            {analyzing ? 'Analyzing…' : 'Analyze now'}
           </button>
           <button
             onClick={() => void clearAll()}
@@ -82,13 +99,16 @@ export default function Dashboard() {
         </div>
       </div>
       <p className="mb-4 text-sm text-slate-400">
-        Every load triggers the Supervisor → Analysis Agent to process the latest logs across all
-        sources (parse · detect anomalies · reason · learn) and report current findings.
+        Findings are produced by the scheduled ingestion poller — agentic analysis spawns one
+        agent per ingested request (parse · detect anomalies · reason · learn). This view
+        auto-refreshes every {REFRESH_MS / 1000}s. Use <b>Analyze now</b> to run analysis
+        immediately instead of waiting for the next poll.
       </p>
 
       {analysis && (
         <div className="mb-6 text-xs text-slate-500">
-          Analyzed {totalParsed ?? 0} log(s) across{' '}
+          Analyzed {totalParsed ?? 0} log(s)
+          {totalSpawned ? ` · spawned ${totalSpawned} agent(s)` : ''} across{' '}
           {Object.entries(analysis.bySource)
             .map(([s, v]) => `${s}:${v.parsed}`)
             .join(' · ') || 'no sources'}
@@ -105,7 +125,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {loading && <p className="text-slate-400">Running analysis across all sources…</p>}
+      {loading && <p className="text-slate-400">Loading current findings…</p>}
       {error && (
         <p className="text-red-400">
           Could not reach API ({error}). Is <code>@log/api</code> running on :4000?
@@ -119,7 +139,9 @@ export default function Dashboard() {
       </div>
       {!loading && !error && findings.length === 0 && (
         <p className="text-slate-400">
-          No findings. Recent logs show no anomalies — trigger the Simulator to generate some.
+          No findings yet. Either recent logs show no anomalies, or the next ingestion poll
+          hasn’t run — use the Simulator to generate logs, then wait for the poller (or click
+          Analyze now).
         </p>
       )}
     </div>

@@ -19,6 +19,8 @@ interface Outcome {
 interface Turn {
   input: string;
   results?: Outcome[];
+  note?: string;
+  routedIntent?: string;
   error?: string;
 }
 
@@ -41,8 +43,11 @@ export default function SimulatePage() {
     setTurns((t) => [...t, { input: prompt }]);
     setInput('');
     try {
-      const { results } = await api.simulatePrompt(prompt);
-      setTurns((t) => [...t.slice(0, -1), { input: prompt, results }]);
+      const { results, note, route } = await api.simulatePrompt(prompt);
+      setTurns((t) => [
+        ...t.slice(0, -1),
+        { input: prompt, results, note, routedIntent: route?.intent },
+      ]);
     } catch (e) {
       setTurns((t) => [...t.slice(0, -1), { input: prompt, error: String(e) }]);
     } finally {
@@ -55,10 +60,12 @@ export default function SimulatePage() {
     <div className="mx-auto flex h-screen max-w-3xl flex-col p-6">
       <h1 className="mb-1 text-xl font-semibold text-white">Simulator Agent</h1>
       <p className="mb-3 text-xs text-slate-400">
-        Ask in plain English. The <b>Supervisor Agent (LLM)</b> understands your request —
-        how many sets, the starting messageId — and delegates to the Simulator Agent, which
-        writes correlated Request/ACK/Response messages (matched <code>initMessageId</code>)
-        to the sink. No count field — the number comes from your sentence.
+        Ask in plain English. <b>Send</b> flows through the <b>Supervisor Agent</b> → the{' '}
+        <b>Simulator Agent</b> only — it writes correlated Request/ACK/Response messages
+        (matched <code>initMessageId</code>) to the target CloudWatch log group. No other
+        agent runs here. Analysis is <b>not</b> triggered now: the scheduled ingestion poller
+        picks up these logs at the next interval, spawns the analysis agents, and updates the
+        Dashboard.
       </p>
 
       {/* Transcript */}
@@ -87,13 +94,23 @@ export default function SimulatePage() {
                 {t.input}
               </span>
             </div>
+            {(t.results?.length || t.routedIntent) && (
+              <div className="text-xs text-slate-400">
+                🧭 Supervisor Agent →{' '}
+                {t.routedIntent === 'simulate_logs' || (t.results?.length ?? 0) > 0 ? (
+                  <b className="text-sky-400">Simulator Agent</b>
+                ) : (
+                  <span className="text-orange-300">{t.routedIntent} (no agent run)</span>
+                )}
+              </div>
+            )}
             {t.results?.map((o, j) => (
               <div key={j} className="space-y-1">
                 {t.results!.length > 1 && (
                   <div className="text-xs text-slate-500">Command {j + 1}</div>
                 )}
                 <div className="text-xs text-slate-400">
-                  🤖 LLM understood → <code>{o.spec.count}</code> ×{' '}
+                  🤖 Simulator understood → <code>{o.spec.count}</code> ×{' '}
                   <code>{o.spec.messageTypes.join('+')}</code>, ack{' '}
                   <code>{o.spec.ackStatus}</code>
                   {o.spec.startMessageId ? (
@@ -106,6 +123,11 @@ export default function SimulatePage() {
                 <ResultCard result={o.result} />
               </div>
             ))}
+            {t.note && (
+              <div className="rounded-lg border border-edge bg-panel px-3 py-2 text-xs text-slate-400">
+                ⏳ {t.note}
+              </div>
+            )}
             {t.error && <div className="text-sm text-red-400">⚠️ {t.error}</div>}
           </div>
         ))}

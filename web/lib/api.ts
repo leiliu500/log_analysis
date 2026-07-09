@@ -14,12 +14,19 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  /** Loading the dashboard re-runs analysis across all sources, then returns findings. */
-  findings: () =>
+  /**
+   * Read current findings. By default this does NOT run analysis — findings are
+   * produced by the scheduled ingestion poller (agentic analysis). Pass
+   * `analyze=true` only for an explicit, on-demand "Analyze now".
+   */
+  findings: (analyze = false) =>
     req<{
       findings: Finding[];
-      analysis?: { bySource: Record<string, { parsed: number; findings: number }>; pruned: number };
-    }>('/findings?limit=100'),
+      analysis?: {
+        bySource: Record<string, { parsed: number; spawned?: number; findings: number }>;
+        pruned: number;
+      };
+    }>(`/findings?limit=100&analyze=${analyze}`),
   clearFindings: () => req<{ deleted: number }>('/findings', { method: 'DELETE' }),
   chat: (sessionId: string, message: string) =>
     req<ChatResponse>('/chat', {
@@ -28,9 +35,15 @@ export const api = {
     }),
   simulate: (body: unknown) =>
     req<SimulateResult>('/simulate', { method: 'POST', body: JSON.stringify(body) }),
-  /** Natural-language simulate: the LLM parses the prompt into command specs. */
+  /**
+   * Natural-language simulate. Flows Supervisor Agent → Simulator Agent only;
+   * no analysis is triggered (the poller does that). Returns the routing
+   * decision + a note about what happens next.
+   */
   simulatePrompt: (prompt: string) =>
     req<{
+      route: RouteDecision;
+      note: string;
       results: {
         instruction: string;
         spec: {
@@ -38,6 +51,7 @@ export const api = {
           messageTypes: string[];
           ackStatus: 'success' | 'failure';
           startMessageId?: string;
+          logGroup?: string;
         };
         result: SimulateResult;
       }[];
