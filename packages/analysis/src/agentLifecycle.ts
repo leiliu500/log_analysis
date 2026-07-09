@@ -1,5 +1,14 @@
-import type { Agent, ParsedLog } from '@log/shared';
-import { getActiveAgents, getAgentsByMessageIds, upsertAgents, pruneClosedAgentsOlderThan } from '@log/db';
+import { randomUUID } from 'node:crypto';
+import type { Agent, Finding, LogSourceType, ParsedLog, Severity } from '@log/shared';
+import {
+  getActiveAgents,
+  getAgentsByMessageIds,
+  upsertAgents,
+  pruneClosedAgentsOlderThan,
+  insertFinding,
+  insertAlert,
+  findingExistsByFingerprint,
+} from '@log/db';
 import { txMetaOf } from './transactions.js';
 
 /**
@@ -142,20 +151,26 @@ export interface AdvanceResult {
   spawned: number;
   advanced: number;
   closed: number;
-  /** Agents that transitioned to failed/error THIS cycle (→ new Findings). */
-  failures: Agent[];
+  /** Findings minted for agents that closed failed/error this cycle. */
+  findings: Finding[];
 }
 
+const ALERT_SEVERITIES: Severity[] = ['high', 'critical'];
+const FINDING_DEDUP_MS = 30 * 60_000;
+
 /**
- * DB-backed driver: load the relevant agents (all active + any matching this
- * window's ids), step the state machine, and persist the changes. Also prunes
- * closed agents older than the history TTL.
+ * DB-backed driver — the complete per-poll lifecycle step. Loads the relevant
+ * agents (all active + any matching this window's ids), advances the state
+ * machine, persists changes, and reports a Finding for every agent that newly
+ * closes as failed or errored (timeout). Runs even with no new logs so idle
+ * polls still fire timeouts + their Findings.
  */
 export async function advanceAgents(
   parsed: ParsedLog[],
-  opts: { now?: number; timeoutMs?: number } = {},
+  opts: { now?: number; timeoutMs?: number; windowMs?: number } = {},
 ): Promise<AdvanceResult> {
   const now = opts.now ?? Date.now();
+  const windowMs = opts.windowMs ?? 5 * 60_000;
   const timeoutMs =
     opts.timeoutMs ?? Number(process.env.INGEST_AGENT_TIMEOUT_MINUTES ?? 30) * 60_000;
 
@@ -173,19 +188,70 @@ export async function advanceAgents(
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
   await upsertAgents(toPersist);
 
-  // Agents that newly closed as failed/error this cycle — a request agent that
-  // was active (or brand new) and is now terminally bad. These become Findings.
-  const failures: Agent[] = [];
+  // Agents that newly closed as failed/error this cycle → one Finding each.
+  const findings: Finding[] = [];
   for (const id of step.changed) {
     const post = step.agents.get(id)!;
     const pre = known.get(id);
-    if ((post.status === 'failed' || post.status === 'error') && (!pre || pre.active)) {
-      failures.push(post);
+    if ((post.status !== 'failed' && post.status !== 'error') || (pre && !pre.active)) continue;
+    try {
+      const fp = `tx:${post.messageId}`;
+      if (await findingExistsByFingerprint(fp, now - FINDING_DEDUP_MS)) continue;
+      const f = agentFinding(post, now, windowMs);
+      await insertFinding(f);
+      if (ALERT_SEVERITIES.includes(f.severity)) {
+        await insertAlert({
+          id: randomUUID(),
+          findingId: f.id,
+          severity: f.severity,
+          channel: 'dashboard',
+          status: 'pending',
+          createdAt: now,
+        });
+      }
+      findings.push(f);
+    } catch (err) {
+      console.error('agentLifecycle: failure finding skipped', (err as Error).message);
     }
   }
 
   const historyTtlMin = Number(process.env.INGEST_AGENT_HISTORY_TTL_MINUTES ?? 1440);
   await pruneClosedAgentsOlderThan(now - historyTtlMin * 60_000);
 
-  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed, failures };
+  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed, findings };
+}
+
+/** A deterministic Finding for a terminally failed/errored (timed-out) agent. */
+function agentFinding(a: Agent, now: number, windowMs: number): Finding {
+  const failed = a.status === 'failed';
+  return {
+    id: randomUUID(),
+    kind: 'anomaly',
+    severity: failed ? 'high' : 'medium',
+    title: `Transaction ${a.messageId} ${failed ? 'failed' : 'did not complete (timeout)'}`,
+    summary:
+      a.detail ??
+      (failed ? `Transaction ${a.messageId} failed.` : `Transaction ${a.messageId} timed out.`),
+    confidence: 0.9,
+    sources: a.source ? [a.source as LogSourceType] : [],
+    fingerprint: `tx:${a.messageId}`,
+    evidence: [],
+    reasoning: [a.detail ?? (failed ? 'ACK/RESPONSE carried a failure ackCode.' : 'No ACK/RESPONSE received before the timeout.')],
+    recommendations: [
+      failed
+        ? 'Investigate the failed ACK/RESPONSE for this messageId.'
+        : 'Check why the ACK/RESPONSE was not received for this messageId.',
+    ],
+    metadata: {
+      messageId: a.messageId,
+      agentStatus: a.status,
+      ackCode: a.ackCode,
+      requestTs: a.requestTs,
+      ackTs: a.ackTs,
+      responseTs: a.responseTs,
+    },
+    windowStart: now - windowMs,
+    windowEnd: now,
+    createdAt: now,
+  };
 }

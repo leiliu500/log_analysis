@@ -23,7 +23,8 @@ export const api = {
     req<{
       findings: Finding[];
       analysis?: {
-        bySource: Record<string, { parsed: number; spawned?: number; findings: number }>;
+        bySource: Record<string, { parsed: number; findings: number }>;
+        agents?: { spawned: number; advanced: number; closed: number; findings: number };
         pruned: number;
       };
     }>(`/findings?limit=100&analyze=${analyze}`),

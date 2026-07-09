@@ -9,7 +9,8 @@ import { AgentsPanel } from '../components/AgentsPanel';
 const ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
 type Analysis = {
-  bySource: Record<string, { parsed: number; spawned?: number; findings: number }>;
+  bySource: Record<string, { parsed: number; findings: number }>;
+  agents?: { spawned: number; advanced: number; closed: number; findings: number };
   pruned: number;
 };
 
@@ -80,9 +81,7 @@ export default function Dashboard() {
   const totalParsed = analysis
     ? Object.values(analysis.bySource).reduce((n, s) => n + s.parsed, 0)
     : undefined;
-  const totalSpawned = analysis
-    ? Object.values(analysis.bySource).reduce((n, s) => n + (s.spawned ?? 0), 0)
-    : undefined;
+  const totalSpawned = analysis?.agents?.spawned;
 
   return (
     <div className="p-8">
