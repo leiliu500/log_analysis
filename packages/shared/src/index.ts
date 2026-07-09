@@ -1,6 +1,7 @@
 export * from './logs.js';
 export * from './logGroups.js';
 export * from './findings.js';
+export * from './agentActivity.js';
 export * from './agents.js';
 export * from './chat.js';
 export * from './simulate.js';

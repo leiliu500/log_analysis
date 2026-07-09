@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, RawLogRecord, Severity } from '@log/shared';
-import { insertParsedLogs, insertFinding, insertAlert, findingExistsByFingerprint } from '@log/db';
+import type { AgentActivity, Finding, ParsedLog, RawLogRecord, Severity } from '@log/shared';
+import {
+  insertParsedLogs,
+  insertFinding,
+  insertAlert,
+  findingExistsByFingerprint,
+  insertAgentActivity,
+  pruneAgentActivityOlderThan,
+} from '@log/db';
 import { parseBatch } from './parser.js';
 import { scoreAndLearn } from './learn.js';
 import { correlate, type Cluster } from './correlate.js';
@@ -11,6 +18,7 @@ import {
   buildTransactions,
   transactionAnomalies,
   reasonAboutTransaction,
+  txMetaOf,
   type Transaction,
 } from './transactions.js';
 
@@ -58,11 +66,15 @@ export interface AgentOutcome {
 }
 
 export interface AgenticResult {
+  /** The dispatch cycle id — groups the agents spawned this run. */
+  batchId: string;
   parsed: number;
   /** Number of per-request agents spawned this run. */
   spawned: number;
   outcomes: AgentOutcome[];
   findings: Finding[];
+  /** Per-agent activity records persisted for the dashboard. */
+  activity: AgentActivity[];
   counts: Record<AgentStatus, number>;
 }
 
@@ -184,7 +196,7 @@ async function runAgent(
 async function runPool<T, R>(
   items: T[],
   limit: number,
-  fn: (item: T) => Promise<R>,
+  fn: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
@@ -192,7 +204,7 @@ async function runPool<T, R>(
     for (;;) {
       const i = next++;
       if (i >= items.length) break;
-      results[i] = await fn(items[i]!);
+      results[i] = await fn(items[i]!, i);
     }
   });
   await Promise.all(workers);
@@ -257,13 +269,99 @@ export async function dispatchAgentic(
     },
   };
 
-  // --- dynamically spawn one agent per unit, bounded by `concurrency`.
-  const settled = await runPool(spawnUnits, concurrency, (u) => runAgent(u, ctx));
+  // --- dynamically spawn one agent per unit, bounded by `concurrency`. Each
+  //     agent is timed so the dashboard can show its runtime.
+  const batchId = randomUUID();
+  const settled = await runPool(spawnUnits, concurrency, async (u) => {
+    const startedAt = Date.now();
+    const r = await runAgent(u, ctx);
+    return { ...r, startedAt, finishedAt: Date.now() };
+  });
 
   const outcomes = settled.map((s) => s.outcome);
   const findings = settled.map((s) => s.finding).filter((f): f is Finding => !!f);
   const counts: Record<AgentStatus, number> = { finding: 0, clean: 0, duplicate: 0, error: 0 };
   for (const o of outcomes) counts[o.status] += 1;
 
-  return { parsed: parsed.length, spawned: spawnUnits.length, outcomes, findings, counts };
+  // --- record per-agent activity (dashboard "dynamics"). Resilient: a missing
+  //     table (pre-migration) or write error must never break ingestion.
+  const activity = spawnUnits.map((u, i) => buildActivity(u, settled[i]!, batchId, i));
+  try {
+    await insertAgentActivity(activity);
+    const ttlMin = Number(process.env.INGEST_ACTIVITY_TTL_MINUTES ?? 1440);
+    await pruneAgentActivityOlderThan(now - ttlMin * 60_000);
+  } catch (err) {
+    console.error('agentic: agent_activity persist skipped', (err as Error).message);
+  }
+
+  return { batchId, parsed: parsed.length, spawned: spawnUnits.length, outcomes, findings, activity, counts };
+}
+
+interface Settled {
+  outcome: AgentOutcome;
+  finding?: Finding;
+  startedAt: number;
+  finishedAt: number;
+}
+
+/** First-seen REQUEST/ACK/RESPONSE timestamps + ackCode for a transaction. */
+function txTimestamps(tx: Transaction): {
+  requestTs?: number;
+  ackTs?: number;
+  responseTs?: number;
+  ackCode?: string;
+} {
+  const out: { requestTs?: number; ackTs?: number; responseTs?: number; ackCode?: string } = {};
+  for (const l of tx.logs) {
+    const m = txMetaOf(l);
+    if (m.type === 'REQUEST' && out.requestTs === undefined) out.requestTs = l.timestamp;
+    else if (m.type === 'ACK' && out.ackTs === undefined) {
+      out.ackTs = l.timestamp;
+      if (m.ackCode) out.ackCode = m.ackCode;
+    } else if (m.type === 'RESPONSE' && out.responseTs === undefined) {
+      out.responseTs = l.timestamp;
+      if (!out.ackCode && m.ackCode) out.ackCode = m.ackCode;
+    }
+  }
+  if (!out.ackCode && tx.ackCodes.length) out.ackCode = tx.ackCodes[0];
+  return out;
+}
+
+/** Assemble one persisted activity record for a spawned agent. */
+function buildActivity(unit: AgentUnit, s: Settled, batchId: string, agentNo: number): AgentActivity {
+  const o = s.outcome;
+  const base = {
+    id: randomUUID(),
+    batchId,
+    agentNo,
+    kind: o.kind,
+    status: o.status,
+    severity: o.severity,
+    findingId: o.findingId,
+    presentTypes: [] as string[],
+    startedAt: s.startedAt,
+    finishedAt: s.finishedAt,
+    durationMs: Math.max(0, s.finishedAt - s.startedAt),
+  };
+  if (unit.kind === 'transaction') {
+    const t = txTimestamps(unit.tx);
+    return {
+      ...base,
+      messageId: unit.tx.id,
+      source: unit.tx.logs[0]?.source,
+      logGroup: unit.tx.logs[0]?.stream,
+      presentTypes: [...unit.tx.types],
+      requestTs: t.requestTs,
+      ackTs: t.ackTs,
+      responseTs: t.responseTs,
+      ackCode: t.ackCode,
+      detail: unit.reason ?? o.error,
+    };
+  }
+  return {
+    ...base,
+    source: unit.cluster.sources[0],
+    logGroup: unit.cluster.logs[0]?.stream,
+    detail: o.error ?? unit.cluster.reason,
+  };
 }

@@ -8,6 +8,10 @@ import {
   queryLogs,
   ensureSession,
   sessionHistory,
+  runMigrations,
+  recentAgentActivity,
+  recentAgentBatches,
+  deleteAllAgentActivity,
 } from '@log/db';
 import { runPipeline } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
@@ -51,17 +55,36 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     return { findings: await recentFindings(limit), analysis };
   });
 
-  // Clear the findings table (and cascade alerts). Used by the dashboard's
-  // "Clear findings" control and for resetting the database.
+  // -------- Agent activity (agentic ingestion dynamics) --------
+  // Recent per-agent activity + a roll-up of recent ingest cycles, so the
+  // dashboard can show which agents processed which requests and when.
+  api.get('/agents/activity', async (req) => {
+    const q = req.query as { limit?: string; batches?: string };
+    const [activity, batches] = await Promise.all([
+      recentAgentActivity(Math.min(Number(q.limit ?? 200), 1000)),
+      recentAgentBatches(Math.min(Number(q.batches ?? 12), 50)),
+    ]);
+    return { activity, batches };
+  });
+
+  // Clear the findings table (and cascade alerts), plus agent activity — the
+  // dashboard's "Clear" control resets the whole view.
   api.delete('/findings', async () => {
-    const deleted = await deleteAllFindings();
-    return { deleted };
+    const [deleted, activityDeleted] = await Promise.all([
+      deleteAllFindings(),
+      deleteAllAgentActivity(),
+    ]);
+    return { deleted, activityDeleted };
   });
 
   // Reset stored data: findings + parsed logs. Removes stale/seeded rows so the
   // chatbot and dashboard reflect only live logs.
   api.delete('/data', async () => {
-    const [findingsDeleted, logsDeleted] = await Promise.all([deleteAllFindings(), deleteAllLogs()]);
+    const [findingsDeleted, logsDeleted] = await Promise.all([
+      deleteAllFindings(),
+      deleteAllLogs(),
+      deleteAllAgentActivity(),
+    ]);
     return { findingsDeleted, logsDeleted };
   });
 
@@ -156,6 +179,16 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
 }
 
 await app.register(apiRoutes, { prefix: '/api' });
+
+// Self-migrate on boot so a deploy applies pending schema (e.g. agent_activity)
+// without out-of-band access to the private RDS. Advisory-locked so the two API
+// tasks don't race; never block startup on a migration hiccup.
+try {
+  const applied = await runMigrations();
+  if (applied.length) app.log.info(`applied migrations: ${applied.join(', ')}`);
+} catch (err) {
+  app.log.error(err, 'boot migrations failed (continuing)');
+}
 
 const port = Number(process.env.API_PORT ?? 4000);
 app

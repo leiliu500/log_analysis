@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Finding } from '@log/shared';
+import type { Finding, AgentActivity, AgentBatch } from '@log/shared';
 import { api } from '../lib/api';
 import { FindingCard } from '../components/FindingCard';
+import { AgentActivityPanel } from '../components/AgentActivityPanel';
 
 const ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
@@ -17,20 +18,24 @@ const REFRESH_MS = 30_000;
 export default function Dashboard() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [analysis, setAnalysis] = useState<Analysis | undefined>();
+  const [activity, setActivity] = useState<AgentActivity[]>([]);
+  const [batches, setBatches] = useState<AgentBatch[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  // Read current findings. Findings are produced by the scheduled ingestion
-  // poller (agentic analysis) — `analyze=false` just reads them. `analyze=true`
-  // is the explicit "Analyze now" override.
-  const fetchFindings = useCallback(async (analyze: boolean) => {
+  // Read current findings + agent activity. Both are produced by the scheduled
+  // ingestion poller (agentic analysis) — `analyze=false` just reads them.
+  // `analyze=true` is the explicit "Analyze now" override.
+  const refresh = useCallback(async (analyze: boolean) => {
     setError(null);
     try {
-      const r = await api.findings(analyze);
-      setFindings(r.findings);
-      if (r.analysis) setAnalysis(r.analysis);
+      const [f, a] = await Promise.all([api.findings(analyze), api.agentsActivity()]);
+      setFindings(f.findings);
+      if (f.analysis) setAnalysis(f.analysis);
+      setActivity(a.activity);
+      setBatches(a.batches);
     } catch (e) {
       setError(String(e));
     }
@@ -38,15 +43,15 @@ export default function Dashboard() {
 
   // Initial read + silent auto-refresh so the Dashboard reflects each poll cycle.
   useEffect(() => {
-    void fetchFindings(false).finally(() => setLoading(false));
-    const id = setInterval(() => void fetchFindings(false), REFRESH_MS);
+    void refresh(false).finally(() => setLoading(false));
+    const id = setInterval(() => void refresh(false), REFRESH_MS);
     return () => clearInterval(id);
-  }, [fetchFindings]);
+  }, [refresh]);
 
   async function analyzeNow() {
     if (analyzing) return;
     setAnalyzing(true);
-    await fetchFindings(true);
+    await refresh(true);
     setAnalyzing(false);
   }
 
@@ -57,6 +62,8 @@ export default function Dashboard() {
       await api.clearFindings();
       setFindings([]);
       setAnalysis(undefined);
+      setActivity([]);
+      setBatches([]);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -80,7 +87,7 @@ export default function Dashboard() {
   return (
     <div className="p-8">
       <div className="mb-1 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-white">Findings & Anomalies</h1>
+        <h1 className="text-2xl font-semibold text-white">Ingestion & Agent Dashboard</h1>
         <div className="flex gap-2">
           <button
             onClick={() => void analyzeNow()}
@@ -132,6 +139,9 @@ export default function Dashboard() {
         </p>
       )}
 
+      {!loading && <AgentActivityPanel activity={activity} batches={batches} />}
+
+      <h2 className="mb-3 text-lg font-semibold text-white">Findings & Anomalies</h2>
       <div className="grid gap-4 lg:grid-cols-2">
         {findings.map((f) => (
           <FindingCard key={f.id} f={f} />

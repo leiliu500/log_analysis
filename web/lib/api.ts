@@ -1,4 +1,11 @@
-import type { Finding, ChatResponse, SimulateResult, RouteDecision } from '@log/shared';
+import type {
+  Finding,
+  ChatResponse,
+  SimulateResult,
+  RouteDecision,
+  AgentActivity,
+  AgentBatch,
+} from '@log/shared';
 
 const BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
@@ -27,7 +34,13 @@ export const api = {
         pruned: number;
       };
     }>(`/findings?limit=100&analyze=${analyze}`),
-  clearFindings: () => req<{ deleted: number }>('/findings', { method: 'DELETE' }),
+  clearFindings: () =>
+    req<{ deleted: number; activityDeleted?: number }>('/findings', { method: 'DELETE' }),
+  /** Agent dynamics: recent per-agent activity + ingest-cycle roll-ups. */
+  agentsActivity: (limit = 200) =>
+    req<{ activity: AgentActivity[]; batches: AgentBatch[] }>(
+      `/agents/activity?limit=${limit}`,
+    ),
   chat: (sessionId: string, message: string) =>
     req<ChatResponse>('/chat', {
       method: 'POST',
