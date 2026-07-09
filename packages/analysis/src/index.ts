@@ -9,3 +9,4 @@ export * from './anomalies.js';
 export * from './transactions.js';
 export * from './pipeline.js';
 export * from './agentic.js';
+export * from './agentLifecycle.js';

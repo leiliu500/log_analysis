@@ -9,9 +9,9 @@ import {
   ensureSession,
   sessionHistory,
   runMigrations,
-  recentAgentActivity,
-  recentAgentBatches,
-  deleteAllAgentActivity,
+  getActiveAgents,
+  getAgentHistory,
+  deleteAllAgents,
 } from '@log/db';
 import { runPipeline } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
@@ -55,26 +55,22 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     return { findings: await recentFindings(limit), analysis };
   });
 
-  // -------- Agent activity (agentic ingestion dynamics) --------
-  // Recent per-agent activity + a roll-up of recent ingest cycles, so the
-  // dashboard can show which agents processed which requests and when.
-  api.get('/agents/activity', async (req) => {
-    const q = req.query as { limit?: string; batches?: string };
-    const [activity, batches] = await Promise.all([
-      recentAgentActivity(Math.min(Number(q.limit ?? 200), 1000)),
-      recentAgentBatches(Math.min(Number(q.batches ?? 12), 50)),
+  // -------- Agents (request/ack/response lifecycle) --------
+  // Active agents (cards, still awaiting ACK/RESPONSE) + closed agents (history).
+  api.get('/agents', async (req) => {
+    const q = req.query as { active?: string; history?: string };
+    const [active, history] = await Promise.all([
+      getActiveAgents(Math.min(Number(q.active ?? 500), 2000)),
+      getAgentHistory(Math.min(Number(q.history ?? 200), 1000)),
     ]);
-    return { activity, batches };
+    return { active, history };
   });
 
-  // Clear the findings table (and cascade alerts), plus agent activity — the
-  // dashboard's "Clear" control resets the whole view.
+  // Clear the findings table (and cascade alerts), plus the agent lifecycle —
+  // the dashboard's "Clear" control resets the whole view.
   api.delete('/findings', async () => {
-    const [deleted, activityDeleted] = await Promise.all([
-      deleteAllFindings(),
-      deleteAllAgentActivity(),
-    ]);
-    return { deleted, activityDeleted };
+    const [deleted, agentsDeleted] = await Promise.all([deleteAllFindings(), deleteAllAgents()]);
+    return { deleted, agentsDeleted };
   });
 
   // Reset stored data: findings + parsed logs. Removes stale/seeded rows so the
@@ -83,7 +79,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     const [findingsDeleted, logsDeleted] = await Promise.all([
       deleteAllFindings(),
       deleteAllLogs(),
-      deleteAllAgentActivity(),
+      deleteAllAgents(),
     ]);
     return { findingsDeleted, logsDeleted };
   });
@@ -180,7 +176,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
 
 await app.register(apiRoutes, { prefix: '/api' });
 
-// Self-migrate on boot so a deploy applies pending schema (e.g. agent_activity)
+// Self-migrate on boot so a deploy applies pending schema (e.g. the agents table)
 // without out-of-band access to the private RDS. Advisory-locked so the two API
 // tasks don't race; never block startup on a migration hiccup.
 try {

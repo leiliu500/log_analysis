@@ -1,12 +1,5 @@
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
-import type {
-  Finding,
-  ParsedLog,
-  ChatMessage,
-  LogSourceType,
-  AgentActivity,
-  AgentBatch,
-} from '@log/shared';
+import type { Finding, ParsedLog, ChatMessage, LogSourceType, Agent } from '@log/shared';
 import { getDb, getSql, type Sql } from './client.js';
 import {
   parsedLogs,
@@ -169,94 +162,83 @@ export async function insertAlert(a: {
 }
 
 // ---------------------------------------------------------------------------
-// Agent activity (agentic ingestion dynamics)
+// Agents (stateful ingestion-agent lifecycle)
 // ---------------------------------------------------------------------------
-export async function insertAgentActivity(rows: AgentActivity[]): Promise<void> {
-  if (!rows.length) return;
+export async function upsertAgents(agents: Agent[]): Promise<void> {
+  if (!agents.length) return;
   const sqlc = getSql();
   await sqlc.begin(async (tx) => {
-    for (const a of rows) {
-      await tx`INSERT INTO agent_activity
-        (id, batch_id, agent_no, kind, message_id, status, severity, finding_id, source, log_group,
-         present_types, request_ts, ack_ts, response_ts, ack_code, detail, started_at, finished_at, duration_ms)
-        VALUES (${a.id}, ${a.batchId}, ${a.agentNo}, ${a.kind}, ${a.messageId ?? null}, ${a.status},
-                ${a.severity ?? null}, ${a.findingId ?? null}, ${a.source ?? null}, ${a.logGroup ?? null},
-                ${a.presentTypes ?? []}, ${a.requestTs ?? null}, ${a.ackTs ?? null}, ${a.responseTs ?? null},
-                ${a.ackCode ?? null}, ${a.detail ?? null}, ${a.startedAt}, ${a.finishedAt}, ${a.durationMs})`;
+    for (const a of agents) {
+      await tx`INSERT INTO agents
+        (message_id, status, active, source, log_group, request_ts, ack_ts, response_ts,
+         ack_code, severity, detail, spawned_at, updated_at, closed_at)
+        VALUES (${a.messageId}, ${a.status}, ${a.active}, ${a.source ?? null}, ${a.logGroup ?? null},
+                ${a.requestTs ?? null}, ${a.ackTs ?? null}, ${a.responseTs ?? null}, ${a.ackCode ?? null},
+                ${a.severity ?? null}, ${a.detail ?? null}, ${a.spawnedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
+        ON CONFLICT (message_id) DO UPDATE SET
+          status = EXCLUDED.status, active = EXCLUDED.active,
+          source = COALESCE(agents.source, EXCLUDED.source),
+          log_group = COALESCE(agents.log_group, EXCLUDED.log_group),
+          request_ts = COALESCE(agents.request_ts, EXCLUDED.request_ts),
+          ack_ts = COALESCE(agents.ack_ts, EXCLUDED.ack_ts),
+          response_ts = COALESCE(agents.response_ts, EXCLUDED.response_ts),
+          ack_code = COALESCE(EXCLUDED.ack_code, agents.ack_code),
+          severity = EXCLUDED.severity, detail = EXCLUDED.detail,
+          updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
     }
   });
 }
 
-export async function recentAgentActivity(limit = 100): Promise<AgentActivity[]> {
+export async function getAgentsByMessageIds(ids: string[]): Promise<Agent[]> {
+  if (!ids.length) return [];
   const sqlc = getSql();
-  const rows = await sqlc`SELECT * FROM agent_activity ORDER BY started_at DESC LIMIT ${limit}`;
-  return rows.map(rawRowToAgentActivity);
+  const rows = await sqlc`SELECT * FROM agents WHERE message_id = ANY(${sqlc.array(ids)})`;
+  return rows.map(rawRowToAgent);
 }
 
-/** Roll up recent ingest cycles (batches) for the dashboard's activity feed. */
-export async function recentAgentBatches(limit = 12): Promise<AgentBatch[]> {
+/** Active agents (cards) — those still awaiting an ACK or RESPONSE. */
+export async function getActiveAgents(limit = 500): Promise<Agent[]> {
   const sqlc = getSql();
-  const rows = await sqlc`
-    SELECT batch_id,
-           MIN(started_at)  AS started_at,
-           MAX(finished_at) AS finished_at,
-           COUNT(*)::int                                    AS total,
-           COUNT(*) FILTER (WHERE status = 'finding')::int   AS finding,
-           COUNT(*) FILTER (WHERE status = 'clean')::int     AS clean,
-           COUNT(*) FILTER (WHERE status = 'duplicate')::int AS duplicate,
-           COUNT(*) FILTER (WHERE status = 'error')::int     AS error,
-           ARRAY_AGG(DISTINCT source) FILTER (WHERE source IS NOT NULL) AS sources
-    FROM agent_activity
-    GROUP BY batch_id
-    ORDER BY MAX(finished_at) DESC
-    LIMIT ${limit}`;
-  return rows.map((r) => ({
-    batchId: r.batch_id as string,
-    startedAt: Number(r.started_at),
-    finishedAt: Number(r.finished_at),
-    total: Number(r.total),
-    finding: Number(r.finding),
-    clean: Number(r.clean),
-    duplicate: Number(r.duplicate),
-    error: Number(r.error),
-    sources: (r.sources ?? []) as string[],
-  }));
+  const rows = await sqlc`SELECT * FROM agents WHERE active = TRUE ORDER BY spawned_at DESC LIMIT ${limit}`;
+  return rows.map(rawRowToAgent);
 }
 
-export async function pruneAgentActivityOlderThan(cutoff: number): Promise<number> {
+/** Closed agents (history) — completed / failed / errored, newest first. */
+export async function getAgentHistory(limit = 200): Promise<Agent[]> {
   const sqlc = getSql();
-  const rows = await sqlc`DELETE FROM agent_activity WHERE started_at < ${cutoff} RETURNING id`;
+  const rows = await sqlc`SELECT * FROM agents WHERE active = FALSE ORDER BY closed_at DESC NULLS LAST LIMIT ${limit}`;
+  return rows.map(rawRowToAgent);
+}
+
+export async function pruneClosedAgentsOlderThan(cutoff: number): Promise<number> {
+  const sqlc = getSql();
+  const rows = await sqlc`DELETE FROM agents WHERE active = FALSE AND closed_at < ${cutoff} RETURNING message_id`;
   return rows.length;
 }
 
-export async function deleteAllAgentActivity(): Promise<number> {
+export async function deleteAllAgents(): Promise<number> {
   const sqlc = getSql();
-  const rows = await sqlc`DELETE FROM agent_activity RETURNING id`;
+  const rows = await sqlc`DELETE FROM agents RETURNING message_id`;
   return rows.length;
 }
 
-function rawRowToAgentActivity(r: Record<string, unknown>): AgentActivity {
+function rawRowToAgent(r: Record<string, unknown>): Agent {
   const num = (v: unknown): number | undefined => (v === null || v === undefined ? undefined : Number(v));
   return {
-    id: r.id as string,
-    batchId: r.batch_id as string,
-    agentNo: Number(r.agent_no),
-    kind: r.kind as AgentActivity['kind'],
-    messageId: (r.message_id ?? undefined) as string | undefined,
-    status: r.status as AgentActivity['status'],
-    severity: (r.severity ?? undefined) as string | undefined,
-    findingId: (r.finding_id ?? undefined) as string | undefined,
+    messageId: r.message_id as string,
+    status: r.status as Agent['status'],
+    active: r.active as boolean,
     source: (r.source ?? undefined) as string | undefined,
     logGroup: (r.log_group ?? undefined) as string | undefined,
-    presentTypes: (r.present_types ?? []) as string[],
     requestTs: num(r.request_ts),
     ackTs: num(r.ack_ts),
     responseTs: num(r.response_ts),
     ackCode: (r.ack_code ?? undefined) as string | undefined,
+    severity: (r.severity ?? undefined) as string | undefined,
     detail: (r.detail ?? undefined) as string | undefined,
-    startedAt: Number(r.started_at),
-    finishedAt: Number(r.finished_at),
-    durationMs: Number(r.duration_ms),
+    spawnedAt: Number(r.spawned_at),
+    updatedAt: Number(r.updated_at),
+    closedAt: num(r.closed_at),
   };
 }
 

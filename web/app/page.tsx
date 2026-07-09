@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Finding, AgentActivity, AgentBatch } from '@log/shared';
+import type { Finding, Agent } from '@log/shared';
 import { api } from '../lib/api';
 import { FindingCard } from '../components/FindingCard';
-import { AgentActivityPanel } from '../components/AgentActivityPanel';
+import { AgentsPanel } from '../components/AgentsPanel';
 
 const ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
@@ -18,8 +18,8 @@ const REFRESH_MS = 30_000;
 export default function Dashboard() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [analysis, setAnalysis] = useState<Analysis | undefined>();
-  const [activity, setActivity] = useState<AgentActivity[]>([]);
-  const [batches, setBatches] = useState<AgentBatch[]>([]);
+  const [activeAgents, setActiveAgents] = useState<Agent[]>([]);
+  const [agentHistory, setAgentHistory] = useState<Agent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
@@ -31,11 +31,11 @@ export default function Dashboard() {
   const refresh = useCallback(async (analyze: boolean) => {
     setError(null);
     try {
-      const [f, a] = await Promise.all([api.findings(analyze), api.agentsActivity()]);
+      const [f, a] = await Promise.all([api.findings(analyze), api.agents()]);
       setFindings(f.findings);
       if (f.analysis) setAnalysis(f.analysis);
-      setActivity(a.activity);
-      setBatches(a.batches);
+      setActiveAgents(a.active);
+      setAgentHistory(a.history);
     } catch (e) {
       setError(String(e));
     }
@@ -62,8 +62,8 @@ export default function Dashboard() {
       await api.clearFindings();
       setFindings([]);
       setAnalysis(undefined);
-      setActivity([]);
-      setBatches([]);
+      setActiveAgents([]);
+      setAgentHistory([]);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -139,7 +139,7 @@ export default function Dashboard() {
         </p>
       )}
 
-      {!loading && <AgentActivityPanel activity={activity} batches={batches} />}
+      {!loading && <AgentsPanel active={activeAgents} history={agentHistory} />}
 
       <h2 className="mb-3 text-lg font-semibold text-white">Findings & Anomalies</h2>
       <div className="grid gap-4 lg:grid-cols-2">
