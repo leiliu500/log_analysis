@@ -32,6 +32,11 @@ export const api = {
     }>(`/findings?limit=100&analyze=${analyze}&window=60`),
   clearFindings: () =>
     req<{ deleted: number; agentsDeleted?: number }>('/findings', { method: 'DELETE' }),
+  /** Full reset: findings + logs + agents + scheduled-run history. */
+  clearAllData: () =>
+    req<{ findingsDeleted: number; logsDeleted: number; scheduleDeleted?: number }>('/data', {
+      method: 'DELETE',
+    }),
   /** Stateful agent lifecycle: active agents (cards) + closed agents (history). */
   agents: () => req<{ active: Agent[]; history: Agent[] }>('/agents'),
   /** Scheduled-ingestion run history for the Schedule tab. */

@@ -30,6 +30,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
 
   // Read current findings + agent activity + schedule history. All are produced
   // by the scheduled ingestion poller; `analyze=false` just reads them.
@@ -77,6 +78,27 @@ export default function Dashboard() {
     }
   }
 
+  // Full database reset: findings + logs + agents + schedule history.
+  async function cleanupDb() {
+    if (cleaning) return;
+    if (typeof window !== 'undefined' && !window.confirm('Delete ALL findings, logs, agents, and schedule history?')) {
+      return;
+    }
+    setCleaning(true);
+    try {
+      await api.clearAllData();
+      setFindings([]);
+      setAnalysis(undefined);
+      setActiveAgents([]);
+      setAgentHistory([]);
+      setSchedule([]);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCleaning(false);
+    }
+  }
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const f of findings) c[f.severity] = (c[f.severity] ?? 0) + 1;
@@ -112,6 +134,14 @@ export default function Dashboard() {
             className="rounded-lg border border-edge px-3 py-1.5 text-sm text-slate-300 hover:bg-edge disabled:opacity-50"
           >
             {clearing ? 'Clearing…' : 'Clear findings'}
+          </button>
+          <button
+            onClick={() => void cleanupDb()}
+            disabled={cleaning || loading}
+            className="rounded-lg border border-red-800/60 bg-red-900/20 px-3 py-1.5 text-sm text-red-300 hover:bg-red-900/40 disabled:opacity-50"
+            title="Delete all findings, logs, agents, and schedule history"
+          >
+            {cleaning ? 'Cleaning…' : 'Clean up DB'}
           </button>
         </div>
       </div>
