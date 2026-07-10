@@ -13,6 +13,23 @@ import {
 const toVector = (v?: number[]): string | null =>
   v && v.length ? `[${v.join(',')}]` : null;
 
+/**
+ * Read a JSONB column defensively. postgres.js normally returns jsonb as a
+ * parsed object, but a value bound as a JSON string + `::jsonb` cast can
+ * round-trip as a string; parse it so callers always get the object/array.
+ */
+function jsonbField<T>(v: unknown, fallback: T): T {
+  if (v == null) return fallback;
+  if (typeof v === 'string') {
+    try {
+      return JSON.parse(v) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  return v as T;
+}
+
 // postgres.js `json()` has a strict JSONValue signature; our records use
 // `unknown`-valued maps, so wrap with a permissive cast in one place.
 const json = (v: unknown) => getSql().json(v as Parameters<Sql['json']>[0]);
@@ -229,8 +246,8 @@ function rawRowToAgent(r: Record<string, unknown>): Agent {
     status: r.status as Agent['status'],
     active: r.active as boolean,
     waitingFor: (r.waiting_for ?? undefined) as string | undefined,
-    phases: (r.phases as string[] | null) ?? [],
-    phaseTs: (r.phase_ts as Record<string, number> | null) ?? {},
+    phases: jsonbField<string[]>(r.phases, []),
+    phaseTs: jsonbField<Record<string, number>>(r.phase_ts, {}),
     source: (r.source ?? undefined) as string | undefined,
     logGroup: (r.log_group ?? undefined) as string | undefined,
     ackCode: (r.ack_code ?? undefined) as string | undefined,
@@ -271,11 +288,17 @@ export async function recentPollerRuns(limit = 50): Promise<PollerRun[]> {
     trigger: r.trigger as PollerRun['trigger'],
     windowMinutes: Number(r.window_minutes),
     durationMs: Number(r.duration_ms),
-    bySource: (r.by_source as PollerRun['bySource'] | null) ?? {},
-    agents: (r.agents as PollerRun['agents'] | null) ?? { spawned: 0, advanced: 0, closed: 0, findings: 0 },
+    bySource: jsonbField<PollerRun['bySource']>(r.by_source, {}),
+    agents: jsonbField<PollerRun['agents']>(r.agents, { spawned: 0, advanced: 0, closed: 0, findings: 0 }),
     findings: Number(r.findings),
     pruned: Number(r.pruned),
   }));
+}
+
+export async function deleteAllPollerRuns(): Promise<number> {
+  const sqlc = getSql();
+  const rows = await sqlc`DELETE FROM poller_runs RETURNING id`;
+  return rows.length;
 }
 
 // ---------------------------------------------------------------------------

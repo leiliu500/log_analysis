@@ -27,7 +27,9 @@ export const api = {
         agents?: { spawned: number; advanced: number; closed: number; findings: number };
         pruned: number;
       };
-    }>(`/findings?limit=100&analyze=${analyze}`),
+      // "Analyze now" looks back 60 min (vs the scheduled poller's 5) so it also
+      // catches logs simulated a little while ago.
+    }>(`/findings?limit=100&analyze=${analyze}&window=60`),
   clearFindings: () =>
     req<{ deleted: number; agentsDeleted?: number }>('/findings', { method: 'DELETE' }),
   /** Stateful agent lifecycle: active agents (cards) + closed agents (history). */

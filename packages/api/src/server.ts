@@ -13,6 +13,7 @@ import {
   getAgentHistory,
   deleteAllAgents,
   recentPollerRuns,
+  deleteAllPollerRuns,
 } from '@log/db';
 import { runPipeline } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
@@ -76,6 +77,9 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     return { runs: await recentPollerRuns(Math.min(Number(q.limit ?? 50), 200)) };
   });
 
+  // Clear the scheduled-ingestion run history (Schedule tab).
+  api.delete('/schedule', async () => ({ deleted: await deleteAllPollerRuns() }));
+
   // Clear the findings table (and cascade alerts), plus the agent lifecycle —
   // the dashboard's "Clear" control resets the whole view.
   api.delete('/findings', async () => {
@@ -86,12 +90,13 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
   // Reset stored data: findings + parsed logs. Removes stale/seeded rows so the
   // chatbot and dashboard reflect only live logs.
   api.delete('/data', async () => {
-    const [findingsDeleted, logsDeleted] = await Promise.all([
+    const [findingsDeleted, logsDeleted, , scheduleDeleted] = await Promise.all([
       deleteAllFindings(),
       deleteAllLogs(),
       deleteAllAgents(),
+      deleteAllPollerRuns(),
     ]);
-    return { findingsDeleted, logsDeleted };
+    return { findingsDeleted, logsDeleted, scheduleDeleted };
   });
 
   const LogsQuery = z.object({
