@@ -19,8 +19,20 @@ export interface ApplicationDef {
   // ---- Simulator support (each application supplies its own) ----
   /** Detect this application's target log group named in a message (names/keywords). */
   matchLogGroup?(message: string): string | undefined;
+  /**
+   * Split a multi-group paste into per-log-group segments — for apps whose input
+   * can name several target groups at once (e.g. apiflc's handler / authorizer /
+   * API-Gateway-execution logs). Returns [] / undefined when the input is a
+   * single-group request.
+   */
+  splitByLogGroup?(message: string): Array<{ group: string; samples: string }>;
   /** Sample log content the simulator writes when the user pastes none. */
   defaultSamples?: string;
+  /**
+   * What this application calls its correlation id — for display. SCP uses
+   * 'messageId'; apiflc correlates by 'correlationID'. Defaults to 'messageId'.
+   */
+  correlationLabel?: string;
   /**
    * How the simulator treats this app: 'cashMessage' = the correlated
    * REQUEST/ACK/RESPONSE set model (SCP XML); 'verbatim' = write the pasted

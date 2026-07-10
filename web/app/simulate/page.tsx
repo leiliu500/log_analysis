@@ -14,6 +14,7 @@ interface Outcome {
     logGroup?: string;
   };
   result: SimulateResult;
+  correlationLabel?: string;
 }
 
 interface Turn {
@@ -120,7 +121,7 @@ export default function SimulatePage() {
                     <> , log group <code>{o.spec.logGroup}</code></>
                   ) : null}
                 </div>
-                <ResultCard result={o.result} spec={o.spec} />
+                <ResultCard result={o.result} spec={o.spec} correlationLabel={o.correlationLabel} />
               </div>
             ))}
             {t.note && (
@@ -163,7 +164,15 @@ export default function SimulatePage() {
   );
 }
 
-function ResultCard({ result, spec }: { result: SimulateResult; spec?: Outcome['spec'] }) {
+function ResultCard({
+  result,
+  spec,
+  correlationLabel = 'messageId',
+}: {
+  result: SimulateResult;
+  spec?: Outcome['spec'];
+  correlationLabel?: string;
+}) {
   const written = Object.entries(result.written)
     .map(([k, v]) => `${v}→${k}`)
     .join(', ');
@@ -200,7 +209,7 @@ function ResultCard({ result, spec }: { result: SimulateResult; spec?: Outcome['
           <thead className="text-slate-500">
             <tr>
               <th className="pr-4">type</th>
-              <th className="pr-4">messageId</th>
+              <th className="pr-4">{correlationLabel}</th>
               <th className="pr-4">initMessageId</th>
               <th>ackCode</th>
             </tr>

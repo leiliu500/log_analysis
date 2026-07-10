@@ -13,4 +13,5 @@ export const scpApplication: ApplicationDef = {
   matchLogGroup: parseLogGroup,
   defaultSamples: DEFAULT_CASHMESSAGE_SAMPLES,
   simulationMode: 'cashMessage',
+  correlationLabel: 'messageId',
 };

@@ -276,6 +276,8 @@ export interface SimulatePromptOutcome {
   instruction: string;
   spec: SimulateCommand;
   result: SimulateResult;
+  /** What the application calls its correlation id (e.g. 'messageId', 'correlationID'). */
+  correlationLabel?: string;
 }
 
 export interface SimulatePromptResponse {
@@ -324,44 +326,59 @@ export async function handleSimulatePrompt(input: unknown): Promise<SimulateProm
   //     that group — not the SCP cashMessage path.
   const appMatch = applicationRegistry.matchLogGroup(prompt);
   if (appMatch && appMatch.app.simulationMode === 'verbatim') {
+    const app = appMatch.app;
     const count = parseCount(prompt, undefined);
-    // Keep the actual log lines; drop a line that only names the target group.
-    const body = prompt
-      .split(/\r?\n/)
-      .filter((l) => !l.includes(appMatch.group) || /[(]|status:|correlationID:/i.test(l))
-      .join('\n')
-      .trim();
-    const samples = body.length > 60 ? body : appMatch.app.defaultSamples ?? body;
-    const req = SimulateRequest.parse({
-      application: appMatch.app.id,
-      samples,
-      sinks: ['cloudwatch'],
-      count,
-      logGroup: appMatch.group,
-    });
-    const result = await simulateVerbatim(req);
-    const wrote = Object.values(result.written).reduce((a, b) => a + b, 0);
+    const phases = app.protocol.allPhases.filter(
+      (p): p is 'REQUEST' | 'ACK' | 'RESPONSE' => p === 'REQUEST' || p === 'ACK' || p === 'RESPONSE',
+    );
+
+    // A single paste may target several of the app's log groups (each labeled
+    // with its group). Split into per-group segments; else one segment for the
+    // matched group with the pasted body (or the app's default sample).
+    const split = app.splitByLogGroup?.(prompt) ?? [];
+    const targets =
+      split.length > 0
+        ? split
+        : [
+            {
+              group: appMatch.group,
+              samples:
+                prompt
+                  .split(/\r?\n/)
+                  .filter((l) => !l.includes(appMatch.group) || /[(]|status:|correlationID:/i.test(l))
+                  .join('\n')
+                  .trim() || app.defaultSamples || '',
+            },
+          ];
+
+    const results: SimulatePromptOutcome[] = [];
+    for (const t of targets) {
+      const samples = t.samples || app.defaultSamples || '';
+      const req = SimulateRequest.parse({
+        application: app.id,
+        samples,
+        sinks: ['cloudwatch'],
+        count,
+        logGroup: t.group,
+      });
+      const result = await simulateVerbatim(req);
+      results.push({
+        instruction: `write ${count} ${app.displayName} log set(s) to ${t.group}`,
+        spec: { count, messageTypes: phases, ackStatus: 'success', application: app.id, logGroup: t.group },
+        result,
+        correlationLabel: app.correlationLabel ?? 'messageId',
+      });
+    }
+
+    const wrote = results.reduce(
+      (n, r) => n + Object.values(r.result.written).reduce((a, b) => a + b, 0),
+      0,
+    );
+    const groups = results.map((r) => r.spec.logGroup).filter(Boolean);
     return {
       route,
-      results: [
-        {
-          instruction: `write ${count} ${appMatch.app.displayName} log set(s) to ${appMatch.group}`,
-          spec: {
-            count,
-            // Report the application's own phases (e.g. apiflc = REQUEST→RESPONSE),
-            // not the SCP cashMessage REQUEST/ACK/RESPONSE default.
-            messageTypes: appMatch.app.protocol.allPhases.filter(
-              (p): p is 'REQUEST' | 'ACK' | 'RESPONSE' =>
-                p === 'REQUEST' || p === 'ACK' || p === 'RESPONSE',
-            ),
-            ackStatus: 'success',
-            application: appMatch.app.id,
-            logGroup: appMatch.group,
-          },
-          result,
-        },
-      ],
-      note: `Simulator Agent wrote ${wrote} log line(s) to ${appMatch.group} (application ${appMatch.app.id}). No analysis ran now — the scheduled poller will ingest and analyze these at the next interval, then update the Dashboard.`,
+      results,
+      note: `Simulator Agent wrote ${wrote} log line(s) across ${groups.length} ${app.id} log group(s): ${groups.join(', ')}. No analysis ran now — the scheduled poller will ingest and analyze these at the next interval, then update the Dashboard.`,
     };
   }
 
