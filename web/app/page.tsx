@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Finding, Agent, PollerRun } from '@log/shared';
 import { api } from '../lib/api';
 import { FindingCard } from '../components/FindingCard';
+import { FindingsHistoryTable } from '../components/FindingsHistoryTable';
 import { AgentsPanel } from '../components/AgentsPanel';
 import { ScheduleTab } from '../components/ScheduleTab';
 
@@ -280,11 +281,7 @@ export default function Dashboard() {
             <span className="text-xs text-slate-500">{historyFindings.length} older</span>
           </div>
           {historyFindings.length > 0 ? (
-            <div className="grid gap-4 lg:grid-cols-2">
-              {historyFindings.map((f) => (
-                <FindingCard key={f.id} f={f} />
-              ))}
-            </div>
+            <FindingsHistoryTable findings={historyFindings} />
           ) : (
             <p className="text-sm text-slate-500">No older findings retained yet.</p>
           )}
