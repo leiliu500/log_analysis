@@ -1,4 +1,5 @@
 import type { RouteDecision, ParsedLog } from '@log/shared';
+import { loadPrompt } from '@log/shared';
 import { converse, parseBatch } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
 
@@ -17,12 +18,7 @@ export function extractWindowMinutes(message: string, fromLlm: unknown): number 
   return 60;
 }
 
-const ANALYZE_SYSTEM = `You are the log-analysis agent. Answer the user's question
-using ONLY the provided AGGREGATES and the MESSAGES table for the given time
-window. When asked "how many", give the exact number from the aggregates. When
-asked to list/show messageId (or initMessageId), read them from the MESSAGES
-table and list each one (e.g. as a bulleted list). Never invent values. If the
-data is insufficient, say what is missing. Be concise.`;
+const ANALYZE_SYSTEM = loadPrompt('api/analyze.md');
 
 function xmlTag(raw: string, tag: string): string | undefined {
   const m = raw.match(new RegExp(`<(?:[\\w.-]+:)?${tag}>\\s*([^<]+?)\\s*</(?:[\\w.-]+:)?${tag}>`, 'i'));

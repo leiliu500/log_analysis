@@ -5,6 +5,7 @@ export * from './agentLifecycle.js';
 export * from './agents.js';
 export * from './chat.js';
 export * from './simulate.js';
+export * from './prompts.js';
 
 /** Small helpers shared across packages. */
 export const nowMs = (): number => Date.now();

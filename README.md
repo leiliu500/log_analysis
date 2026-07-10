@@ -58,6 +58,7 @@ packages/
   simulator/   simulator agent (generate + write logs)
   api/         Fastify API (findings, logs, chat, simulate, invoke-app, analyze)
 web/           Next.js dashboard + scoped chatbot + simulator UI
+prompts/       externalized LLM system prompts (.md), loaded via loadPrompt()
 infra/         Terraform: VPC, RDS, Bedrock agents/flow, Lambda, ECS/ALB, IAM
 scripts/       Lambda bundler
 ```

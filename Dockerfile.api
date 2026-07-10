@@ -18,5 +18,7 @@ WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages ./packages
+# Externalized LLM system prompts, loaded at runtime by @log/shared loadPrompt().
+COPY prompts ./prompts
 EXPOSE 4000
 CMD ["node", "packages/api/dist/server.js"]

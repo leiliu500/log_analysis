@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SimulateRequest, parseLogGroup, type RouteDecision, type SimulateResult } from '@log/shared';
+import { SimulateRequest, parseLogGroup, loadPrompt, type RouteDecision, type SimulateResult } from '@log/shared';
 import { converseJson } from '@log/analysis';
 import { routeRequest } from '@log/agents';
 import { simulate, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/simulator';
@@ -121,18 +121,7 @@ export function splitInstructions(prompt: string): string[] {
   return segs.length ? segs : [prompt];
 }
 
-const SEGMENT_SYSTEM = `You split a user's request into separate cashMessage
-simulation commands. One request may describe SEVERAL distinct simulations — e.g.
-"3 successful request/ack/response starting 001, and 1 request/ack without
-response that fails" is TWO commands. Split on enumerations ("(4)…(5)…"), the word
-"simulate", or conjunctions ("and", "then", ";", a new sentence) that separate
-distinct simulations. Do NOT split a single command (e.g. "request/ack/response"
-is one command, not three).
-
-Return each command as the EXACT verbatim substring of the input, in order,
-together covering every command. A single-command request returns one element.
-
-Respond ONLY with JSON: {"commands":["<verbatim substring>", ...]}`;
+const SEGMENT_SYSTEM = loadPrompt('api/simulate.segment.md');
 
 /**
  * Segment a prompt into one text span per command. Deterministic splitting
@@ -195,21 +184,7 @@ export interface SimulateCommand {
   logGroup?: string;
 }
 
-const EXTRACT_ONE_SYSTEM = `You convert ONE natural-language cashMessage simulation
-command into structured parameters. Domain: an FRB cashMessage transaction has a
-REQUEST and optionally an ACK and a RESPONSE, correlated by messageId.
-
-Extract for THIS single command:
-- count: integer number of sets/transactions to generate (default 1).
-- messageTypes: subset of ["REQUEST","ACK","RESPONSE"] to generate per set.
-  "request/ack/response" or unspecified -> all three; "without response" ->
-  ["REQUEST","ACK"]; "request only" -> ["REQUEST"].
-- ackStatus: "success" or "failure". "with failure"/"failed"/"reject"/"with error"
-  -> "failure"; "success"/"no error"/"successful" -> "success". Default "success".
-- startMessageId: the starting messageId if given (e.g. "001"), else null.
-
-Respond ONLY with JSON:
-{"count":int,"messageTypes":[...],"ackStatus":"success|failure","startMessageId":string|null}`;
+const EXTRACT_ONE_SYSTEM = loadPrompt('api/simulate.extract-one.md');
 
 function normalizeCommand(c: Record<string, unknown>): SimulateCommand {
   const rawTypes = Array.isArray(c.messageTypes) ? c.messageTypes : [];

@@ -4,7 +4,7 @@
  * `ingestPollerHandler`. Run: node scripts/bundle-lambda.mjs
  */
 import { build } from 'esbuild';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, cpSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -24,5 +24,10 @@ await build({
   external: ['@aws-sdk/*'],
   logLevel: 'info',
 });
+
+// Ship the externalized LLM system prompts beside the bundle so @log/shared's
+// loadPrompt() resolves them at runtime (the Lambda zip is source_dir =
+// build/lambda, so prompts/ unzips next to index.js under the task root).
+cpSync(join(root, 'prompts'), join(outdir, 'prompts'), { recursive: true });
 
 console.log('Lambda bundle written to', outdir);
