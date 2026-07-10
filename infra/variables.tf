@@ -59,27 +59,25 @@ variable "web_image" {
 variable "cloudwatch_log_groups" {
   # Entries may use a "*" suffix as a prefix wildcard, expanded via
   # DescribeLogGroups. "/sim/*" covers all simulated-application log groups.
-  # apiflc's groups are external/real (not created by our Terraform) and are read
-  # here; the "API-Gateway-Execution-Logs_.../*" wildcard covers its stage paths.
-  type = list(string)
-  default = [
-    "/sim/*",
-    "/aws/lambda/adt-fca-d1-api_gateway_handler",
-    "/aws/lambda/adt-fca-d1-api_gateway_authorizer",
-    "/aws/lambda/adt-fca-d1-api_gateway_background",
-    "API-Gateway-Execution-Logs_9ioz6z9om1/*",
-  ]
+  type    = list(string)
+  default = ["/sim/*"]
 }
 
 variable "application_log_groups" {
-  # Fixed, named CloudWatch log groups for the SCP/ESB applications. The
-  # simulator writes to these (by target log group or content type) and the
-  # ingestion pipeline reads from them.
+  # Fixed, named CloudWatch log groups created by Terraform for the onboarded
+  # applications. The simulator writes to these (by target log group or content
+  # type) and the ingestion pipeline reads from them.
   type = list(string)
   default = [
+    # SCP / ESB
     "adt-d2-scp-log-group",
     "adt-d2-scp-restapp-log-group",
     "esb-cloudwatch-logs-agent-cash",
+    # apiflc (Lambda handlers + API Gateway execution logs)
+    "/aws/lambda/adt-fca-d1-api_gateway_handler",
+    "/aws/lambda/adt-fca-d1-api_gateway_authorizer",
+    "/aws/lambda/adt-fca-d1-api_gateway_background",
+    "API-Gateway-Execution-Logs_9ioz6z9om1/d1",
   ]
 }
 
