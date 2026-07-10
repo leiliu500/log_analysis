@@ -60,6 +60,12 @@ export interface StepOptions {
   registry: ApplicationRegistry;
 }
 
+export interface AgentCounts {
+  spawned: number;
+  advanced: number;
+  closed: number;
+}
+
 export interface StepResult {
   agents: Map<string, Agent>;
   /** messageIds whose agent changed this step (need persisting). */
@@ -67,6 +73,8 @@ export interface StepResult {
   spawned: number;
   advanced: number;
   closed: number;
+  /** Per-application agent counts (application id → counts). */
+  byApp: Record<string, AgentCounts>;
 }
 
 /**
@@ -90,6 +98,10 @@ export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptio
   let spawned = 0;
   let advanced = 0;
   let closed = 0;
+  const byApp: Record<string, AgentCounts> = {};
+  const bump = (app: string | undefined, k: keyof AgentCounts): void => {
+    (byApp[app ?? 'unknown'] ??= { spawned: 0, advanced: 0, closed: 0 })[k] += 1;
+  };
 
   const close = (a: Agent, status: Agent['status'], detail: string, severity?: string): void => {
     a.status = status;
@@ -99,6 +111,7 @@ export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptio
     a.detail = detail;
     if (severity) a.severity = severity;
     closed += 1;
+    bump(a.application, 'closed');
   };
 
   for (const e of events) {
@@ -122,6 +135,7 @@ export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptio
       };
       agents.set(e.corrId, a);
       spawned += 1;
+      bump(a.application, 'spawned');
       changed.add(e.corrId);
     }
     if (!a.active) continue; // terminal — ignore further events
@@ -143,6 +157,7 @@ export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptio
           a.waitingFor = remaining[0];
           a.detail = `${e.type} ok — awaiting ${remaining[0]}`;
           advanced += 1;
+          bump(a.application, 'advanced');
         }
       }
     }
@@ -162,7 +177,7 @@ export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptio
     }
   }
 
-  return { agents, changed, spawned, advanced, closed };
+  return { agents, changed, spawned, advanced, closed, byApp };
 }
 
 export interface AdvanceResult {
@@ -171,6 +186,8 @@ export interface AdvanceResult {
   closed: number;
   /** Findings minted for agents that closed failed/error this cycle. */
   findings: Finding[];
+  /** Per-application agent counts + minted findings (application id → counts). */
+  byApplication: Record<string, AgentCounts & { findings: number }>;
 }
 
 const ALERT_SEVERITIES: Severity[] = ['high', 'critical'];
@@ -209,6 +226,7 @@ export async function advanceAgents(
 
   // Agents that newly closed as failed/error this cycle → one Finding each.
   const findings: Finding[] = [];
+  const findingsByApp: Record<string, number> = {};
   for (const id of step.changed) {
     const post = step.agents.get(id)!;
     const pre = known.get(id);
@@ -218,6 +236,7 @@ export async function advanceAgents(
       if (await findingExistsByFingerprint(fp, now - FINDING_DEDUP_MS)) continue;
       const f = agentFinding(post, now, windowMs);
       await insertFinding(f);
+      findingsByApp[post.application ?? 'unknown'] = (findingsByApp[post.application ?? 'unknown'] ?? 0) + 1;
       if (ALERT_SEVERITIES.includes(f.severity)) {
         await insertAlert({
           id: randomUUID(),
@@ -237,7 +256,14 @@ export async function advanceAgents(
   const historyTtlMin = Number(process.env.INGEST_AGENT_HISTORY_TTL_MINUTES ?? 1440);
   await pruneClosedAgentsOlderThan(now - historyTtlMin * 60_000);
 
-  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed, findings };
+  const byApplication: AdvanceResult['byApplication'] = {};
+  const appIds = new Set([...Object.keys(step.byApp), ...Object.keys(findingsByApp)]);
+  for (const id of appIds) {
+    const c = step.byApp[id] ?? { spawned: 0, advanced: 0, closed: 0 };
+    byApplication[id] = { ...c, findings: findingsByApp[id] ?? 0 };
+  }
+
+  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed, findings, byApplication };
 }
 
 /** A deterministic Finding for a terminally failed/errored (timed-out) agent. */

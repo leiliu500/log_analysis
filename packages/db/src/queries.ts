@@ -271,9 +271,10 @@ const POLLER_RUNS_KEEP = 500;
 export async function insertPollerRun(run: PollerRun): Promise<void> {
   const sqlc = getSql();
   await sqlc`INSERT INTO poller_runs
-    (id, ran_at, trigger, window_minutes, duration_ms, by_source, agents, findings, pruned)
+    (id, ran_at, trigger, window_minutes, duration_ms, by_source, agents, findings, pruned, by_application)
     VALUES (${run.id}, ${run.ranAt}, ${run.trigger}, ${run.windowMinutes}, ${run.durationMs},
-            ${JSON.stringify(run.bySource)}::jsonb, ${JSON.stringify(run.agents)}::jsonb, ${run.findings}, ${run.pruned})
+            ${JSON.stringify(run.bySource)}::jsonb, ${JSON.stringify(run.agents)}::jsonb, ${run.findings}, ${run.pruned},
+            ${JSON.stringify(run.byApplication ?? {})}::jsonb)
     ON CONFLICT (id) DO NOTHING`;
   // Bound growth (a run lands every ~5 min) — drop everything past the newest N.
   await sqlc`DELETE FROM poller_runs WHERE id IN (
@@ -294,6 +295,7 @@ export async function recentPollerRuns(limit = 50): Promise<PollerRun[]> {
     agents: jsonbField<PollerRun['agents']>(r.agents, { spawned: 0, advanced: 0, closed: 0, findings: 0 }),
     findings: Number(r.findings),
     pruned: Number(r.pruned),
+    byApplication: jsonbField<NonNullable<PollerRun['byApplication']>>(r.by_application, {}),
   }));
 }
 

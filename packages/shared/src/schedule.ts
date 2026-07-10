@@ -21,4 +21,12 @@ export interface PollerRun {
   findings: number;
   /** Stale rows pruned this run. */
   pruned: number;
+  /**
+   * Per-application breakdown of this run, so the dashboard can scope the
+   * Schedule tab to a selected application (e.g. scp vs apiflc).
+   */
+  byApplication?: Record<
+    string,
+    { parsed: number; findings: number; spawned: number; advanced: number; closed: number }
+  >;
 }

@@ -7,7 +7,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { dispatchAgentic, advanceAgents } from '@log/analysis';
-import type { ParsedLog, PollerTrigger } from '@log/shared';
+import type { ParsedLog, PollerTrigger, Finding, PollerRun } from '@log/shared';
 import { allConnectors } from '@log/ingestion';
 import { pruneFindingsOlderThan, insertPollerRun } from '@log/db';
 import { applicationRegistry } from './applications.js';
@@ -59,6 +59,7 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
   // Per source: parse/persist + non-transaction findings. Collect all parsed
   // logs so the lifecycle sees every source's request/ack/response messages.
   const allParsed: ParsedLog[] = [];
+  const sourceFindings: Finding[] = [];
   await Promise.all(
     allConnectors().map(async (connector) => {
       try {
@@ -69,6 +70,7 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
         }
         const result = await dispatchAgentic(records, { windowMs, registry: applicationRegistry });
         allParsed.push(...result.parsed);
+        sourceFindings.push(...result.findings);
         bySource[connector.source] = { parsed: result.parsed.length, findings: result.findings.length };
       } catch (err) {
         console.error(`ingest ${connector.source} failed`, err);
@@ -80,6 +82,7 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
   // Advance the agent lifecycle exactly once per poll — ALWAYS, even when
   // allParsed is empty, so timeouts fire on idle polls and report Findings.
   let agents = { spawned: 0, advanced: 0, closed: 0, findings: 0 };
+  let lifeByApp: Record<string, { spawned: number; advanced: number; closed: number; findings: number }> = {};
   try {
     const timeoutMs =
       opts.agentTimeoutMinutes != null ? opts.agentTimeoutMinutes * 60_000 : undefined;
@@ -90,8 +93,27 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
       closed: life.closed,
       findings: life.findings.length,
     };
+    lifeByApp = life.byApplication;
   } catch (err) {
     console.error('agent lifecycle advance failed', err);
+  }
+
+  // Per-application breakdown for the Schedule tab (parsed by log group, findings
+  // + agent lifecycle activity per app).
+  const byApplication: NonNullable<PollerRun['byApplication']> = {};
+  const bucket = (id: string) =>
+    (byApplication[id] ??= { parsed: 0, findings: 0, spawned: 0, advanced: 0, closed: 0 });
+  for (const l of allParsed) {
+    const id = applicationRegistry.forLog(l)?.id;
+    if (id) bucket(id).parsed += 1;
+  }
+  for (const f of sourceFindings) if (f.application) bucket(f.application).findings += 1;
+  for (const [id, c] of Object.entries(lifeByApp)) {
+    const b = bucket(id);
+    b.spawned += c.spawned;
+    b.advanced += c.advanced;
+    b.closed += c.closed;
+    b.findings += c.findings;
   }
 
   // Record this run for the dashboard's Schedule tab (best-effort — never fail
@@ -106,6 +128,7 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
       windowMinutes,
       durationMs: Date.now() - startedAt,
       bySource,
+      byApplication,
       agents,
       findings: findingsTotal,
       pruned,

@@ -291,7 +291,7 @@ export default function Dashboard() {
         </section>
       )}
 
-      {!loading && tab === 'schedule' && <ScheduleTab runs={schedule} />}
+      {!loading && tab === 'schedule' && <ScheduleTab runs={schedule} appFilter={appFilter} />}
     </div>
   );
 }
