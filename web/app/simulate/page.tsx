@@ -120,7 +120,7 @@ export default function SimulatePage() {
                     <> , log group <code>{o.spec.logGroup}</code></>
                   ) : null}
                 </div>
-                <ResultCard result={o.result} />
+                <ResultCard result={o.result} spec={o.spec} />
               </div>
             ))}
             {t.note && (
@@ -163,15 +163,20 @@ export default function SimulatePage() {
   );
 }
 
-function ResultCard({ result }: { result: SimulateResult }) {
+function ResultCard({ result, spec }: { result: SimulateResult; spec?: Outcome['spec'] }) {
   const written = Object.entries(result.written)
     .map(([k, v]) => `${v}→${k}`)
     .join(', ');
-  const sets = result.messages.filter((m) => m.messageType === 'REQUEST').length;
-  // What was actually generated — makes "without response" / "ack failure" obvious.
+  // cashMessage (SCP) sets are typed REQUEST/ACK/RESPONSE; verbatim apps (apiflc)
+  // report one "SET" per set. Drive the shape from the app's own phases (spec).
   const types = [...new Set(result.messages.map((m) => m.messageType))];
-  const perSet = ['REQUEST', 'ACK', 'RESPONSE'].filter((t) => types.includes(t));
-  const missing = ['REQUEST', 'ACK', 'RESPONSE'].filter((t) => !types.includes(t));
+  const isCashMessage = ['REQUEST', 'ACK', 'RESPONSE'].some((t) => types.includes(t));
+  const sets = isCashMessage
+    ? result.messages.filter((m) => m.messageType === 'REQUEST').length
+    : spec?.count ?? result.messages.length;
+  const perSet = spec?.messageTypes ?? ['REQUEST', 'ACK', 'RESPONSE'].filter((t) => types.includes(t));
+  // "without X" only makes sense for the cashMessage set model.
+  const missing = isCashMessage ? ['REQUEST', 'ACK', 'RESPONSE'].filter((t) => !types.includes(t)) : [];
   const failed = result.messages.some((m) => m.ackCode && !/^(OK|SUCCESS|PROCESSED_SUCCESSFULLY|ACCEPTED|COMPLETE)/i.test(m.ackCode));
   return (
     <div className="card text-sm">

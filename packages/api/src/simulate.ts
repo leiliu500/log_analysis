@@ -348,7 +348,12 @@ export async function handleSimulatePrompt(input: unknown): Promise<SimulateProm
           instruction: `write ${count} ${appMatch.app.displayName} log set(s) to ${appMatch.group}`,
           spec: {
             count,
-            messageTypes: req.messageTypes,
+            // Report the application's own phases (e.g. apiflc = REQUEST→RESPONSE),
+            // not the SCP cashMessage REQUEST/ACK/RESPONSE default.
+            messageTypes: appMatch.app.protocol.allPhases.filter(
+              (p): p is 'REQUEST' | 'ACK' | 'RESPONSE' =>
+                p === 'REQUEST' || p === 'ACK' || p === 'RESPONSE',
+            ),
             ackStatus: 'success',
             application: appMatch.app.id,
             logGroup: appMatch.group,
