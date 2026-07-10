@@ -173,7 +173,7 @@ export async function upsertAgents(agents: Agent[]): Promise<void> {
         (message_id, status, active, waiting_for, phases, phase_ts, source, log_group,
          ack_code, severity, detail, spawned_at, updated_at, closed_at)
         VALUES (${a.messageId}, ${a.status}, ${a.active}, ${a.waitingFor ?? null},
-                ${sqlc.json(a.phases)}, ${sqlc.json(a.phaseTs)}, ${a.source ?? null}, ${a.logGroup ?? null},
+                ${JSON.stringify(a.phases)}::jsonb, ${JSON.stringify(a.phaseTs)}::jsonb, ${a.source ?? null}, ${a.logGroup ?? null},
                 ${a.ackCode ?? null}, ${a.severity ?? null}, ${a.detail ?? null},
                 ${a.spawnedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
@@ -254,7 +254,7 @@ export async function insertPollerRun(run: PollerRun): Promise<void> {
   await sqlc`INSERT INTO poller_runs
     (id, ran_at, trigger, window_minutes, duration_ms, by_source, agents, findings, pruned)
     VALUES (${run.id}, ${run.ranAt}, ${run.trigger}, ${run.windowMinutes}, ${run.durationMs},
-            ${sqlc.json(run.bySource)}, ${sqlc.json(run.agents)}, ${run.findings}, ${run.pruned})
+            ${JSON.stringify(run.bySource)}::jsonb, ${JSON.stringify(run.agents)}::jsonb, ${run.findings}, ${run.pruned})
     ON CONFLICT (id) DO NOTHING`;
   // Bound growth (a run lands every ~5 min) — drop everything past the newest N.
   await sqlc`DELETE FROM poller_runs WHERE id IN (
