@@ -30,6 +30,20 @@ test('eventOf reads API Gateway execution-log text', () => {
   assert.deepEqual(resp, { type: 'RESPONSE', corrId: 'abc12345', ackCode: '502' });
 });
 
+test('API Gateway "Method request ..." noise lines are NOT counted as REQUEST', () => {
+  assert.equal(P.eventOf(log('(abc12345) Method request path: {aba_t=052001633}')), undefined);
+  assert.equal(P.eventOf(log('(abc12345) Method request headers: {Accept=*/*}')), undefined);
+});
+
+test('handler logs correlate REQUEST/RESPONSE by correlationID', () => {
+  const req = P.eventOf(log('2026-07-02T04:34:43Z 45e5ece0 INFO correlationID: 1234; FedLine Request: {}'));
+  assert.deepEqual(req, { type: 'REQUEST', corrId: '1234', ackCode: undefined });
+  const resp = P.eventOf(log('2026-07-02T04:34:48Z 45e5ece0 INFO correlationID: 1234; Response from Data Services:'));
+  assert.deepEqual(resp, { type: 'RESPONSE', corrId: '1234', ackCode: undefined });
+  // Non request/response handler lines are ignored.
+  assert.equal(P.eventOf(log('45e5ece0 INFO correlationID: 1234; =====Process=====')), undefined);
+});
+
 test('eventOf ignores unrelated logs', () => {
   assert.equal(P.eventOf(log('just some plain log line')), undefined);
 });

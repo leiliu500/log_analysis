@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { SimulateRequest, loadPrompt, type RouteDecision, type SimulateResult } from '@log/shared';
-import { parseLogGroup } from '@log/app-scp';
+import { parseLogGroup, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/app-scp';
 import { converseJson } from '@log/analysis';
-import { routeRequest } from '@log/agents';
-import { simulate, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/simulator';
+import { routeRequest, applicationRegistry } from '@log/agents';
+import { simulate, simulateVerbatim } from '@log/simulator';
 
 /**
  * How many sets to generate. The explicit "N request/ack/response/sets" phrase
@@ -318,9 +318,51 @@ export async function handleSimulatePrompt(input: unknown): Promise<SimulateProm
     };
   }
 
-  // 2) Simulator Agent: parse the prompt into commands and write correlated
-  //    messages to the target log group. Pasted XML is the template; the prose
-  //    lines are the commands, parsed per-command so params don't bleed.
+  // 2a) Application dispatch. If the prompt names a specific application's log
+  //     group whose simulator model is "verbatim" (e.g. apiflc's raw Lambda /
+  //     API-Gateway logs), write the pasted logs (or the app's sample) as-is to
+  //     that group — not the SCP cashMessage path.
+  const appMatch = applicationRegistry.matchLogGroup(prompt);
+  if (appMatch && appMatch.app.simulationMode === 'verbatim') {
+    const count = parseCount(prompt, undefined);
+    // Keep the actual log lines; drop a line that only names the target group.
+    const body = prompt
+      .split(/\r?\n/)
+      .filter((l) => !l.includes(appMatch.group) || /[(]|status:|correlationID:/i.test(l))
+      .join('\n')
+      .trim();
+    const samples = body.length > 60 ? body : appMatch.app.defaultSamples ?? body;
+    const req = SimulateRequest.parse({
+      application: appMatch.app.id,
+      samples,
+      sinks: ['cloudwatch'],
+      count,
+      logGroup: appMatch.group,
+    });
+    const result = await simulateVerbatim(req);
+    const wrote = Object.values(result.written).reduce((a, b) => a + b, 0);
+    return {
+      route,
+      results: [
+        {
+          instruction: `write ${count} ${appMatch.app.displayName} log set(s) to ${appMatch.group}`,
+          spec: {
+            count,
+            messageTypes: req.messageTypes,
+            ackStatus: 'success',
+            application: appMatch.app.id,
+            logGroup: appMatch.group,
+          },
+          result,
+        },
+      ],
+      note: `Simulator Agent wrote ${wrote} log line(s) to ${appMatch.group} (application ${appMatch.app.id}). No analysis ran now — the scheduled poller will ingest and analyze these at the next interval, then update the Dashboard.`,
+    };
+  }
+
+  // 2) Simulator Agent (SCP cashMessage): parse the prompt into commands and
+  //    write correlated messages to the target log group. Pasted XML is the
+  //    template; the prose lines are the commands, parsed per-command.
   const { samples: xmlSamples, instructions } = separateSamplesAndInstructions(prompt);
   const samples = xmlSamples && hasCashXml(xmlSamples) ? xmlSamples : DEFAULT_CASHMESSAGE_SAMPLES;
   const commandText = instructions || prompt;

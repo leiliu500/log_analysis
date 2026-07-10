@@ -15,6 +15,19 @@ export interface ApplicationDef {
   /** CloudWatch log groups this application owns (matched exact or by prefix). */
   logGroups: readonly string[];
   protocol: TransactionProtocol;
+
+  // ---- Simulator support (each application supplies its own) ----
+  /** Detect this application's target log group named in a message (names/keywords). */
+  matchLogGroup?(message: string): string | undefined;
+  /** Sample log content the simulator writes when the user pastes none. */
+  defaultSamples?: string;
+  /**
+   * How the simulator treats this app: 'cashMessage' = the correlated
+   * REQUEST/ACK/RESPONSE set model (SCP XML); 'verbatim' = write the pasted
+   * samples (or defaultSamples) to the log group as-is (e.g. apiflc's raw
+   * Lambda / API-Gateway logs). Defaults to 'cashMessage'.
+   */
+  simulationMode?: 'cashMessage' | 'verbatim';
 }
 
 /**
@@ -68,5 +81,23 @@ export class ApplicationRegistry {
   /** Every log group across all applications (for connector configuration). */
   allLogGroups(): string[] {
     return this.apps.flatMap((a) => [...a.logGroups]);
+  }
+
+  /**
+   * Resolve the target log group + owning application from a message (used by the
+   * simulator to route to the right app). Tries each app's own matcher first,
+   * then a literal log-group-name match across all apps.
+   */
+  matchLogGroup(message: string): { group: string; app: ApplicationDef } | undefined {
+    for (const app of this.apps) {
+      const g = app.matchLogGroup?.(message);
+      if (g) return { group: g, app };
+    }
+    for (const app of this.apps) {
+      for (const g of app.logGroups) {
+        if (message.includes(g)) return { group: g, app };
+      }
+    }
+    return undefined;
   }
 }

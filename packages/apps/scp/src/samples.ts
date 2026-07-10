@@ -1,8 +1,8 @@
 /**
- * Built-in FRB cashMessage Request/ACK/Response template. Used by the
- * natural-language simulator path when the user's prompt contains no pasted XML
- * — e.g. "simulate 3 request/ack/response with message_id=001 to 003". The
- * messageId/initMessageId are rewritten per set by the simulator.
+ * Built-in FRB cashMessage Request/ACK/Response template — SCP's default sample
+ * for the simulator when the user pastes no XML (e.g. "simulate 3
+ * request/ack/response with message_id=001 to 003"). The messageId/initMessageId
+ * are rewritten per set by the simulator.
  */
 export const DEFAULT_CASHMESSAGE_SAMPLES = `<ns2:cashMessage xmlns:ns2="http://www.frbsf.org/20130926/cashMessage">
   <version>1.0</version>

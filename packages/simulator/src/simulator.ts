@@ -116,3 +116,59 @@ export async function simulate(req: SimulateRequest): Promise<SimulateResult> {
 
   return { application: req.application, written, batchId, messages: summary };
 }
+
+/**
+ * Verbatim simulation for line-based logs (e.g. apiflc's raw Lambda / API-Gateway
+ * output): write each non-empty line of the sample as its own CloudWatch event,
+ * `count` sets, freshening uuid / correlationID tokens per set so each set is a
+ * distinct transaction. No XML rewriting — the content is written as pasted.
+ */
+export async function simulateVerbatim(req: SimulateRequest): Promise<SimulateResult> {
+  const lines = req.samples
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+$/, ''))
+    .filter((l) => l.trim().length > 0);
+  const stream = req.logGroup?.trim() || `/sim/${req.application}`;
+  const now = Date.now();
+  const spreadMs = req.spreadMinutes * 60_000;
+  const batchId = randomUUID();
+  const records: RawLogRecord[] = [];
+  const summary: SimulatedMessage[] = [];
+  const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+  for (let i = 0; i < req.count; i++) {
+    const freshUuid = randomUUID();
+    const freshCorr = req.startMessageId ? bumpId(req.startMessageId, i) : String(1000 + i);
+    const baseTs = spreadMs ? now - spreadMs + Math.floor((i / req.count) * spreadMs) : now;
+    lines.forEach((line, k) => {
+      const out = line
+        .replace(uuidRe, freshUuid)
+        .replace(/(correlationID:\s*)[A-Za-z0-9._-]+/gi, `$1${freshCorr}`);
+      records.push({
+        source: 'cloudwatch',
+        stream,
+        timestamp: baseTs + k,
+        raw: out,
+        attributes: { application: req.application, batchId, set: i },
+      });
+    });
+    summary.push({ messageType: 'SET', messageId: freshUuid });
+  }
+
+  const written = {} as Record<LogSourceType, number>;
+  for (const sink of req.sinks) {
+    const connector = connectorFor(sink);
+    if (!connector.write) {
+      written[sink] = 0;
+      continue;
+    }
+    const stamped = records.map((r) => ({ ...r, source: sink }));
+    try {
+      written[sink] = await connector.write(stamped);
+    } catch (err) {
+      console.error(`simulator: verbatim write to ${sink} failed`, err);
+      written[sink] = 0;
+    }
+  }
+  return { application: req.application, written, batchId, messages: summary };
+}

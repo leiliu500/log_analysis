@@ -41,9 +41,27 @@ function fromApiGateway(raw: string): TxEvent | undefined {
   const corrId = idMatch[1]!;
   const statusMatch = raw.match(/method completed with status:\s*(\d{3})/i);
   if (statusMatch) return { type: 'RESPONSE', corrId, ackCode: statusMatch[1] };
-  if (/\b(method request|starting execution|received request|extended request id)\b/i.test(raw)) {
+  // Only the execution START is the REQUEST — NOT the many "Method request
+  // path/headers/body" lines (which would double-count as duplicate requests).
+  if (/\bstarting execution\b/i.test(raw)) {
     return { type: 'REQUEST', corrId, ackCode: undefined };
   }
+  return undefined;
+}
+
+/**
+ * apiflc Lambda handler logs: "... INFO correlationID: <id>; FedLine Request: ..."
+ * (REQUEST) / "... correlationID: <id>; Response from Data Services: ..." (RESPONSE),
+ * correlated by the business correlationID.
+ */
+function fromHandler(raw: string): TxEvent | undefined {
+  const idMatch = raw.match(/correlationID:\s*([A-Za-z0-9._-]+)/i);
+  if (!idMatch) return undefined;
+  const corrId = idMatch[1]!;
+  // Strip the "correlationID: <id>;" token so it can't itself match request/response.
+  const rest = raw.replace(/correlationID:\s*[A-Za-z0-9._-]+;?/gi, '');
+  if (/\brequest\b/i.test(rest)) return { type: 'REQUEST', corrId, ackCode: undefined };
+  if (/\bresponse\b/i.test(rest)) return { type: 'RESPONSE', corrId, ackCode: undefined };
   return undefined;
 }
 
@@ -53,7 +71,7 @@ export const apiflcTransactionProtocol: TransactionProtocol = {
   phases: ['RESPONSE'],
   allPhases: ['REQUEST', 'RESPONSE'],
   eventOf(log: ParsedLog): TxEvent | undefined {
-    return fromJson(log.raw) ?? fromApiGateway(log.raw);
+    return fromJson(log.raw) ?? fromApiGateway(log.raw) ?? fromHandler(log.raw);
   },
   isSuccess(ackCode?: string): boolean {
     if (!ackCode) return true;
