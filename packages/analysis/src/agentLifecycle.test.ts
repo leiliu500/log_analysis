@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Agent, ParsedLog, TransactionProtocol } from '@log/shared';
+import { ApplicationRegistry } from '@log/shared';
 import { stepAgents, agentEvents, type AgentEvent } from './agentLifecycle.js';
 import { parseBatch } from './parser.js';
 
@@ -27,21 +28,31 @@ const testProtocol: TransactionProtocol = {
   isSuccess: (c?: string) => !c || /^(OK|SUCCESS|PROCESSED_SUCCESSFULLY|ACCEPTED|COMPLETE|COMPLETED)$/i.test(c),
 };
 
+// logGroups empty so registry.forLog falls back to eventOf-matching for the test.
+const registry = new ApplicationRegistry().register({
+  id: 'test',
+  displayName: 'Test',
+  logGroups: [],
+  protocol: testProtocol,
+});
+
 const ev = (type: string, corrId: string, ts: number, ackCode?: string): AgentEvent => ({
   type,
   corrId,
   ts,
   ackCode,
+  application: 'test',
 });
 
 function step(events: AgentEvent[], known: Agent[] = [], now = NOW) {
-  return stepAgents(events, known, { now, timeoutMs: TIMEOUT, protocol: testProtocol });
+  return stepAgents(events, known, { now, timeoutMs: TIMEOUT, registry });
 }
 
 /** Build a known/active agent in the generic phase model. */
 function agent(over: Partial<Agent>): Agent {
   return {
     messageId: '001',
+    application: 'test',
     status: 'awaiting',
     active: true,
     waitingFor: 'ACK',
@@ -140,7 +151,7 @@ test('agentEvents extracts ordered request/ack/response from parsed logs', () =>
     { source: 'cloudwatch', stream: 'g', timestamp: NOW - 2 * S, attributes: {}, raw: cash('ACK', { messageId: 'A1', initMessageId: '001', ackCode: 'OK' }) },
     { source: 'cloudwatch', stream: 'g', timestamp: NOW - 3 * S, attributes: {}, raw: cash('REQUEST', { messageId: '001' }) },
   ]);
-  const events = agentEvents(parsed, testProtocol);
+  const events = agentEvents(parsed, registry);
   assert.equal(events.length, 2);
   assert.equal(events[0]!.type, 'REQUEST'); // sorted by ts
   assert.equal(events[0]!.corrId, '001');

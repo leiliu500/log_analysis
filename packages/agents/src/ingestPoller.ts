@@ -10,7 +10,7 @@ import { dispatchAgentic, advanceAgents } from '@log/analysis';
 import type { ParsedLog, PollerTrigger } from '@log/shared';
 import { allConnectors } from '@log/ingestion';
 import { pruneFindingsOlderThan, insertPollerRun } from '@log/db';
-import { scpTransactionProtocol } from '@log/app-scp';
+import { applicationRegistry } from './applications.js';
 
 export interface AnalyzeOptions {
   windowMinutes?: number;
@@ -65,7 +65,7 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
           bySource[connector.source] = { parsed: 0, findings: 0 };
           return;
         }
-        const result = await dispatchAgentic(records, { windowMs, protocol: scpTransactionProtocol });
+        const result = await dispatchAgentic(records, { windowMs, registry: applicationRegistry });
         allParsed.push(...result.parsed);
         bySource[connector.source] = { parsed: result.parsed.length, findings: result.findings.length };
       } catch (err) {
@@ -81,7 +81,7 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
   try {
     const timeoutMs =
       opts.agentTimeoutMinutes != null ? opts.agentTimeoutMinutes * 60_000 : undefined;
-    const life = await advanceAgents(allParsed, scpTransactionProtocol, { windowMs, timeoutMs });
+    const life = await advanceAgents(allParsed, applicationRegistry, { windowMs, timeoutMs });
     agents = {
       spawned: life.spawned,
       advanced: life.advanced,

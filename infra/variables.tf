@@ -59,8 +59,16 @@ variable "web_image" {
 variable "cloudwatch_log_groups" {
   # Entries may use a "*" suffix as a prefix wildcard, expanded via
   # DescribeLogGroups. "/sim/*" covers all simulated-application log groups.
-  type    = list(string)
-  default = ["/sim/*"]
+  # apiflc's groups are external/real (not created by our Terraform) and are read
+  # here; the "API-Gateway-Execution-Logs_.../*" wildcard covers its stage paths.
+  type = list(string)
+  default = [
+    "/sim/*",
+    "/aws/lambda/adt-fca-d1-api_gateway_handler",
+    "/aws/lambda/adt-fca-d1-api_gateway_authorizer",
+    "/aws/lambda/adt-fca-d1-api_gateway_background",
+    "API-Gateway-Execution-Logs_9ioz6z9om1/*",
+  ]
 }
 
 variable "application_log_groups" {

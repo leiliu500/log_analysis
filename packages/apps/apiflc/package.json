@@ -1,5 +1,5 @@
 {
-  "name": "@log/agents",
+  "name": "@log/app-apiflc",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,19 +13,13 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "test": "node --test --import tsx ./src/*.test.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-agent-runtime": "^3.658.0",
-    "@log/analysis": "*",
-    "@log/app-apiflc": "*",
-    "@log/app-scp": "*",
-    "@log/db": "*",
-    "@log/ingestion": "*",
-    "@log/shared": "*",
-    "@log/simulator": "*"
+    "@log/shared": "*"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.145"
+    "tsx": "^4.19.0"
   }
 }

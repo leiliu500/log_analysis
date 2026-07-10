@@ -19,8 +19,12 @@ type TabKey = 'agents' | 'findings' | 'schedule';
 
 const REFRESH_MS = 30_000;
 
+/** Applications known to the platform (shown even before they have data). */
+const KNOWN_APPS = ['scp', 'apiflc'] as const;
+
 export default function Dashboard() {
   const [tab, setTab] = useState<TabKey>('agents');
+  const [appFilter, setAppFilter] = useState<string>('all');
   const [findings, setFindings] = useState<Finding[]>([]);
   const [analysis, setAnalysis] = useState<Analysis | undefined>();
   const [activeAgents, setActiveAgents] = useState<Agent[]>([]);
@@ -99,11 +103,26 @@ export default function Dashboard() {
     }
   }
 
+  // Application filter (Agents + Findings). Show known apps + any seen in data.
+  const apps = useMemo(() => {
+    const s = new Set<string>(KNOWN_APPS);
+    for (const a of [...activeAgents, ...agentHistory]) if (a.application) s.add(a.application);
+    for (const f of findings) if (f.application) s.add(f.application);
+    return [...s].sort();
+  }, [activeAgents, agentHistory, findings]);
+
+  const byApp = <T extends { application?: string }>(items: T[]): T[] =>
+    appFilter === 'all' ? items : items.filter((i) => i.application === appFilter);
+
+  const shownActive = byApp(activeAgents);
+  const shownHistory = byApp(agentHistory);
+  const shownFindings = byApp(findings);
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const f of findings) c[f.severity] = (c[f.severity] ?? 0) + 1;
+    for (const f of shownFindings) c[f.severity] = (c[f.severity] ?? 0) + 1;
     return c;
-  }, [findings]);
+  }, [shownFindings]);
 
   const totalParsed = analysis
     ? Object.values(analysis.bySource).reduce((n, s) => n + s.parsed, 0)
@@ -111,8 +130,8 @@ export default function Dashboard() {
   const totalSpawned = analysis?.agents?.spawned;
 
   const tabs: { key: TabKey; label: string; badge: number }[] = [
-    { key: 'agents', label: 'Agents', badge: activeAgents.length },
-    { key: 'findings', label: 'Findings & Anomalies', badge: findings.length },
+    { key: 'agents', label: 'Agents', badge: shownActive.length },
+    { key: 'findings', label: 'Findings & Anomalies', badge: shownFindings.length },
     { key: 'schedule', label: 'Schedule', badge: schedule.length },
   ];
 
@@ -162,28 +181,46 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Tab bar */}
-      <div className="mb-6 flex gap-1 border-b border-edge">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`-mb-px flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-              tab === t.key
-                ? 'border-sky-500 text-white'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            {t.label}
-            <span
-              className={`rounded-full px-1.5 py-0.5 text-xs ${
-                tab === t.key ? 'bg-sky-500/20 text-sky-300' : 'bg-edge text-slate-500'
+      {/* Tab bar + application filter */}
+      <div className="mb-6 flex items-center justify-between border-b border-edge">
+        <div className="flex gap-1">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`-mb-px flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+                tab === t.key
+                  ? 'border-sky-500 text-white'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
-              {t.badge}
-            </span>
-          </button>
-        ))}
+              {t.label}
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-xs ${
+                  tab === t.key ? 'bg-sky-500/20 text-sky-300' : 'bg-edge text-slate-500'
+                }`}
+              >
+                {t.badge}
+              </span>
+            </button>
+          ))}
+        </div>
+        <label className="mb-1 flex items-center gap-2 text-xs text-slate-400">
+          Application
+          <select
+            value={appFilter}
+            onChange={(e) => setAppFilter(e.target.value)}
+            className="rounded-md border border-edge bg-panel px-2 py-1 text-sm text-slate-200"
+            title="Filter Agents & Findings by application"
+          >
+            <option value="all">All applications</option>
+            {apps.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {loading && <p className="text-slate-400">Loading dashboard…</p>}
@@ -194,7 +231,7 @@ export default function Dashboard() {
       )}
 
       {!loading && tab === 'agents' && (
-        <AgentsPanel active={activeAgents} history={agentHistory} />
+        <AgentsPanel active={shownActive} history={shownHistory} />
       )}
 
       {!loading && tab === 'findings' && (
@@ -208,15 +245,15 @@ export default function Dashboard() {
             ))}
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
-            {findings.map((f) => (
+            {shownFindings.map((f) => (
               <FindingCard key={f.id} f={f} />
             ))}
           </div>
-          {!error && findings.length === 0 && (
+          {!error && shownFindings.length === 0 && (
             <p className="text-slate-400">
-              No findings yet. Either recent logs show no anomalies, or the next ingestion poll
-              hasn’t run — use the Simulator to generate logs, then wait for the poller (or click
-              Analyze now).
+              No findings{appFilter !== 'all' ? ` for ${appFilter}` : ''} yet. Either recent logs
+              show no anomalies, or the next ingestion poll hasn’t run — use the Simulator to
+              generate logs, then wait for the poller (or click Analyze now).
             </p>
           )}
         </section>

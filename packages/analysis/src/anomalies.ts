@@ -1,4 +1,4 @@
-import type { ParsedLog, TransactionProtocol } from '@log/shared';
+import type { ParsedLog, ApplicationRegistry } from '@log/shared';
 import type { Cluster } from './correlate.js';
 
 /**
@@ -91,14 +91,14 @@ export function classifyAnomaly(l: ParsedLog): AnomalyCategory | undefined {
  * Group anomalous logs into per-(category, signature) clusters for reasoning.
  * The cluster `reason` carries the category label so the reasoner has context.
  */
-export function detectLogAnomalies(logs: ParsedLog[], protocol?: TransactionProtocol): Cluster[] {
+export function detectLogAnomalies(logs: ParsedLog[], registry?: ApplicationRegistry): Cluster[] {
   const groups = new Map<string, { cat: AnomalyCategory; logs: ParsedLog[] }>();
   for (const l of logs) {
-    // Transaction messages (REQUEST/ACK/RESPONSE for the installed protocol) are
+    // Transaction messages (any installed application's REQUEST/ACK/RESPONSE) are
     // analyzed by the transaction analyzer (which understands ackCode); don't also
     // flag them here on naive text — that double-counts and mis-reads domain
     // fields like ackCode=FAILED.
-    if (protocol?.eventOf(l)) continue;
+    if (registry?.isTransactionLog(l)) continue;
     const cat = classifyAnomaly(l);
     if (!cat) continue;
     const key = `${cat.category}:${l.fingerprint}`;

@@ -99,10 +99,10 @@ export async function searchLogsByEmbedding(
 export async function insertFinding(f: Finding): Promise<void> {
   const sqlc = getSql();
   await sqlc`INSERT INTO findings
-    (id, kind, severity, title, summary, confidence, sources, fingerprint,
+    (id, kind, severity, title, summary, confidence, sources, application, fingerprint,
      evidence, reasoning, recommendations, metadata, window_start, window_end, created_at, embedding)
     VALUES (${f.id}, ${f.kind}, ${f.severity}, ${f.title}, ${f.summary}, ${f.confidence},
-            ${f.sources}, ${f.fingerprint},
+            ${f.sources}, ${f.application ?? null}, ${f.fingerprint},
             ${JSON.stringify(f.evidence ?? [])}::jsonb, ${JSON.stringify(f.reasoning ?? [])}::jsonb,
             ${JSON.stringify(f.recommendations ?? [])}::jsonb, ${JSON.stringify(f.metadata ?? {})}::jsonb,
             ${f.windowStart}, ${f.windowEnd}, ${f.createdAt}, ${toVector(f.embedding)}::vector)`;
@@ -187,13 +187,14 @@ export async function upsertAgents(agents: Agent[]): Promise<void> {
   await sqlc.begin(async (tx) => {
     for (const a of agents) {
       await tx`INSERT INTO agents
-        (message_id, status, active, waiting_for, phases, phase_ts, source, log_group,
+        (message_id, application, status, active, waiting_for, phases, phase_ts, source, log_group,
          ack_code, severity, detail, spawned_at, updated_at, closed_at)
-        VALUES (${a.messageId}, ${a.status}, ${a.active}, ${a.waitingFor ?? null},
+        VALUES (${a.messageId}, ${a.application ?? null}, ${a.status}, ${a.active}, ${a.waitingFor ?? null},
                 ${JSON.stringify(a.phases)}::jsonb, ${JSON.stringify(a.phaseTs)}::jsonb, ${a.source ?? null}, ${a.logGroup ?? null},
                 ${a.ackCode ?? null}, ${a.severity ?? null}, ${a.detail ?? null},
                 ${a.spawnedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
+          application = COALESCE(agents.application, EXCLUDED.application),
           status = EXCLUDED.status, active = EXCLUDED.active,
           waiting_for = EXCLUDED.waiting_for,
           phases = EXCLUDED.phases, phase_ts = EXCLUDED.phase_ts,
@@ -243,6 +244,7 @@ function rawRowToAgent(r: Record<string, unknown>): Agent {
   const num = (v: unknown): number | undefined => (v === null || v === undefined ? undefined : Number(v));
   return {
     messageId: r.message_id as string,
+    application: (r.application ?? undefined) as string | undefined,
     status: r.status as Agent['status'],
     active: r.active as boolean,
     waitingFor: (r.waiting_for ?? undefined) as string | undefined,
@@ -427,6 +429,7 @@ function rowToFinding(r: typeof findings.$inferSelect): Finding {
     summary: r.summary,
     confidence: r.confidence,
     sources: r.sources as LogSourceType[],
+    application: (r.application ?? undefined) as string | undefined,
     fingerprint: r.fingerprint,
     evidence: (r.evidence ?? []) as Finding['evidence'],
     reasoning: (r.reasoning ?? []) as string[],
@@ -447,6 +450,7 @@ function rawRowToFinding(r: Record<string, unknown>): Finding {
     summary: r.summary as string,
     confidence: Number(r.confidence),
     sources: (r.sources ?? []) as LogSourceType[],
+    application: (r.application ?? undefined) as string | undefined,
     fingerprint: r.fingerprint as string,
     evidence: (r.evidence ?? []) as Finding['evidence'],
     reasoning: (r.reasoning ?? []) as string[],

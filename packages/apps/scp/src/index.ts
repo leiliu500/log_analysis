@@ -10,3 +10,4 @@
 export * from './logGroups.js';
 export * from './invokeApplication.js';
 export * from './transactionProtocol.js';
+export * from './application.js';

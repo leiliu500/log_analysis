@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, LogSourceType, Severity, TransactionProtocol } from '@log/shared';
+import type { Finding, ParsedLog, LogSourceType, Severity, ApplicationRegistry } from '@log/shared';
 import { loadPrompt } from '@log/shared';
 import { converseJson, embed } from './bedrock.js';
 
 export interface Transaction {
   id: string; // REQUEST.messageId == ACK/RESPONSE.initMessageId
+  /** Owning application id (e.g. 'scp', 'apiflc'). */
+  application?: string;
   logs: ParsedLog[];
   types: Set<string>;
   requestTs?: number;
@@ -13,21 +15,23 @@ export interface Transaction {
   sources: Set<LogSourceType>;
 }
 
-/** Group logs into transactions keyed by their correlation id, per the protocol. */
-export function buildTransactions(logs: ParsedLog[], protocol: TransactionProtocol): Transaction[] {
+/** Group logs into transactions keyed by correlation id, routed per application. */
+export function buildTransactions(logs: ParsedLog[], registry: ApplicationRegistry): Transaction[] {
   const byId = new Map<string, Transaction>();
   for (const log of logs) {
-    const e = protocol.eventOf(log);
+    const app = registry.forLog(log);
+    if (!app) continue;
+    const e = app.protocol.eventOf(log);
     if (!e) continue;
     let tx = byId.get(e.corrId);
     if (!tx) {
-      tx = { id: e.corrId, logs: [], types: new Set(), requestCount: 0, ackCodes: [], sources: new Set() };
+      tx = { id: e.corrId, application: app.id, logs: [], types: new Set(), requestCount: 0, ackCodes: [], sources: new Set() };
       byId.set(e.corrId, tx);
     }
     tx.logs.push(log);
     tx.types.add(e.type);
     tx.sources.add(log.source);
-    if (e.type === protocol.initial) {
+    if (e.type === app.protocol.initial) {
       tx.requestTs = log.timestamp;
       tx.requestCount += 1;
     }
@@ -51,12 +55,14 @@ export interface TransactionAnomaly {
  */
 export function transactionAnomalies(
   txs: Transaction[],
-  protocol: TransactionProtocol,
+  registry: ApplicationRegistry,
   graceMs: number,
   now: number,
 ): TransactionAnomaly[] {
   const out: TransactionAnomaly[] = [];
   for (const tx of txs) {
+    const protocol = registry.byId(tx.application)?.protocol;
+    if (!protocol) continue;
     if (!tx.types.has(protocol.initial)) continue; // orphan follow-up — initial likely in an earlier window
 
     const bad = tx.ackCodes.filter((c) => !protocol.isSuccess(c));
@@ -119,6 +125,7 @@ Sources: ${[...tx.sources].join(', ')}`;
     summary: mf.summary,
     confidence: Math.max(0, Math.min(1, mf.confidence ?? 0.7)),
     sources: [...tx.sources],
+    application: tx.application,
     fingerprint: `tx:${tx.id}`,
     evidence: tx.logs.slice(0, 10).map((l) => ({
       logId: l.id,

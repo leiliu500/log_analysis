@@ -34,6 +34,7 @@ export const findings = pgTable('findings', {
   summary: text('summary').notNull(),
   confidence: doublePrecision('confidence').notNull().default(0),
   sources: text('sources').array().notNull().default([]),
+  application: text('application'),
   fingerprint: text('fingerprint').notNull(),
   evidence: jsonb('evidence').notNull().default([]),
   reasoning: jsonb('reasoning').notNull().default([]),

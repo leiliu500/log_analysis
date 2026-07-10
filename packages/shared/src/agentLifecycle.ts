@@ -19,6 +19,8 @@ export type AgentLifecycleStatus =
 export interface Agent {
   /** Correlation id — the transaction's messageId. */
   messageId: string;
+  /** Owning application id (e.g. 'scp', 'apiflc'). */
+  application?: string;
   status: AgentLifecycleStatus;
   active: boolean;
   /** The phase this agent is currently awaiting (protocol phase name), while active. */

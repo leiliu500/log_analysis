@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Agent, Finding, LogSourceType, ParsedLog, Severity, TransactionProtocol } from '@log/shared';
+import type { Agent, Finding, LogSourceType, ParsedLog, Severity, ApplicationRegistry } from '@log/shared';
 import {
   getActiveAgents,
   getAgentsByMessageIds,
@@ -28,15 +28,27 @@ export interface AgentEvent {
   ackCode?: string;
   source?: string;
   logGroup?: string;
+  /** Owning application id (which protocol produced this event). */
+  application: string;
 }
 
-/** Pull the ordered transaction events out of a parsed window, per the protocol. */
-export function agentEvents(parsed: ParsedLog[], protocol: TransactionProtocol): AgentEvent[] {
+/** Pull the ordered transaction events out of a parsed window, across all apps. */
+export function agentEvents(parsed: ParsedLog[], registry: ApplicationRegistry): AgentEvent[] {
   const out: AgentEvent[] = [];
   for (const l of parsed) {
-    const e = protocol.eventOf(l);
+    const app = registry.forLog(l);
+    if (!app) continue;
+    const e = app.protocol.eventOf(l);
     if (!e) continue;
-    out.push({ type: e.type, corrId: e.corrId, ts: l.timestamp, ackCode: e.ackCode, source: l.source, logGroup: l.stream });
+    out.push({
+      type: e.type,
+      corrId: e.corrId,
+      ts: l.timestamp,
+      ackCode: e.ackCode,
+      source: l.source,
+      logGroup: l.stream,
+      application: app.id,
+    });
   }
   return out.sort((a, b) => a.ts - b.ts);
 }
@@ -45,7 +57,7 @@ export interface StepOptions {
   now: number;
   /** Close a still-active agent this long after its last activity. */
   timeoutMs: number;
-  protocol: TransactionProtocol;
+  registry: ApplicationRegistry;
 }
 
 export interface StepResult {
@@ -64,10 +76,15 @@ export interface StepResult {
  * are immutable (idempotent across overlapping poll windows).
  */
 export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptions): StepResult {
-  const { now, timeoutMs, protocol } = opts;
+  const { now, timeoutMs, registry } = opts;
+  const protoFor = (appId?: string) => registry.byId(appId)?.protocol;
   const agents = new Map<string, Agent>();
   for (const a of known) {
-    agents.set(a.messageId, { ...a, phaseTs: { ...(a.phaseTs ?? {}) }, phases: a.phases ?? protocol.allPhases });
+    agents.set(a.messageId, {
+      ...a,
+      phaseTs: { ...(a.phaseTs ?? {}) },
+      phases: a.phases ?? protoFor(a.application)?.allPhases ?? [],
+    });
   }
   const changed = new Set<string>();
   let spawned = 0;
@@ -89,12 +106,14 @@ export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptio
     if (!a) {
       // Spawn — on the initiating message, or lazily if a later phase arrives
       // first (its initiating message was in an earlier, already-aged-out window).
+      const sp = protoFor(e.application);
       a = {
         messageId: e.corrId,
+        application: e.application,
         status: 'awaiting',
         active: true,
-        waitingFor: protocol.phases[0],
-        phases: protocol.allPhases,
+        waitingFor: sp?.phases[0],
+        phases: sp?.allPhases ?? [],
         phaseTs: {},
         source: e.source,
         logGroup: e.logGroup,
@@ -111,12 +130,13 @@ export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptio
     if (e.ackCode) a.ackCode = e.ackCode;
 
     // The initiating phase only records its timestamp; the follow-up phases drive
-    // the state machine.
-    if (e.type !== protocol.initial && protocol.phases.includes(e.type)) {
-      if (e.ackCode && !protocol.isSuccess(e.ackCode)) {
+    // the state machine (resolved via the agent's owning application protocol).
+    const proto = protoFor(a.application ?? e.application);
+    if (proto && e.type !== proto.initial && proto.phases.includes(e.type)) {
+      if (e.ackCode && !proto.isSuccess(e.ackCode)) {
         close(a, 'failed', `${e.type} failed — ackCode ${e.ackCode}`, 'high');
       } else {
-        const remaining = protocol.phases.filter((p) => a!.phaseTs[p] === undefined);
+        const remaining = proto.phases.filter((p) => a!.phaseTs[p] === undefined);
         if (remaining.length === 0) {
           close(a, 'completed', `${e.type} received`);
         } else {
@@ -165,7 +185,7 @@ const FINDING_DEDUP_MS = 30 * 60_000;
  */
 export async function advanceAgents(
   parsed: ParsedLog[],
-  protocol: TransactionProtocol,
+  registry: ApplicationRegistry,
   opts: { now?: number; timeoutMs?: number; windowMs?: number } = {},
 ): Promise<AdvanceResult> {
   const now = opts.now ?? Date.now();
@@ -173,7 +193,7 @@ export async function advanceAgents(
   const timeoutMs =
     opts.timeoutMs ?? Number(process.env.INGEST_AGENT_TIMEOUT_MINUTES ?? 30) * 60_000;
 
-  const events = agentEvents(parsed, protocol);
+  const events = agentEvents(parsed, registry);
   const ids = [...new Set(events.map((e) => e.corrId))];
   const [active, matching] = await Promise.all([
     getActiveAgents(2000),
@@ -182,7 +202,7 @@ export async function advanceAgents(
   const known = new Map<string, Agent>();
   for (const a of [...active, ...matching]) known.set(a.messageId, a);
 
-  const step = stepAgents(events, [...known.values()], { now, timeoutMs, protocol });
+  const step = stepAgents(events, [...known.values()], { now, timeoutMs, registry });
 
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
   await upsertAgents(toPersist);
@@ -233,6 +253,7 @@ function agentFinding(a: Agent, now: number, windowMs: number): Finding {
       (failed ? `Transaction ${a.messageId} failed.` : `Transaction ${a.messageId} timed out.`),
     confidence: 0.9,
     sources: a.source ? [a.source as LogSourceType] : [],
+    application: a.application,
     fingerprint: `tx:${a.messageId}`,
     evidence: [],
     reasoning: [

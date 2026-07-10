@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/shared" },
     { "path": "packages/apps/scp" },
+    { "path": "packages/apps/apiflc" },
     { "path": "packages/db" },
     { "path": "packages/analysis" },
     { "path": "packages/ingestion" },

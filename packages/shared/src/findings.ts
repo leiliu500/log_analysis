@@ -32,6 +32,8 @@ export const Finding = z.object({
   /** Model/heuristic confidence 0..1. */
   confidence: z.number().min(0).max(1),
   sources: z.array(LogSourceType),
+  /** Owning application id (e.g. 'scp', 'apiflc'), when the finding is app-scoped. */
+  application: z.string().optional(),
   fingerprint: z.string(),
   evidence: z.array(Evidence).default([]),
   /** Structured reasoning trace (steps the agent took). */

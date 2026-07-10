@@ -16,6 +16,7 @@ export function FindingCard({ f }: { f: Finding }) {
           {f.severity}
         </span>
         <span className="text-xs text-slate-500">
+          {f.application ? `${f.application} · ` : ''}
           {f.kind} · {(f.confidence * 100).toFixed(0)}% conf · {f.sources.join(', ')}
         </span>
       </div>

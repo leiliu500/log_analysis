@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, RawLogRecord, Severity, TransactionProtocol } from '@log/shared';
+import type { Finding, ParsedLog, RawLogRecord, Severity, ApplicationRegistry } from '@log/shared';
 import { insertParsedLogs, insertFinding, insertAlert, findingExistsByFingerprint } from '@log/db';
 import { parseBatch } from './parser.js';
 import { scoreAndLearn } from './learn.js';
@@ -25,8 +25,8 @@ export interface AgenticOptions {
   concurrency?: number;
   /** Hard cap on finding-agents per run (backstop against a flood). */
   maxAgents?: number;
-  /** Transaction protocol whose messages are excluded from the finding path. */
-  protocol?: TransactionProtocol;
+  /** Application registry; transaction messages are excluded from the finding path. */
+  registry?: ApplicationRegistry;
 }
 
 export type AgentUnitKind = 'error' | 'correlation';
@@ -66,11 +66,11 @@ export type AgentUnit = { kind: AgentUnitKind; cluster: Cluster };
  */
 export function planAgentUnits(
   parsed: ParsedLog[],
-  opts: { windowMs?: number; protocol?: TransactionProtocol } = {},
+  opts: { windowMs?: number; registry?: ApplicationRegistry } = {},
 ): AgentUnit[] {
   const windowMs = opts.windowMs ?? 5 * 60_000;
   const units: AgentUnit[] = [];
-  for (const cluster of detectLogAnomalies(parsed, opts.protocol)) units.push({ kind: 'error', cluster });
+  for (const cluster of detectLogAnomalies(parsed, opts.registry)) units.push({ kind: 'error', cluster });
   for (const cluster of correlate(parsed, windowMs).filter((c) => c.sources.length >= 2)) {
     units.push({ kind: 'correlation', cluster });
   }
@@ -82,6 +82,7 @@ interface AgentCtx {
   /** Fingerprints claimed this run (in-memory guard against concurrent dup work). */
   claimed: Set<string>;
   alert: (f: Finding) => Promise<void>;
+  registry?: ApplicationRegistry;
 }
 
 function unitKey(unit: AgentUnit): { key: string; label: string } {
@@ -101,6 +102,7 @@ async function runAgent(unit: AgentUnit, ctx: AgentCtx): Promise<{ outcome: Agen
       return { outcome: { kind: unit.kind, key, label, status: 'duplicate' } };
     }
     const finding = await reasonAboutCluster(unit.cluster);
+    finding.application = ctx.registry?.forLog(unit.cluster.logs[0]!)?.id;
     await insertFinding(finding);
     await ctx.alert(finding);
     return {
@@ -169,10 +171,11 @@ export async function dispatchAgentic(records: RawLogRecord[], opts: AgenticOpti
         });
       }
     },
+    registry: opts.registry,
   };
 
   // Non-transaction anomalies → one finding-agent each, bounded fan-out.
-  const units = planAgentUnits(parsed, { windowMs, protocol: opts.protocol }).slice(0, maxAgents);
+  const units = planAgentUnits(parsed, { windowMs, registry: opts.registry }).slice(0, maxAgents);
   const settled = await runPool(units, concurrency, (u) => runAgent(u, ctx));
   const outcomes = settled.map((s) => s.outcome);
   const findings = settled.map((s) => s.finding).filter((f): f is Finding => !!f);

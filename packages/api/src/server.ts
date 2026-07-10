@@ -18,8 +18,8 @@ import {
 import { runPipeline } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
 import { simulate } from '@log/simulator';
-import { analyzeAllSources } from '@log/agents';
-import { invokeApplication, scpTransactionProtocol } from '@log/app-scp';
+import { analyzeAllSources, applicationRegistry } from '@log/agents';
+import { invokeApplication } from '@log/app-scp';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
 import { handleChat } from './chat.js';
 import { handleSimulatePrompt } from './simulate.js';
@@ -176,7 +176,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
       const b = AnalyzeBody.parse(req.body);
       const since = b.since ?? Date.now() - 15 * 60_000;
       const records = await connectorFor(b.source).pull({ since, limit: b.limit });
-      const result = await runPipeline(records, { embedLogs: b.embedLogs, protocol: scpTransactionProtocol });
+      const result = await runPipeline(records, { embedLogs: b.embedLogs, registry: applicationRegistry });
       return {
         parsed: result.parsed,
         anomalies: result.anomalies.length,

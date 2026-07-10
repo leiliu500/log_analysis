@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, RawLogRecord, Severity, TransactionProtocol } from '@log/shared';
+import type { Finding, ParsedLog, RawLogRecord, Severity, ApplicationRegistry } from '@log/shared';
 import { insertParsedLogs, insertFinding, insertAlert, findingExistsByFingerprint } from '@log/db';
 import { parseBatch } from './parser.js';
 import { scoreAndLearn, isAnomalous, type AnomalyScore } from './learn.js';
@@ -19,10 +19,10 @@ export interface PipelineOptions {
   /** Grace period before an incomplete transaction is flagged (ms). */
   txGraceMs?: number;
   /**
-   * Transaction protocol for the transaction-analysis stage (B). When omitted,
+   * Application registry for the transaction-analysis stage (B). When omitted,
    * transaction detection is skipped and only log/correlation anomalies run.
    */
-  protocol?: TransactionProtocol;
+  registry?: ApplicationRegistry;
 }
 
 export interface PipelineResult {
@@ -100,6 +100,7 @@ export async function runPipeline(
     if (await isDuplicate(fp)) return;
     try {
       const finding = await reasonAboutCluster(cluster);
+      finding.application = opts.registry?.forLog(cluster.logs[0]!)?.id;
       await insertFinding(finding);
       await alert(finding);
       findings.push(finding);
@@ -110,16 +111,16 @@ export async function runPipeline(
 
   // A) Production log anomalies (errors, exceptions, timeouts, 5xx/4xx, auth,
   //    rate-limit, resource exhaustion, crashes, data-integrity, latency).
-  for (const cluster of detectLogAnomalies(parsed, opts.protocol).slice(0, maxReasoned)) {
+  for (const cluster of detectLogAnomalies(parsed, opts.registry).slice(0, maxReasoned)) {
     await reasonCluster(cluster);
   }
 
-  // B) Transaction anomalies (incomplete / duplicate / rejected), per the
-  //    installed protocol. Skipped when no protocol is supplied.
-  if (opts.protocol) {
+  // B) Transaction anomalies (incomplete / duplicate / rejected), per each
+  //    application's protocol. Skipped when no registry is supplied.
+  if (opts.registry) {
     for (const { tx, reason } of transactionAnomalies(
-      buildTransactions(parsed, opts.protocol),
-      opts.protocol,
+      buildTransactions(parsed, opts.registry),
+      opts.registry,
       txGraceMs,
       now,
     ).slice(0, maxReasoned)) {
