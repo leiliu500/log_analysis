@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, RawLogRecord, Severity } from '@log/shared';
+import type { Finding, ParsedLog, RawLogRecord, Severity, TransactionProtocol } from '@log/shared';
 import { insertParsedLogs, insertFinding, insertAlert, findingExistsByFingerprint } from '@log/db';
 import { parseBatch } from './parser.js';
 import { scoreAndLearn, isAnomalous, type AnomalyScore } from './learn.js';
@@ -16,8 +16,13 @@ export interface PipelineOptions {
   embedLogs?: boolean;
   /** Max clusters/transactions to send to the reasoning model per run. */
   maxReasoned?: number;
-  /** Grace period before a request lacking ACK/RESPONSE is flagged (ms). */
+  /** Grace period before an incomplete transaction is flagged (ms). */
   txGraceMs?: number;
+  /**
+   * Transaction protocol for the transaction-analysis stage (B). When omitted,
+   * transaction detection is skipped and only log/correlation anomalies run.
+   */
+  protocol?: TransactionProtocol;
 }
 
 export interface PipelineResult {
@@ -105,23 +110,28 @@ export async function runPipeline(
 
   // A) Production log anomalies (errors, exceptions, timeouts, 5xx/4xx, auth,
   //    rate-limit, resource exhaustion, crashes, data-integrity, latency).
-  for (const cluster of detectLogAnomalies(parsed).slice(0, maxReasoned)) {
+  for (const cluster of detectLogAnomalies(parsed, opts.protocol).slice(0, maxReasoned)) {
     await reasonCluster(cluster);
   }
 
-  // B) Transaction anomalies (incomplete / duplicate / rejected cashMessages).
-  for (const { tx, reason } of transactionAnomalies(buildTransactions(parsed), txGraceMs, now).slice(
-    0,
-    maxReasoned,
-  )) {
-    if (await isDuplicate(`tx:${tx.id}`)) continue;
-    try {
-      const finding = await reasonAboutTransaction(tx, reason, now, windowMs);
-      await insertFinding(finding);
-      await alert(finding);
-      findings.push(finding);
-    } catch (err) {
-      console.error('transaction reasoning failed', tx.id, err);
+  // B) Transaction anomalies (incomplete / duplicate / rejected), per the
+  //    installed protocol. Skipped when no protocol is supplied.
+  if (opts.protocol) {
+    for (const { tx, reason } of transactionAnomalies(
+      buildTransactions(parsed, opts.protocol),
+      opts.protocol,
+      txGraceMs,
+      now,
+    ).slice(0, maxReasoned)) {
+      if (await isDuplicate(`tx:${tx.id}`)) continue;
+      try {
+        const finding = await reasonAboutTransaction(tx, reason, now, windowMs);
+        await insertFinding(finding);
+        await alert(finding);
+        findings.push(finding);
+      } catch (err) {
+        console.error('transaction reasoning failed', tx.id, err);
+      }
     }
   }
 

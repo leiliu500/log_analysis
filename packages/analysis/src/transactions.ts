@@ -1,29 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, LogSourceType, Severity } from '@log/shared';
+import type { Finding, ParsedLog, LogSourceType, Severity, TransactionProtocol } from '@log/shared';
 import { loadPrompt } from '@log/shared';
 import { converseJson, embed } from './bedrock.js';
-
-/** Message metadata pulled from FRB cashMessage XML logs. */
-export interface TxMeta {
-  type?: string; // REQUEST | ACK | RESPONSE
-  messageId?: string;
-  initMessageId?: string;
-  ackCode?: string;
-}
-
-function xmlTag(raw: string, tag: string): string | undefined {
-  const m = raw.match(new RegExp(`<(?:[\\w.-]+:)?${tag}>\\s*([^<]+?)\\s*</(?:[\\w.-]+:)?${tag}>`, 'i'));
-  return m ? m[1] : undefined;
-}
-
-export function txMetaOf(log: ParsedLog): TxMeta {
-  return {
-    type: xmlTag(log.raw, 'messageType')?.toUpperCase(),
-    messageId: xmlTag(log.raw, 'messageId'),
-    initMessageId: xmlTag(log.raw, 'initMessageId'),
-    ackCode: xmlTag(log.raw, 'ackCode'),
-  };
-}
 
 export interface Transaction {
   id: string; // REQUEST.messageId == ACK/RESPONSE.initMessageId
@@ -35,32 +13,28 @@ export interface Transaction {
   sources: Set<LogSourceType>;
 }
 
-/** Group logs into transactions keyed by their correlation id. */
-export function buildTransactions(logs: ParsedLog[]): Transaction[] {
+/** Group logs into transactions keyed by their correlation id, per the protocol. */
+export function buildTransactions(logs: ParsedLog[], protocol: TransactionProtocol): Transaction[] {
   const byId = new Map<string, Transaction>();
   for (const log of logs) {
-    const m = txMetaOf(log);
-    if (!m.type) continue;
-    const id = m.type === 'REQUEST' ? m.messageId : m.initMessageId;
-    if (!id) continue;
-    let tx = byId.get(id);
+    const e = protocol.eventOf(log);
+    if (!e) continue;
+    let tx = byId.get(e.corrId);
     if (!tx) {
-      tx = { id, logs: [], types: new Set(), requestCount: 0, ackCodes: [], sources: new Set() };
-      byId.set(id, tx);
+      tx = { id: e.corrId, logs: [], types: new Set(), requestCount: 0, ackCodes: [], sources: new Set() };
+      byId.set(e.corrId, tx);
     }
     tx.logs.push(log);
-    tx.types.add(m.type);
+    tx.types.add(e.type);
     tx.sources.add(log.source);
-    if (m.type === 'REQUEST') {
+    if (e.type === protocol.initial) {
       tx.requestTs = log.timestamp;
       tx.requestCount += 1;
     }
-    if (m.ackCode) tx.ackCodes.push(m.ackCode);
+    if (e.ackCode) tx.ackCodes.push(e.ackCode);
   }
   return [...byId.values()];
 }
-
-const OK_CODES = new Set(['OK', 'SUCCESS', 'PROCESSED_SUCCESSFULLY', 'ACCEPTED', 'COMPLETE', 'COMPLETED']);
 
 export interface TransactionAnomaly {
   tx: Transaction;
@@ -68,36 +42,36 @@ export interface TransactionAnomaly {
 }
 
 /**
- * Detect anomalous transactions:
- *  - rejected: an ACK/RESPONSE carries a non-success ackCode
- *  - duplicate: the same REQUEST messageId occurs more than once (replay/resend)
- *  - incomplete: a REQUEST (past the grace window) is missing its ACK/RESPONSE
- * A complete, successful transaction (REQUEST + ACK + RESPONSE, ackCode OK) is
- * normal and produces nothing.
+ * Detect anomalous transactions against a {@link TransactionProtocol}:
+ *  - rejected: a phase carries a non-success ackCode
+ *  - duplicate: the same initiating messageId occurs more than once (replay/resend)
+ *  - incomplete: the initiating message (past the grace window) is missing a phase
+ * A complete, successful transaction (all phases present, ackCodes OK) is normal
+ * and produces nothing.
  */
 export function transactionAnomalies(
   txs: Transaction[],
+  protocol: TransactionProtocol,
   graceMs: number,
   now: number,
 ): TransactionAnomaly[] {
   const out: TransactionAnomaly[] = [];
   for (const tx of txs) {
-    if (!tx.types.has('REQUEST')) continue; // orphan ACK/RESPONSE — request likely in an earlier window
+    if (!tx.types.has(protocol.initial)) continue; // orphan follow-up — initial likely in an earlier window
 
-    const bad = tx.ackCodes.filter((c) => !OK_CODES.has(c.toUpperCase()));
+    const bad = tx.ackCodes.filter((c) => !protocol.isSuccess(c));
     if (bad.length) {
       out.push({ tx, reason: `Transaction rejected/failed — ackCode ${[...new Set(bad)].join(', ')}.` });
       continue;
     }
     if (tx.requestCount > 1) {
-      out.push({ tx, reason: `Duplicate REQUEST — ${tx.requestCount} requests share messageId ${tx.id} (possible replay/resend).` });
+      out.push({ tx, reason: `Duplicate ${protocol.initial} — ${tx.requestCount} requests share messageId ${tx.id} (possible replay/resend).` });
       continue;
     }
     if (tx.requestTs && now - tx.requestTs < graceMs) continue; // too recent to judge
-    const missing = ['ACK', 'RESPONSE'].filter((t) => !tx.types.has(t));
+    const missing = protocol.phases.filter((p) => !tx.types.has(p));
     if (missing.length) {
-      const what = missing.map((m) => (m === 'ACK' ? 'acknowledged' : 'processed')).join(' or ');
-      out.push({ tx, reason: `Request not ${what} — missing ${missing.join(' and ')}.` });
+      out.push({ tx, reason: `Request incomplete — missing ${missing.join(' and ')}.` });
     }
   }
   return out;

@@ -170,18 +170,18 @@ export async function upsertAgents(agents: Agent[]): Promise<void> {
   await sqlc.begin(async (tx) => {
     for (const a of agents) {
       await tx`INSERT INTO agents
-        (message_id, status, active, source, log_group, request_ts, ack_ts, response_ts,
+        (message_id, status, active, waiting_for, phases, phase_ts, source, log_group,
          ack_code, severity, detail, spawned_at, updated_at, closed_at)
-        VALUES (${a.messageId}, ${a.status}, ${a.active}, ${a.source ?? null}, ${a.logGroup ?? null},
-                ${a.requestTs ?? null}, ${a.ackTs ?? null}, ${a.responseTs ?? null}, ${a.ackCode ?? null},
-                ${a.severity ?? null}, ${a.detail ?? null}, ${a.spawnedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
+        VALUES (${a.messageId}, ${a.status}, ${a.active}, ${a.waitingFor ?? null},
+                ${sqlc.json(a.phases)}, ${sqlc.json(a.phaseTs)}, ${a.source ?? null}, ${a.logGroup ?? null},
+                ${a.ackCode ?? null}, ${a.severity ?? null}, ${a.detail ?? null},
+                ${a.spawnedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
           status = EXCLUDED.status, active = EXCLUDED.active,
+          waiting_for = EXCLUDED.waiting_for,
+          phases = EXCLUDED.phases, phase_ts = EXCLUDED.phase_ts,
           source = COALESCE(agents.source, EXCLUDED.source),
           log_group = COALESCE(agents.log_group, EXCLUDED.log_group),
-          request_ts = COALESCE(agents.request_ts, EXCLUDED.request_ts),
-          ack_ts = COALESCE(agents.ack_ts, EXCLUDED.ack_ts),
-          response_ts = COALESCE(agents.response_ts, EXCLUDED.response_ts),
           ack_code = COALESCE(EXCLUDED.ack_code, agents.ack_code),
           severity = EXCLUDED.severity, detail = EXCLUDED.detail,
           updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
@@ -228,11 +228,11 @@ function rawRowToAgent(r: Record<string, unknown>): Agent {
     messageId: r.message_id as string,
     status: r.status as Agent['status'],
     active: r.active as boolean,
+    waitingFor: (r.waiting_for ?? undefined) as string | undefined,
+    phases: (r.phases as string[] | null) ?? [],
+    phaseTs: (r.phase_ts as Record<string, number> | null) ?? {},
     source: (r.source ?? undefined) as string | undefined,
     logGroup: (r.log_group ?? undefined) as string | undefined,
-    requestTs: num(r.request_ts),
-    ackTs: num(r.ack_ts),
-    responseTs: num(r.response_ts),
     ackCode: (r.ack_code ?? undefined) as string | undefined,
     severity: (r.severity ?? undefined) as string | undefined,
     detail: (r.detail ?? undefined) as string | undefined,

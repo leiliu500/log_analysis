@@ -41,7 +41,7 @@ deploy the whole thing to AWS.
 | 7 | Chatbot, **scoped** (not global) findings | [packages/api/src/chat.ts](packages/api/src/chat.ts), [web/app/chat](web/app/chat) |
 | 8 | Simulator agent writes to all sinks | [packages/simulator/src/simulator.ts](packages/simulator/src/simulator.ts) |
 | 9 | Chatbot triggers simulator w/ sample req/resp | intent `simulate_logs` in [chat.ts](packages/api/src/chat.ts), UI [web/app/simulate](web/app/simulate) |
-| 10 | Chatbot triggers real app endpoint | intent `invoke_application` → [scp.ts](packages/agents/src/scp.ts) |
+| 10 | Chatbot triggers real app endpoint | intent `invoke_application` → [invokeApplication.ts](packages/apps/scp/src/invokeApplication.ts) |
 | 11 | Supervisor parses/extracts/routes to collaborator/app (e.g. scp) | [supervisor.ts](packages/agents/src/supervisor.ts) + [infra/bedrock.tf](infra/bedrock.tf) |
 | 12 | Terraform to deploy to AWS | [infra/](infra) |
 | 13 | TypeScript | entire codebase |
@@ -57,6 +57,7 @@ packages/
   agents/      supervisor routing, app invoker, Bedrock action-group + poller Lambdas
   simulator/   simulator agent (generate + write logs)
   api/         Fastify API (findings, logs, chat, simulate, invoke-app, analyze)
+  apps/scp/    SCP application: its log groups + downstream-app invoker (@log/app-scp)
 web/           Next.js dashboard + scoped chatbot + simulator UI
 prompts/       externalized LLM system prompts (.md), loaded via loadPrompt()
 infra/         Terraform: VPC, RDS, Bedrock agents/flow, Lambda, ECS/ALB, IAM

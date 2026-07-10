@@ -1,5 +1,5 @@
 {
-  "name": "@log/simulator",
+  "name": "@log/app-scp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,12 +13,10 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "start": "tsx src/cli.ts",
+    "test": "node --test --import tsx ./src/*.test.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@log/app-scp": "*",
-    "@log/ingestion": "*",
     "@log/shared": "*"
   },
   "devDependencies": {

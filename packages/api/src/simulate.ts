@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { SimulateRequest, parseLogGroup, loadPrompt, type RouteDecision, type SimulateResult } from '@log/shared';
+import { SimulateRequest, loadPrompt, type RouteDecision, type SimulateResult } from '@log/shared';
+import { parseLogGroup } from '@log/app-scp';
 import { converseJson } from '@log/analysis';
 import { routeRequest } from '@log/agents';
 import { simulate, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/simulator';

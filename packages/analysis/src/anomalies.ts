@@ -1,6 +1,5 @@
-import type { ParsedLog } from '@log/shared';
+import type { ParsedLog, TransactionProtocol } from '@log/shared';
 import type { Cluster } from './correlate.js';
-import { txMetaOf } from './transactions.js';
 
 /**
  * Production-anomaly taxonomy. Each log is classified into at most one category;
@@ -92,13 +91,14 @@ export function classifyAnomaly(l: ParsedLog): AnomalyCategory | undefined {
  * Group anomalous logs into per-(category, signature) clusters for reasoning.
  * The cluster `reason` carries the category label so the reasoner has context.
  */
-export function detectLogAnomalies(logs: ParsedLog[]): Cluster[] {
+export function detectLogAnomalies(logs: ParsedLog[], protocol?: TransactionProtocol): Cluster[] {
   const groups = new Map<string, { cat: AnomalyCategory; logs: ParsedLog[] }>();
   for (const l of logs) {
-    // cashMessage REQUEST/ACK/RESPONSE are analyzed by the transaction analyzer
-    // (which understands ackCode); don't also flag them here on naive text —
-    // that double-counts and mis-reads domain fields like ackCode=FAILED.
-    if (txMetaOf(l).type) continue;
+    // Transaction messages (REQUEST/ACK/RESPONSE for the installed protocol) are
+    // analyzed by the transaction analyzer (which understands ackCode); don't also
+    // flag them here on naive text — that double-counts and mis-reads domain
+    // fields like ackCode=FAILED.
+    if (protocol?.eventOf(l)) continue;
     const cat = classifyAnomaly(l);
     if (!cat) continue;
     const key = `${cat.category}:${l.fingerprint}`;

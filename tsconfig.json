@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/shared" },
+    { "path": "packages/apps/scp" },
     { "path": "packages/db" },
     { "path": "packages/analysis" },
     { "path": "packages/ingestion" },

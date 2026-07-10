@@ -5,6 +5,7 @@ COPY package.json package-lock.json* tsconfig*.json ./
 COPY packages ./packages
 RUN npm install --workspaces --include-workspace-root
 RUN npm run build --workspace @log/shared \
+  && npm run build --workspace @log/app-scp \
   && npm run build --workspace @log/db \
   && npm run build --workspace @log/analysis \
   && npm run build --workspace @log/ingestion \

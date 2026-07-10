@@ -15,7 +15,8 @@ import {
   searchLogsByEmbedding,
   recentFindings,
 } from '@log/db';
-import { routeRequest, invokeApplication } from '@log/agents';
+import { routeRequest } from '@log/agents';
+import { invokeApplication } from '@log/app-scp';
 import { simulate } from '@log/simulator';
 import { buildSimulateRequest } from './simulate.js';
 import { answerLogQuestion } from './analyze.js';

@@ -18,6 +18,7 @@
   "dependencies": {
     "@aws-sdk/client-bedrock-agent-runtime": "^3.658.0",
     "@log/analysis": "*",
+    "@log/app-scp": "*",
     "@log/db": "*",
     "@log/ingestion": "*",
     "@log/shared": "*",

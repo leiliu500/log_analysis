@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { invokeApplication } from './scp.js';
+import { invokeApplication } from './invokeApplication.js';
 
 /** Start a throwaway server that captures the request it receives. */
 async function capture(): Promise<{ url: string; got: Promise<{ contentType: string; body: string }>; close: () => void }> {

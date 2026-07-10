@@ -41,9 +41,8 @@ function Pip({ label, state }: { label: string; state: 'done' | 'wait' | 'fail' 
   );
 }
 
-/** One active agent card, showing REQUEST/ACK/RESPONSE progress. */
+/** One active agent card, showing the protocol's phase progress. */
 function AgentCard({ a }: { a: Agent }) {
-  const awaitingResp = a.status === 'awaiting_response';
   return (
     <div className="rounded-xl border border-sky-700/60 bg-panel p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -55,13 +54,18 @@ function AgentCard({ a }: { a: Agent }) {
       <div className="mb-2 truncate font-mono text-sm text-white" title={a.messageId}>
         {a.messageId}
       </div>
-      <div className="mb-2 grid grid-cols-3 gap-2">
-        <Pip label="request" state="done" />
-        <Pip label="ack" state={awaitingResp ? 'done' : 'wait'} />
-        <Pip label="response" state={awaitingResp ? 'wait' : 'idle'} />
+      <div
+        className="mb-2 grid gap-2"
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, a.phases.length)}, minmax(0, 1fr))` }}
+      >
+        {a.phases.map((p) => {
+          const done = a.phaseTs?.[p] !== undefined;
+          const state = done ? 'done' : p === a.waitingFor ? 'wait' : 'idle';
+          return <Pip key={p} label={p.toLowerCase()} state={state} />;
+        })}
       </div>
       <div className="text-[11px] text-slate-400">
-        {a.status === 'awaiting_ack' ? 'waiting for ACK' : 'ACK ok — waiting for RESPONSE'}
+        {a.waitingFor ? `waiting for ${a.waitingFor}` : 'in progress'}
         {a.logGroup ? <span className="text-slate-600"> · {a.logGroup}</span> : null}
       </div>
     </div>
@@ -77,7 +81,7 @@ export function AgentsPanel({ active, history }: { active: Agent[]; history: Age
           {active.length}
         </span>
         <span className="text-xs text-slate-500">
-          one agent per in-flight request — waits for ACK then RESPONSE
+          one agent per in-flight transaction — waits through each protocol phase in order
         </span>
       </div>
 
@@ -105,9 +109,7 @@ export function AgentsPanel({ active, history }: { active: Agent[]; history: Age
               <tr className="border-b border-edge">
                 <th className="px-3 py-2">messageId</th>
                 <th className="px-3 py-2">final status</th>
-                <th className="px-3 py-2">REQUEST</th>
-                <th className="px-3 py-2">ACK</th>
-                <th className="px-3 py-2">RESPONSE</th>
+                <th className="px-3 py-2">phases</th>
                 <th className="px-3 py-2">ackCode</th>
                 <th className="px-3 py-2">detail</th>
                 <th className="px-3 py-2">closed</th>
@@ -122,9 +124,14 @@ export function AgentsPanel({ active, history }: { active: Agent[]; history: Age
                       {a.status}
                     </span>
                   </td>
-                  <td className="px-3 py-1.5">{clock(a.requestTs)}</td>
-                  <td className="px-3 py-1.5">{clock(a.ackTs)}</td>
-                  <td className="px-3 py-1.5">{clock(a.responseTs)}</td>
+                  <td className="px-3 py-1.5 text-slate-400">
+                    {a.phases.map((p, i) => (
+                      <span key={p}>
+                        {i > 0 ? <span className="text-slate-600"> · </span> : null}
+                        <span className="text-slate-500">{p}</span> {clock(a.phaseTs?.[p])}
+                      </span>
+                    ))}
+                  </td>
                   <td
                     className={`px-3 py-1.5 ${
                       a.ackCode && /fail|reject|error|nack/i.test(a.ackCode) ? 'text-red-400' : 'text-slate-400'

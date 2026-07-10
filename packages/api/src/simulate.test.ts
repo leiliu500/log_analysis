@@ -8,7 +8,7 @@ import {
   splitInstructions,
   separateSamplesAndInstructions,
 } from './simulate.js';
-import { parseLogGroup, resolveLogGroup } from '@log/shared';
+import { parseLogGroup, resolveLogGroup } from '@log/app-scp';
 
 const REQ4 =
   'simulate 3 request/ack/response sets with message_id=001 to 004. Make sure the first 3 request/ack/response with success and no error';

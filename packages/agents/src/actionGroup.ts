@@ -9,7 +9,7 @@ import { searchFindingsByEmbedding, recentFindings } from '@log/db';
 import { connectorFor } from '@log/ingestion';
 import { simulate } from '@log/simulator';
 import { SimulateRequest, InvokeAppRequest, type LogSourceType } from '@log/shared';
-import { invokeApplication } from './scp.js';
+import { invokeApplication, scpTransactionProtocol } from '@log/app-scp';
 
 interface BedrockAgentEvent {
   actionGroup: string;
@@ -65,7 +65,10 @@ export async function handler(event: BedrockAgentEvent): Promise<unknown> {
         const since = Number(params.since ?? Date.now() - 15 * 60_000);
         const connector = connectorFor(source);
         const records = await connector.pull({ since, limit: Number(params.limit ?? 1000) });
-        const result = await runPipeline(records, { embedLogs: params.embed === 'true' });
+        const result = await runPipeline(records, {
+          embedLogs: params.embed === 'true',
+          protocol: scpTransactionProtocol,
+        });
         return envelope(event, 200, {
           parsed: result.parsed,
           anomalies: result.anomalies.length,

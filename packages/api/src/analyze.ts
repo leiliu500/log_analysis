@@ -2,6 +2,7 @@ import type { RouteDecision, ParsedLog } from '@log/shared';
 import { loadPrompt } from '@log/shared';
 import { converse, parseBatch } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
+import { scpMessageMeta, isScpAckSuccess } from '@log/app-scp';
 
 /** Parse a time window (in minutes) from the question or the LLM's param. */
 export function extractWindowMinutes(message: string, fromLlm: unknown): number {
@@ -20,31 +21,16 @@ export function extractWindowMinutes(message: string, fromLlm: unknown): number 
 
 const ANALYZE_SYSTEM = loadPrompt('api/analyze.md');
 
-function xmlTag(raw: string, tag: string): string | undefined {
-  const m = raw.match(new RegExp(`<(?:[\\w.-]+:)?${tag}>\\s*([^<]+?)\\s*</(?:[\\w.-]+:)?${tag}>`, 'i'));
-  return m ? m[1] : undefined;
-}
-
-/** Message metadata pulled from the FRB cashMessage XML logs. */
-function metaOf(log: ParsedLog): {
-  type?: string;
-  messageId?: string;
-  initMessageId?: string;
-  ackCode?: string;
-} {
-  const type = xmlTag(log.raw, 'messageType')?.toUpperCase() ?? (typeof log.fields?.messageType === 'string' ? (log.fields.messageType as string).toUpperCase() : undefined);
-  return {
-    type,
-    messageId: xmlTag(log.raw, 'messageId'),
-    initMessageId: xmlTag(log.raw, 'initMessageId'),
-    ackCode: xmlTag(log.raw, 'ackCode'),
-  };
-}
+/**
+ * Transaction-message metadata for the analysis-agent's log answers. The SCP XML
+ * shape + ackCode vocabulary live in `@log/app-scp` (the single source used by
+ * the platform's transaction protocol too), so this path stays consistent with
+ * the ingestion/lifecycle engine rather than re-parsing the format itself.
+ */
+const metaOf = scpMessageMeta;
 
 /** An ackCode present and NOT a success code counts as a failure. */
-const isSuccessAck = (c?: string): boolean =>
-  !!c && /^(ok|success(ful)?|processed(_successfully)?|accepted|complete[d]?)/i.test(c.trim());
-const isFailAck = (c?: string): boolean => !!c && !isSuccessAck(c);
+const isFailAck = (c?: string): boolean => !!c && !isScpAckSuccess(c);
 
 export interface LogAnswer {
   answer: string;

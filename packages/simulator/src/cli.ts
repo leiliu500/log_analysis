@@ -9,7 +9,8 @@
  *   --content-type scp | scp-restapp | esb  (resolved to a named log group)
  */
 import { readFileSync } from 'node:fs';
-import { SimulateRequest, resolveLogGroup } from '@log/shared';
+import { SimulateRequest } from '@log/shared';
+import { resolveLogGroup } from '@log/app-scp';
 import { simulate } from './simulator.js';
 
 function arg(name: string, fallback?: string): string | undefined {
