@@ -41,12 +41,14 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
   const startedAt = Date.now();
   const windowMinutes = opts.windowMinutes ?? 5;
   const windowMs = windowMinutes * 60_000;
-  const ttlMinutes = opts.findingsTtlMinutes ?? Number(process.env.FINDINGS_TTL_MINUTES ?? 30);
+  // Findings are RETAINED as history (like the agent history) rather than expired
+  // after the short recent-window. Only findings older than the history TTL are
+  // pruned; the dashboard splits them into "recent (in window)" vs "history".
+  const ttlMinutes =
+    opts.findingsTtlMinutes ?? Number(process.env.FINDINGS_HISTORY_TTL_MINUTES ?? 1440);
   const since = Date.now() - windowMs;
   const bySource: Record<string, { parsed: number; findings: number }> = {};
 
-  // Expire findings whose logs have aged out, so the dashboard reflects only
-  // recent analysis (a finding only shows while its logs are recent).
   let pruned = 0;
   try {
     pruned = await pruneFindingsOlderThan(Date.now() - ttlMinutes * 60_000);

@@ -29,8 +29,8 @@ export const api = {
         pruned: number;
       };
       // "Analyze now" looks back 60 min (vs the scheduled poller's 5) so it also
-      // catches logs simulated a little while ago.
-    }>(`/findings?limit=100&analyze=${analyze}&window=60`),
+      // catches logs simulated a little while ago. limit is high to include history.
+    }>(`/findings?limit=300&analyze=${analyze}&window=60`),
   clearFindings: () =>
     req<{ deleted: number; agentsDeleted?: number }>('/findings', { method: 'DELETE' }),
   /** Full reset: findings + logs + agents + scheduled-run history. */

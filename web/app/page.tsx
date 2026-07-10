@@ -22,6 +22,9 @@ const REFRESH_MS = 30_000;
 /** Applications known to the platform (shown even before they have data). */
 const KNOWN_APPS = ['scp', 'apiflc'] as const;
 
+/** Findings newer than this are "recent (in window)"; older are history. */
+const RECENT_FINDING_MIN = 30;
+
 export default function Dashboard() {
   const [tab, setTab] = useState<TabKey>('agents');
   const [appFilter, setAppFilter] = useState<string>('all');
@@ -118,10 +121,17 @@ export default function Dashboard() {
   const shownHistory = byApp(agentHistory);
   const shownFindings = byApp(findings);
 
+  // Split findings into recent (in the current window) vs retained history, so
+  // the tab mirrors the Agents tab (active + history).
+  const recentCutoff = Date.now() - RECENT_FINDING_MIN * 60_000;
+  const recentFindings = shownFindings.filter((f) => f.createdAt >= recentCutoff);
+  const historyFindings = shownFindings.filter((f) => f.createdAt < recentCutoff);
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const f of shownFindings) c[f.severity] = (c[f.severity] ?? 0) + 1;
+    for (const f of recentFindings) c[f.severity] = (c[f.severity] ?? 0) + 1;
     return c;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownFindings]);
 
   const totalParsed = analysis
@@ -244,17 +254,39 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
-          <div className="grid gap-4 lg:grid-cols-2">
-            {shownFindings.map((f) => (
-              <FindingCard key={f.id} f={f} />
-            ))}
+
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-white">Recent Findings &amp; Anomalies</h2>
+            <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs text-sky-300">
+              {recentFindings.length}
+            </span>
+            <span className="text-xs text-slate-500">last {RECENT_FINDING_MIN} min</span>
           </div>
-          {!error && shownFindings.length === 0 && (
-            <p className="text-slate-400">
-              No findings{appFilter !== 'all' ? ` for ${appFilter}` : ''} yet. Either recent logs
-              show no anomalies, or the next ingestion poll hasn’t run — use the Simulator to
-              generate logs, then wait for the poller (or click Analyze now).
+          {recentFindings.length > 0 ? (
+            <div className="mb-8 grid gap-4 lg:grid-cols-2">
+              {recentFindings.map((f) => (
+                <FindingCard key={f.id} f={f} />
+              ))}
+            </div>
+          ) : (
+            <p className="mb-8 text-sm text-slate-500">
+              No recent findings{appFilter !== 'all' ? ` for ${appFilter}` : ''} in the last{' '}
+              {RECENT_FINDING_MIN} min. Simulate logs, then wait for the poller (or click Analyze now).
             </p>
+          )}
+
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-white">Findings &amp; Anomaly History</h2>
+            <span className="text-xs text-slate-500">{historyFindings.length} older</span>
+          </div>
+          {historyFindings.length > 0 ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              {historyFindings.map((f) => (
+                <FindingCard key={f.id} f={f} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">No older findings retained yet.</p>
           )}
         </section>
       )}

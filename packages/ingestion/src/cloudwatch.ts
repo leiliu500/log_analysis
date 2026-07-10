@@ -53,30 +53,39 @@ export class CloudWatchConnector implements LogConnector {
     const out: RawLogRecord[] = [];
     const groups = await this.resolveGroups();
     for (const group of groups) {
-      let token: string | undefined;
-      do {
-        const res = await this.client.send(
-          new FilterLogEventsCommand({
-            logGroupName: group,
-            startTime: opts.since,
-            endTime: opts.until,
-            filterPattern: opts.query,
-            nextToken: token,
-            limit: Math.min(opts.limit ?? 1000, 10000),
-          }),
-        );
-        for (const e of res.events ?? []) {
-          out.push({
-            source: 'cloudwatch',
-            stream: group,
-            timestamp: e.timestamp ?? Date.now(),
-            raw: e.message ?? '',
-            attributes: { logStreamName: e.logStreamName },
-          });
+      try {
+        let token: string | undefined;
+        do {
+          const res = await this.client.send(
+            new FilterLogEventsCommand({
+              logGroupName: group,
+              startTime: opts.since,
+              endTime: opts.until,
+              filterPattern: opts.query,
+              nextToken: token,
+              limit: Math.min(opts.limit ?? 1000, 10000),
+            }),
+          );
+          for (const e of res.events ?? []) {
+            out.push({
+              source: 'cloudwatch',
+              stream: group,
+              timestamp: e.timestamp ?? Date.now(),
+              raw: e.message ?? '',
+              attributes: { logStreamName: e.logStreamName },
+            });
+          }
+          token = res.nextToken;
+          if (out.length >= (opts.limit ?? 1000)) break;
+        } while (token);
+      } catch (err) {
+        // A configured log group that doesn't exist yet (e.g. an app not deployed
+        // in this environment) must NOT fail ingestion for the other groups.
+        const name = (err as { name?: string }).name;
+        if (name !== 'ResourceNotFoundException') {
+          console.warn(`cloudwatch: skipping log group "${group}":`, name ?? err);
         }
-        token = res.nextToken;
-        if (out.length >= (opts.limit ?? 1000)) break;
-      } while (token);
+      }
     }
     return out;
   }
