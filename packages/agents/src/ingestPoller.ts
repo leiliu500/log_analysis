@@ -5,10 +5,11 @@
  * transaction) / error signature / correlation, fanned out concurrently.
  * This is the always-on path that keeps findings fresh (requirements 2-6).
  */
+import { randomUUID } from 'node:crypto';
 import { dispatchAgentic, advanceAgents } from '@log/analysis';
-import type { ParsedLog } from '@log/shared';
+import type { ParsedLog, PollerTrigger } from '@log/shared';
 import { allConnectors } from '@log/ingestion';
-import { pruneFindingsOlderThan } from '@log/db';
+import { pruneFindingsOlderThan, insertPollerRun } from '@log/db';
 import { scpTransactionProtocol } from '@log/app-scp';
 
 export interface AnalyzeOptions {
@@ -17,6 +18,8 @@ export interface AnalyzeOptions {
   findingsTtlMinutes?: number;
   /** Override the agent inactivity timeout (else INGEST_AGENT_TIMEOUT_MINUTES/30). */
   agentTimeoutMinutes?: number;
+  /** What triggered this run — recorded for the Schedule tab. Default 'schedule'. */
+  trigger?: PollerTrigger;
 }
 
 export interface AnalyzeResult {
@@ -35,6 +38,7 @@ export interface AnalyzeResult {
  * report a Finding. Shared by the scheduled poller and the dashboard refresh.
  */
 export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<AnalyzeResult> {
+  const startedAt = Date.now();
   const windowMinutes = opts.windowMinutes ?? 5;
   const windowMs = windowMinutes * 60_000;
   const ttlMinutes = opts.findingsTtlMinutes ?? Number(process.env.FINDINGS_TTL_MINUTES ?? 30);
@@ -86,6 +90,26 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
     };
   } catch (err) {
     console.error('agent lifecycle advance failed', err);
+  }
+
+  // Record this run for the dashboard's Schedule tab (best-effort — never fail
+  // the poll on a bookkeeping error).
+  const findingsTotal =
+    Object.values(bySource).reduce((n, s) => n + s.findings, 0) + agents.findings;
+  try {
+    await insertPollerRun({
+      id: randomUUID(),
+      ranAt: startedAt,
+      trigger: opts.trigger ?? 'schedule',
+      windowMinutes,
+      durationMs: Date.now() - startedAt,
+      bySource,
+      agents,
+      findings: findingsTotal,
+      pruned,
+    });
+  } catch (err) {
+    console.error('record poller run failed', err);
   }
 
   return { bySource, agents, pruned };

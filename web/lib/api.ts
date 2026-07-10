@@ -1,4 +1,4 @@
-import type { Finding, ChatResponse, SimulateResult, RouteDecision, Agent } from '@log/shared';
+import type { Finding, ChatResponse, SimulateResult, RouteDecision, Agent, PollerRun } from '@log/shared';
 
 const BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
@@ -32,6 +32,8 @@ export const api = {
     req<{ deleted: number; agentsDeleted?: number }>('/findings', { method: 'DELETE' }),
   /** Stateful agent lifecycle: active agents (cards) + closed agents (history). */
   agents: () => req<{ active: Agent[]; history: Agent[] }>('/agents'),
+  /** Scheduled-ingestion run history for the Schedule tab. */
+  schedule: () => req<{ runs: PollerRun[] }>('/schedule?limit=100'),
   chat: (sessionId: string, message: string) =>
     req<ChatResponse>('/chat', {
       method: 'POST',

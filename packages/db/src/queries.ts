@@ -1,5 +1,5 @@
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
-import type { Finding, ParsedLog, ChatMessage, LogSourceType, Agent } from '@log/shared';
+import type { Finding, ParsedLog, ChatMessage, LogSourceType, Agent, PollerRun } from '@log/shared';
 import { getDb, getSql, type Sql } from './client.js';
 import {
   parsedLogs,
@@ -240,6 +240,42 @@ function rawRowToAgent(r: Record<string, unknown>): Agent {
     updatedAt: Number(r.updated_at),
     closedAt: num(r.closed_at),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled-ingestion run history (Schedule tab)
+// ---------------------------------------------------------------------------
+
+/** Keep the poller_runs table bounded to the most recent N rows. */
+const POLLER_RUNS_KEEP = 500;
+
+export async function insertPollerRun(run: PollerRun): Promise<void> {
+  const sqlc = getSql();
+  await sqlc`INSERT INTO poller_runs
+    (id, ran_at, trigger, window_minutes, duration_ms, by_source, agents, findings, pruned)
+    VALUES (${run.id}, ${run.ranAt}, ${run.trigger}, ${run.windowMinutes}, ${run.durationMs},
+            ${sqlc.json(run.bySource)}, ${sqlc.json(run.agents)}, ${run.findings}, ${run.pruned})
+    ON CONFLICT (id) DO NOTHING`;
+  // Bound growth (a run lands every ~5 min) — drop everything past the newest N.
+  await sqlc`DELETE FROM poller_runs WHERE id IN (
+    SELECT id FROM poller_runs ORDER BY ran_at DESC OFFSET ${POLLER_RUNS_KEEP}
+  )`;
+}
+
+export async function recentPollerRuns(limit = 50): Promise<PollerRun[]> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT * FROM poller_runs ORDER BY ran_at DESC LIMIT ${limit}`;
+  return rows.map((r) => ({
+    id: r.id as string,
+    ranAt: Number(r.ran_at),
+    trigger: r.trigger as PollerRun['trigger'],
+    windowMinutes: Number(r.window_minutes),
+    durationMs: Number(r.duration_ms),
+    bySource: (r.by_source as PollerRun['bySource'] | null) ?? {},
+    agents: (r.agents as PollerRun['agents'] | null) ?? { spawned: 0, advanced: 0, closed: 0, findings: 0 },
+    findings: Number(r.findings),
+    pruned: Number(r.pruned),
+  }));
 }
 
 // ---------------------------------------------------------------------------

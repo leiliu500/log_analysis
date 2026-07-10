@@ -5,6 +5,7 @@ export * from './transactionProtocol.js';
 export * from './agents.js';
 export * from './chat.js';
 export * from './simulate.js';
+export * from './schedule.js';
 export * from './prompts.js';
 
 /** Small helpers shared across packages. */

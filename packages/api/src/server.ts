@@ -12,6 +12,7 @@ import {
   getActiveAgents,
   getAgentHistory,
   deleteAllAgents,
+  recentPollerRuns,
 } from '@log/db';
 import { runPipeline } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
@@ -48,7 +49,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     let analysis: Awaited<ReturnType<typeof analyzeAllSources>> | undefined;
     if (q.analyze !== 'false') {
       try {
-        analysis = await analyzeAllSources({ windowMinutes: Number(q.window ?? 5) });
+        analysis = await analyzeAllSources({ windowMinutes: Number(q.window ?? 5), trigger: 'manual' });
       } catch (err) {
         req.log.error(err, 'live findings analysis failed');
       }
@@ -65,6 +66,14 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
       getAgentHistory(Math.min(Number(q.history ?? 200), 1000)),
     ]);
     return { active, history };
+  });
+
+  // -------- Schedule: scheduled-ingestion run history --------
+  // Timeline of poller runs (EventBridge cron every ~5 min + on-demand "Analyze
+  // now"), so the dashboard's Schedule tab can show what each trigger did.
+  api.get('/schedule', async (req) => {
+    const q = req.query as { limit?: string };
+    return { runs: await recentPollerRuns(Math.min(Number(q.limit ?? 50), 200)) };
   });
 
   // Clear the findings table (and cascade alerts), plus the agent lifecycle —
