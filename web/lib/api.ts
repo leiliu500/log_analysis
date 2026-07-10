@@ -4,11 +4,12 @@ const BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    cache: 'no-store',
-  });
+  // Only advertise a JSON content-type when we actually send a body. Otherwise
+  // Fastify rejects bodyless requests (e.g. DELETE /data, DELETE /findings) with
+  // FST_ERR_CTP_EMPTY_JSON_BODY ("Body cannot be empty ...") → 400.
+  const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) };
+  if (init?.body != null) headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${BASE}${path}`, { ...init, headers, cache: 'no-store' });
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return (await res.json()) as T;
 }
