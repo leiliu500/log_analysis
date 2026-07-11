@@ -17,7 +17,7 @@ import {
 } from '@log/db';
 import { routeRequest } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
-import { simulate, buildSimulateRequest } from '@log/simulator';
+import { handleSimulatePrompt } from '@log/simulator';
 import { answerLogQuestion } from './qa.js';
 
 const ANSWER_SYSTEM = loadPrompt('api/chat.md');
@@ -75,17 +75,21 @@ async function dispatch(
 ): Promise<{ answer: string; context: ChatContext }> {
   switch (route.intent) {
     case 'simulate_logs': {
-      const req = buildSimulateRequest(message, route);
-      const result = await simulate(req);
-      const written = Object.entries(result.written)
-        .map(([k, v]) => `${v} to ${k}`)
-        .join(', ');
-      const ids = result.messages
-        .filter((m) => m.messageType === 'REQUEST')
-        .map((m) => m.messageId)
-        .join(', ');
+      // Application-aware simulation: resolves the target app (scp / apiflc / …),
+      // loads that app's understanding prompt, and writes cashMessage or verbatim
+      // logs accordingly. Reuse the already-computed route (inject it so the
+      // simulator doesn't route a second time).
+      const resp = await handleSimulatePrompt({ prompt: message }, () => Promise.resolve(route));
+      const detail = resp.results
+        .map((r) => {
+          const written = Object.entries(r.result.written)
+            .map(([k, v]) => `${v}→${k}`)
+            .join(', ');
+          return `• ${r.instruction} (${written || '0 written'})`;
+        })
+        .join('\n');
       return {
-        answer: `Simulated ${req.count} request/ack/response set(s) for "${req.application}" (${written} log entries). Request messageIds: ${ids}. Each ACK/Response initMessageId matches its request. They will appear in findings after the next analysis cycle.`,
+        answer: `${resp.note}${detail ? `\n\n${detail}` : ''}`,
         context: { findings: [], logs: [], route },
       };
     }

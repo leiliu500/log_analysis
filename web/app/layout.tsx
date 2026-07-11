@@ -19,10 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 Dashboard
               </Link>
               <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/chat">
-                Assistant
-              </Link>
-              <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/simulate">
-                Simulator
+                Chatbot
               </Link>
               <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/scp">
                 SCP
