@@ -1,8 +1,14 @@
-import type { RouteDecision, ParsedLog } from '@log/shared';
+import type {
+  RouteDecision,
+  ParsedLog,
+  ApplicationDef,
+  AssistantMeta,
+  TransactionProtocol,
+} from '@log/shared';
 import { loadPrompt } from '@log/shared';
 import { converse, parseBatch } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
-import { scpMessageMeta, isScpAckSuccess } from '@log/app-scp';
+import { applicationRegistry } from '@log/agents';
 
 /** Parse a time window (in minutes) from the question or the LLM's param. */
 export function extractWindowMinutes(message: string, fromLlm: unknown): number {
@@ -19,24 +25,46 @@ export function extractWindowMinutes(message: string, fromLlm: unknown): number 
   return 60;
 }
 
-const ANALYZE_SYSTEM = loadPrompt('api/analyze.md');
+/** Generic fallback prompt when the resolved application declares none. */
+const GENERIC_SYSTEM = loadPrompt('api/analyze.md');
 
 /**
- * Transaction-message metadata for the analysis-agent's log answers. The SCP XML
- * shape + ackCode vocabulary live in `@log/app-scp` (the single source used by
- * the platform's transaction protocol too), so this path stays consistent with
- * the ingestion/lifecycle engine rather than re-parsing the format itself.
+ * The application the Log Assistant answers for — resolved dynamically from the
+ * user's question (an explicit targetApplication, else a named log group /
+ * keyword, else the first installed app). This is what makes the assistant
+ * application-specific: SCP and apiflc questions load their own prompt +
+ * correlation model.
  */
-const metaOf = scpMessageMeta;
+export function resolveApp(message: string, route: RouteDecision): ApplicationDef {
+  const explicit =
+    route.targetApplication ??
+    (typeof route.parameters?.application === 'string' ? (route.parameters.application as string) : undefined);
+  return (
+    applicationRegistry.byId(explicit) ??
+    applicationRegistry.matchLogGroup(message)?.app ??
+    applicationRegistry.all()[0]!
+  );
+}
 
-/** An ackCode present and NOT a success code counts as a failure. */
-const isFailAck = (c?: string): boolean => !!c && !isScpAckSuccess(c);
+/**
+ * Per-application extraction of a log's assistant view. Uses the app's own
+ * {@link ApplicationDef.assistantMeta} (SCP's richer messageId view) when
+ * present, else derives it from the transaction protocol's event (id = corrId).
+ */
+function metaFor(app: ApplicationDef): (log: ParsedLog) => AssistantMeta {
+  if (app.assistantMeta) return (log) => app.assistantMeta!(log) ?? {};
+  return (log) => {
+    const ev = app.protocol.eventOf(log);
+    return ev ? { type: ev.type, id: ev.corrId, corrId: ev.corrId, ackCode: ev.ackCode } : {};
+  };
+}
 
 export interface LogAnswer {
   answer: string;
   logs: ParsedLog[];
   meta: {
     source: string;
+    application: string;
     windowMinutes: number;
     total: number;
     byMessageType: Record<string, number>;
@@ -44,183 +72,181 @@ export interface LogAnswer {
   };
 }
 
-type Meta = { type?: string; messageId?: string; initMessageId?: string; ackCode?: string };
-type Enriched = { log: ParsedLog; meta: Meta };
+type Enriched = { log: ParsedLog; meta: AssistantMeta };
 
-const ts = (e: Enriched): string => new Date(e.log.timestamp).toISOString();
-const fmt = (e: Enriched): string =>
-  `- ${ts(e)} ${e.meta.type ?? e.log.level.toUpperCase()} messageId=${e.meta.messageId ?? '-'}` +
-  `${e.meta.initMessageId ? `, initMessageId=${e.meta.initMessageId}` : ''}` +
+const isFailAck = (proto: TransactionProtocol, c?: string): boolean => !!c && !proto.isSuccess(c);
+
+const tsOf = (e: Enriched): string => new Date(e.log.timestamp).toISOString();
+/** One line describing a message: own id, correlation id (when different), ackCode. */
+const fmt = (e: Enriched, label: string): string =>
+  `- ${tsOf(e)} ${e.meta.type ?? e.log.level.toUpperCase()} ${label}=${e.meta.id ?? '-'}` +
+  `${e.meta.corrId && e.meta.corrId !== e.meta.id ? `, initMessageId=${e.meta.corrId}` : ''}` +
   `${e.meta.ackCode ? `, ackCode=${e.meta.ackCode}` : ''}`;
 
-/** One request correlated with its ACK/RESPONSE messages (by initMessageId). */
+/** A request correlated with its follow-up phases, grouped by correlation id. */
 interface Tx {
-  reqId: string;
-  hasReq: boolean;
-  acks: Enriched[];
-  responses: Enriched[];
+  corrId: string;
+  /** phase name -> the messages seen for it (e.g. REQUEST, ACK, RESPONSE). */
+  phases: Map<string, Enriched[]>;
 }
 
-/** Correlate REQUEST ↔ ACK/RESPONSE by messageId/initMessageId. */
+/** Correlate all transaction messages by their correlation id (protocol-agnostic). */
 function correlate(enriched: Enriched[]): Map<string, Tx> {
   const map = new Map<string, Tx>();
-  const get = (id: string): Tx => {
-    let t = map.get(id);
-    if (!t) map.set(id, (t = { reqId: id, hasReq: false, acks: [], responses: [] }));
-    return t;
-  };
   for (const e of enriched) {
-    if (e.meta.type === 'REQUEST' && e.meta.messageId) get(e.meta.messageId).hasReq = true;
-    else if (e.meta.type === 'ACK' && e.meta.initMessageId) get(e.meta.initMessageId).acks.push(e);
-    else if (e.meta.type === 'RESPONSE' && e.meta.initMessageId) get(e.meta.initMessageId).responses.push(e);
+    if (!e.meta.type || !e.meta.corrId) continue;
+    let t = map.get(e.meta.corrId);
+    if (!t) map.set(e.meta.corrId, (t = { corrId: e.meta.corrId, phases: new Map() }));
+    const arr = t.phases.get(e.meta.type) ?? [];
+    arr.push(e);
+    t.phases.set(e.meta.type, arr);
   }
   return map;
 }
 
-type MsgType = 'REQUEST' | 'ACK' | 'RESPONSE';
-
-/**
- * Which cashMessage type(s) the question is about. A question may name several
- * ("ACK and responses" → both), so this returns every type mentioned; an empty
- * result means "all types" (e.g. "how many messages/logs").
- */
-export function askedTypes(message: string): MsgType[] {
+/** Which phase(s) the question is about, from the app's own phase names. */
+export function askedTypes(message: string, allPhases: readonly string[]): string[] {
   const m = message.toLowerCase();
-  const t: MsgType[] = [];
-  if (/\brequests?\b/.test(m)) t.push('REQUEST');
-  if (/\backs?\b|acknowledg/.test(m)) t.push('ACK');
-  if (/\bresponses?\b/.test(m)) t.push('RESPONSE');
-  return t;
+  const out: string[] = [];
+  for (const p of allPhases) {
+    const w = p.toLowerCase();
+    const re = w === 'ack' ? /\backs?\b|acknowledg/ : new RegExp(`\\b${w}s?\\b`);
+    if (re.test(m)) out.push(p);
+  }
+  return out;
 }
 
 /**
- * Answer count / "list messageId" questions DETERMINISTICALLY from the parsed
- * logs — never via the LLM — so the ids and counts are always the real ones in
- * the window (the model otherwise fabricates plausible-looking ids). Returns
- * null for open-ended questions, which fall through to the grounded LLM path.
+ * Answer count / list / failure / completeness questions DETERMINISTICALLY from
+ * the parsed logs — never via the LLM — so ids and counts are always the real
+ * ones in the window. Protocol-driven: correlation is by corrId, phases and
+ * success come from the application's protocol, ids are labelled by the app's
+ * correlationLabel. Returns null for open-ended questions (grounded LLM path).
  */
 export function directAnswer(
   message: string,
   source: string,
   windowMinutes: number,
   enriched: Enriched[],
+  proto: TransactionProtocol,
+  label = 'messageId',
 ): string | null {
   const m = message.toLowerCase();
   const win = `the last ${windowMinutes} minute(s)`;
+  const allPhases = proto.allPhases;
+  const followups = proto.phases; // non-initial phases
 
-  // (a) A specific messageId mentioned → describe that transaction end-to-end.
-  // Require a whole-token, length>=3 match so short ids don't match inside words.
-  const mentionsId = (id: string | undefined): id is string => {
+  // (a) A specific id mentioned → describe that transaction end-to-end.
+  const mentions = (id: string | undefined): id is string => {
     if (!id || id.length < 3) return false;
     const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`(^|[^A-Za-z0-9._-])${esc}([^A-Za-z0-9._-]|$)`).test(message);
   };
-  const reqIds = enriched.filter((e) => e.meta.type === 'REQUEST').map((e) => e.meta.messageId);
-  const allIds = enriched.map((e) => e.meta.messageId);
-  // An explicit "messageId=X" / "message id X" is authoritative even if X isn't
-  // in the window (then we say so), so the answer is about the id actually asked.
-  const explicitId = message.match(/message[_\s-]?id\s*[=:]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/i)?.[1];
-  const mentioned = explicitId ?? reqIds.find(mentionsId) ?? allIds.find(mentionsId);
+  const explicitId = message.match(/(?:message|correlation)[_\s-]?id\s*[=:]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/i)?.[1];
+  const corrIds = [...new Set(enriched.map((e) => e.meta.corrId).filter(Boolean) as string[])];
+  const ownIds = enriched.map((e) => e.meta.id).filter(Boolean) as string[];
+  const mentioned = explicitId ?? corrIds.find(mentions) ?? ownIds.find(mentions);
   if (mentioned) {
     const txs = correlate(enriched);
-    const t = txs.get(mentioned);
-    const self = enriched.find((e) => e.meta.messageId === mentioned);
-    if (!t && !self) return `No message with messageId=${mentioned} was found on ${source} in ${win}.`;
-    const acks = t?.acks ?? [];
-    const resps = t?.responses ?? [];
-    const ackPart = acks.length
-      ? `ACK ✓ (ackCode=${acks.map((e) => e.meta.ackCode ?? '-').join(', ')})`
-      : 'ACK ✗';
-    const respPart = resps.length
-      ? `RESPONSE ✓ (ackCode=${resps.map((e) => e.meta.ackCode ?? '-').join(', ')})`
-      : 'RESPONSE ✗';
-    const reqPart = t?.hasReq || self?.meta.type === 'REQUEST' ? 'REQUEST ✓' : 'REQUEST ✗';
-    const ackFailed = acks.some((e) => isFailAck(e.meta.ackCode));
-    const note =
-      acks.length && !resps.length
-        ? ackFailed
-          ? ' — this request has only a FAILED ACK and no RESPONSE.'
-          : ' — this request has an ACK but no RESPONSE.'
+    const t =
+      txs.get(mentioned) ??
+      [...txs.values()].find((x) => [...x.phases.values()].flat().some((e) => e.meta.id === mentioned));
+    if (!t) return `No message with ${label}=${mentioned} was found on ${source} in ${win}.`;
+    const parts: string[] = [];
+    let anyFollowupFailed = false;
+    let missingFollowup = false;
+    for (const phase of allPhases) {
+      const msgs = t.phases.get(phase) ?? [];
+      if (!msgs.length) {
+        parts.push(`${phase} ✗`);
+        if (followups.includes(phase)) missingFollowup = true;
+        continue;
+      }
+      const codes = msgs.map((e) => e.meta.ackCode).filter(Boolean);
+      const codeStr = codes.length ? ` (ackCode=${codes.join(', ')})` : '';
+      parts.push(`${phase} ✓${codeStr}`);
+      if (msgs.some((e) => isFailAck(proto, e.meta.ackCode))) anyFollowupFailed = true;
+    }
+    const note = anyFollowupFailed
+      ? ' — this transaction has a FAILED response.'
+      : missingFollowup && t.phases.size > 1
+        ? ' — this transaction is incomplete (a follow-up phase is missing).'
         : '';
-    return [`messageId=${mentioned}: ${reqPart}, ${ackPart}, ${respPart}.${note}`, '', ...[...acks, ...resps].map(fmt)]
+    const detail = [...t.phases.values()].flat().filter((e) => e.meta.type !== proto.initial);
+    return [`${label}=${t.corrId}: ${parts.join(', ')}.${note}`, '', ...detail.map((e) => fmt(e, label))]
       .join('\n')
       .trim();
   }
 
-  // (b) Failure / error / exception questions → messages with a failed ackCode.
+  // (b) Failure / error questions → messages with a non-success ackCode.
   if (/\b(exception|errors?|failure|failures|failed|faults?|reject(ed)?|nack|unsuccessful|declined|problems?)\b/.test(m)) {
-    const failed = enriched.filter((e) => isFailAck(e.meta.ackCode));
-    const ackCoded = enriched.filter((e) => e.meta.ackCode).length;
+    const failed = enriched.filter((e) => isFailAck(proto, e.meta.ackCode));
+    const coded = enriched.filter((e) => e.meta.ackCode).length;
     if (!failed.length) {
-      return `No — no failures/errors on ${source} in ${win}. All ${ackCoded} ACK/RESPONSE ackCode(s) indicate success.`;
+      return `No — no failures/errors on ${source} in ${win}. All ${coded} ackCode(s) indicate success.`;
     }
-    return [`Yes — ${failed.length} message(s) with a failed ackCode on ${source} in ${win}:`, '', ...failed.map(fmt)].join('\n');
+    return [`Yes — ${failed.length} message(s) with a failed ackCode on ${source} in ${win}:`, '', ...failed.map((e) => fmt(e, label))].join('\n');
   }
 
-  // (c) Completeness: which message has an ACK but NO RESPONSE (incomplete tx).
+  // (c) Completeness: transactions with the request but a missing follow-up phase.
   if (
-    /(incomplete|only\s+(has\s+)?ack|ack\s+(but|and|with)?\s*(no|without|missing)\s+response|(no|without|missing)\s+response|which\s+(message|request|one).*(no|without|only|missing))/.test(
+    /(incomplete|only\s+(has\s+)?ack|(ack|request)\s+(but|and|with)?\s*(no|without|missing)\s+response|(no|without|missing)\s+response|which\s+(message|request|transaction|one).*(no|without|only|missing))/.test(
       m,
     )
   ) {
     const txs = correlate(enriched);
-    const incomplete = [...txs.values()].filter((t) => t.hasReq && t.acks.length > 0 && t.responses.length === 0);
+    const incomplete = [...txs.values()].filter(
+      (t) => t.phases.has(proto.initial) && followups.some((p) => !t.phases.has(p)) && t.phases.size > 1,
+    );
     if (!incomplete.length) {
-      return `No — every request that has an ACK also has a RESPONSE on ${source} in ${win}. No message has an ACK without a response.`;
+      return `No — every request that started a transaction also completed its follow-up phase(s) on ${source} in ${win}.`;
     }
-    const lines = [`${incomplete.length} message(s) with an ACK but NO RESPONSE on ${source} in ${win}:`, ''];
+    const lines = [`${incomplete.length} incomplete transaction(s) on ${source} in ${win}:`, ''];
     for (const t of incomplete) {
-      const codes = t.acks.map((e) => e.meta.ackCode ?? '-').join(', ');
-      lines.push(`- messageId=${t.reqId} — ACK present (ackCode=${codes}), no RESPONSE`);
+      const present = allPhases.filter((p) => t.phases.has(p));
+      const missing = followups.filter((p) => !t.phases.has(p));
+      lines.push(`- ${label}=${t.corrId} — ${present.join('+')} present, ${missing.map((p) => `no ${p}`).join(', ')}`);
     }
     return lines.join('\n');
   }
 
   const isCount = /\bhow many\b|\bnumber of\b|\bcount\b|\btotal\b/.test(m);
-  const wantsIds = /messageid|message id|\bids?\b|list|show|which|what are/.test(m);
+  const wantsIds = /messageid|message id|correlationid|correlation id|\bids?\b|list|show|which|what are/.test(m);
   if (!isCount && !wantsIds) return null;
 
-  const types = askedTypes(message);
-  const matched = types.length
-    ? enriched.filter((e) => e.meta.type && types.includes(e.meta.type as MsgType))
-    : enriched;
+  const types = askedTypes(message, allPhases);
+  const matched = types.length ? enriched.filter((e) => e.meta.type && types.includes(e.meta.type)) : enriched.filter((e) => e.meta.type);
 
   if (matched.length === 0) {
-    const what = types.length ? `${types.join('/')} messages` : 'log entries';
+    const what = types.length ? `${types.join('/')} messages` : 'transaction messages';
     return `No ${what} were found on ${source} in ${win}.`;
   }
 
-  // Header: when several types are asked, break the total down per type.
   const header =
     types.length > 1
-      ? `${matched.length} messages (${types
-          .map((t) => `${matched.filter((e) => e.meta.type === t).length} ${t}`)
-          .join(', ')}) on ${source} in ${win}.`
-      : `${matched.length} ${types[0] ? `${types[0]} message(s)` : 'log entr(y/ies)'} on ${source} in ${win}.`;
+      ? `${matched.length} messages (${types.map((t) => `${matched.filter((e) => e.meta.type === t).length} ${t}`).join(', ')}) on ${source} in ${win}.`
+      : `${matched.length} ${types[0] ? `${types[0]} message(s)` : 'transaction message(s)'} on ${source} in ${win}.`;
 
-  const ids = matched.map((e) => e.meta.messageId).filter((x): x is string => !!x && x !== '-');
   const lines = [header];
-  // List the ids (with timestamps) when asked, or whenever the set is small.
+  const ids = matched.map((e) => e.meta.id).filter((x): x is string => !!x && x !== '-');
   if ((wantsIds || matched.length <= 50) && ids.length) {
     lines.push('');
-    for (const e of matched.slice(0, 200)) {
-      const ts = new Date(e.log.timestamp).toISOString();
-      const init = e.meta.initMessageId ? `, initMessageId=${e.meta.initMessageId}` : '';
-      lines.push(`- ${ts} ${e.meta.type ?? e.log.level.toUpperCase()} messageId=${e.meta.messageId ?? '-'}${init}`);
-    }
+    for (const e of matched.slice(0, 200)) lines.push(fmt(e, label));
   }
   return lines.join('\n');
 }
 
 /**
- * The analysis-agent's core skill: pull raw logs from a source over a recent
- * window, compute deterministic aggregates, and let the model answer the user's
- * question grounded in them (e.g. "how many requests in the last 5 minutes").
+ * The Log Assistant's core skill, application-specific: resolve the target app,
+ * pull raw logs over a recent window, compute deterministic aggregates via the
+ * app's protocol, and answer grounded in them — loading the app's own prompt.
  */
-export async function answerLogQuestion(
-  message: string,
-  route: RouteDecision,
-): Promise<LogAnswer> {
+export async function answerLogQuestion(message: string, route: RouteDecision): Promise<LogAnswer> {
+  const app = resolveApp(message, route);
+  const proto = app.protocol;
+  const label = app.correlationLabel ?? 'messageId';
+  const system = app.assistantPromptPath ? loadPrompt(app.assistantPromptPath) : GENERIC_SYSTEM;
+
   const source = route.sources[0] ?? 'cloudwatch';
   const p = route.parameters;
   const windowMinutes = extractWindowMinutes(message, p.windowMinutes ?? p.minutes);
@@ -229,50 +255,41 @@ export async function answerLogQuestion(
   const records = await connectorFor(source).pull({ since, limit: 5000 });
   const parsed = parseBatch(records);
 
+  const meta = metaFor(app);
+  const enriched = parsed.map((l) => ({ log: l, meta: meta(l) }));
   const byMessageType: Record<string, number> = {};
   const byLevel: Record<string, number> = {};
-  const enriched = parsed.map((l) => ({ log: l, meta: metaOf(l) }));
-  for (const { log, meta } of enriched) {
-    if (meta.type) byMessageType[meta.type] = (byMessageType[meta.type] ?? 0) + 1;
+  for (const { log, meta: mt } of enriched) {
+    if (mt.type) byMessageType[mt.type] = (byMessageType[mt.type] ?? 0) + 1;
     byLevel[log.level] = (byLevel[log.level] ?? 0) + 1;
   }
 
+  const answerMeta = { source, application: app.id, windowMinutes, total: parsed.length, byMessageType, byLevel };
+
+  // Deterministic path first — ids/counts are the real ones.
+  const direct = directAnswer(message, source, windowMinutes, enriched, proto, label);
+  if (direct !== null) {
+    return { answer: direct, logs: parsed.slice(0, 50), meta: answerMeta };
+  }
+
   const summary = [
+    `Application: ${app.displayName} (${app.id})`,
     `Source: ${source}`,
     `Window: last ${windowMinutes} minute(s) (since ${new Date(since).toISOString()})`,
     `Total log entries: ${parsed.length}`,
     `Count by messageType: ${JSON.stringify(byMessageType)}`,
     `Count by level: ${JSON.stringify(byLevel)}`,
   ].join('\n');
-
-  // Count / "list messageId" questions are answered deterministically from the
-  // real logs so ids and counts are never fabricated by the model.
-  const direct = directAnswer(message, source, windowMinutes, enriched);
-  if (direct !== null) {
-    return {
-      answer: direct,
-      logs: parsed.slice(0, 50),
-      meta: { source, windowMinutes, total: parsed.length, byMessageType, byLevel },
-    };
-  }
-
-  // Open-ended questions: let the model reason, but grounded in the real table.
   const table = enriched
     .slice(0, 500)
-    .map(({ log, meta }) => {
-      const init = meta.initMessageId ? ` initMessageId=${meta.initMessageId}` : '';
-      return `[${new Date(log.timestamp).toISOString()}] ${meta.type ?? log.level.toUpperCase()} messageId=${meta.messageId ?? '-'}${init}`;
-    })
+    .filter((e) => e.meta.type)
+    .map((e) => fmt(e, label).replace(/^- /, ''))
     .join('\n');
 
   const answer = await converse(
     `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}`,
-    { system: ANALYZE_SYSTEM, temperature: 0, maxTokens: 2500 },
+    { system, temperature: 0, maxTokens: 2500 },
   );
 
-  return {
-    answer,
-    logs: parsed.slice(0, 50),
-    meta: { source, windowMinutes, total: parsed.length, byMessageType, byLevel },
-  };
+  return { answer, logs: parsed.slice(0, 50), meta: answerMeta };
 }

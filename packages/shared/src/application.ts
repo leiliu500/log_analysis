@@ -49,6 +49,34 @@ export interface ApplicationDef {
    * scp reads `messageId` straight from the cashMessage XML) leave it unset.
    */
   simulateUnderstandingPromptPath?: string;
+
+  // ---- Log Assistant support (each application supplies its own) ----
+  /**
+   * Path (relative to the `prompts/` root) of this application's Log Assistant
+   * prompt — the grounded-Q&A system prompt used when a user's question is
+   * routed to this application. Falls back to a generic prompt when absent.
+   */
+  assistantPromptPath?: string;
+  /**
+   * Per-application extraction of the Log Assistant's view of one log: the
+   * message phase, its own id (for display), the transaction's correlation id
+   * (groups a request with its follow-ups), and any ackCode. When absent, the
+   * assistant derives this from {@link TransactionProtocol.eventOf} (id = corrId).
+   * SCP supplies its own so the assistant keeps the richer messageId vs
+   * initMessageId distinction.
+   */
+  assistantMeta?(log: ParsedLog): AssistantMeta | undefined;
+}
+
+/** What the Log Assistant reads from one log for an application. */
+export interface AssistantMeta {
+  /** Phase name — e.g. REQUEST | ACK | RESPONSE — if this is a transaction message. */
+  type?: string;
+  /** This message's own id (for display / listing). */
+  id?: string;
+  /** The transaction's correlation id — groups a request with its follow-ups. */
+  corrId?: string;
+  ackCode?: string;
 }
 
 /**

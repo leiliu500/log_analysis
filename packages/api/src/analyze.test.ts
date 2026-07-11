@@ -1,13 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ParsedLog } from '@log/shared';
-import { directAnswer, extractWindowMinutes } from './analyze.js';
+import { scpTransactionProtocol as P } from '@log/app-scp';
+import { directAnswer as da, extractWindowMinutes } from './analyze.js';
 
-// Minimal enriched rows like answerLogQuestion builds.
+// Minimal enriched rows like answerLogQuestion builds. corrId is the request's
+// id (REQUEST: its own id; ACK/RESPONSE: the request id via init).
 const mk = (type: string, id: string, init?: string, ackCode?: string, ts = 1783119462910) => ({
   log: { timestamp: ts, level: 'info', message: '', raw: '' } as unknown as ParsedLog,
-  meta: { type, messageId: id, initMessageId: init, ackCode },
+  meta: { type, id, corrId: init ?? id, ackCode },
 });
+
+// directAnswer bound to the SCP protocol (label defaults to messageId).
+const directAnswer = (
+  message: string,
+  source: string,
+  win: number,
+  enriched: ReturnType<typeof mk>[],
+): string | null => da(message, source, win, enriched, P);
 
 const REQS = [mk('REQUEST', '001'), mk('REQUEST', '002'), mk('REQUEST', '003'), mk('REQUEST', 'FCC-USSS-28090845')];
 const ALL = [...REQS, mk('ACK', 'IM-4764', '001'), mk('RESPONSE', 'IM-4774', '001')];
