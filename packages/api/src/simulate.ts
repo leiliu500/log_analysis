@@ -128,7 +128,7 @@ export function splitInstructions(prompt: string): string[] {
   return segs.length ? segs : [prompt];
 }
 
-const SEGMENT_SYSTEM = loadPrompt('api/simulate.segment.md');
+const SEGMENT_SYSTEM = loadPrompt('apps/scp/simulate.segment.md');
 
 /**
  * Segment a prompt into one text span per command. Deterministic splitting
@@ -191,7 +191,7 @@ export interface SimulateCommand {
   logGroup?: string;
 }
 
-const EXTRACT_ONE_SYSTEM = loadPrompt('api/simulate.extract-one.md');
+const EXTRACT_ONE_SYSTEM = loadPrompt('apps/scp/simulate.extract-one.md');
 
 /**
  * What one application's LLM understanding step resolved from the user's
