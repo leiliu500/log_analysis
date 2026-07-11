@@ -9,7 +9,7 @@
     { "path": "../apps/scp" },
     { "path": "../apps" },
     { "path": "../db" },
-    { "path": "../analysis" },
+    { "path": "./analysis" },
     { "path": "../ingestion" },
     { "path": "../simulator" }
   ],

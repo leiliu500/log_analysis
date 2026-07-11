@@ -6,7 +6,7 @@
     { "path": "packages/apps/apiflc" },
     { "path": "packages/apps" },
     { "path": "packages/db" },
-    { "path": "packages/analysis" },
+    { "path": "packages/agents/analysis" },
     { "path": "packages/ingestion" },
     { "path": "packages/agents" },
     { "path": "packages/simulator" },
