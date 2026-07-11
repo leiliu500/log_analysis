@@ -135,15 +135,22 @@ export async function simulateVerbatim(req: SimulateRequest): Promise<SimulateRe
   const records: RawLogRecord[] = [];
   const summary: SimulatedMessage[] = [];
   const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+  // Preserve the pasted transaction's own correlationID (e.g. 1234) instead of
+  // inventing one — the first set writes it verbatim; extra sets (count>1) are
+  // bumped off it so they stay distinct. Only fall back to a synthetic base when
+  // the paste carries no correlationID and the caller gave no startMessageId.
+  const pastedCorr = req.samples.match(/correlationID:\s*([A-Za-z0-9._-]+)/i)?.[1];
+  const corrBase = req.startMessageId ?? pastedCorr;
 
   for (let i = 0; i < req.count; i++) {
     const freshUuid = randomUUID();
-    const freshCorr = req.startMessageId ? bumpId(req.startMessageId, i) : String(1000 + i);
+    const freshCorr = corrBase ? bumpId(corrBase, i) : String(1000 + i);
     const baseTs = spreadMs ? now - spreadMs + Math.floor((i / req.count) * spreadMs) : now;
     lines.forEach((line, k) => {
-      const out = line
-        .replace(uuidRe, freshUuid)
-        .replace(/(correlationID:\s*)[A-Za-z0-9._-]+/gi, `$1${freshCorr}`);
+      // The first set is written exactly as pasted (keep its real uuid/requestId);
+      // only additional sets get a fresh uuid so they don't collide.
+      let out = i > 0 ? line.replace(uuidRe, freshUuid) : line;
+      out = out.replace(/(correlationID:\s*)[A-Za-z0-9._-]+/gi, `$1${freshCorr}`);
       records.push({
         source: 'cloudwatch',
         stream,
@@ -152,7 +159,8 @@ export async function simulateVerbatim(req: SimulateRequest): Promise<SimulateRe
         attributes: { application: req.application, batchId, set: i },
       });
     });
-    summary.push({ messageType: 'SET', messageId: freshUuid });
+    // Report the transaction by its correlationID (what apiflc correlates on).
+    summary.push({ messageType: 'SET', messageId: freshCorr });
   }
 
   const written = {} as Record<LogSourceType, number>;
