@@ -13,7 +13,7 @@ const outdir = join(root, 'infra', 'build', 'lambda');
 mkdirSync(outdir, { recursive: true });
 
 await build({
-  entryPoints: [join(root, 'packages', 'agents', 'src', 'index.ts')],
+  entryPoints: [join(root, 'packages', 'agents', 'index.ts')],
   outfile: join(outdir, 'index.js'),
   bundle: true,
   platform: 'node',
