@@ -5,6 +5,11 @@
     "outDir": "dist",
     "lib": ["ES2022", "DOM"]
   },
-  "references": [{ "path": "../shared" }],
+  "references": [
+    { "path": "../shared" },
+    { "path": "../apps" },
+    { "path": "../db" },
+    { "path": "../analysis" }
+  ],
   "include": ["src/**/*.ts"]
 }

@@ -8,7 +8,6 @@
     { "path": "packages/db" },
     { "path": "packages/analysis" },
     { "path": "packages/ingestion" },
-    { "path": "packages/ingest" },
     { "path": "packages/agents" },
     { "path": "packages/simulator" },
     { "path": "packages/api" }

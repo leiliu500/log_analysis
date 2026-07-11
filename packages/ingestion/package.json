@@ -19,6 +19,9 @@
     "@aws-sdk/client-cloudwatch-logs": "^3.658.0",
     "@aws-sdk/client-s3": "^3.658.0",
     "@aws-sdk/client-sesv2": "^3.658.0",
+    "@log/analysis": "*",
+    "@log/applications": "*",
+    "@log/db": "*",
     "@log/shared": "*"
   }
 }

@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { dispatchAgentic, advanceAgents } from '@log/analysis';
 import type { ParsedLog, PollerTrigger, Finding, PollerRun } from '@log/shared';
-import { allConnectors } from '@log/ingestion';
+import { allConnectors } from './source/index.js';
 import { pruneFindingsOlderThan, insertPollerRun } from '@log/db';
 import { applicationRegistry } from '@log/applications';
 

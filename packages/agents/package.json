@@ -21,7 +21,6 @@
     "@log/app-scp": "*",
     "@log/applications": "*",
     "@log/db": "*",
-    "@log/ingest": "*",
     "@log/ingestion": "*",
     "@log/shared": "*",
     "@log/simulator": "*"

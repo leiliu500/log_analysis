@@ -8,7 +8,6 @@
     { "path": "../shared" },
     { "path": "../apps/scp" },
     { "path": "../apps" },
-    { "path": "../ingest" },
     { "path": "../db" },
     { "path": "../analysis" },
     { "path": "../ingestion" },

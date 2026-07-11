@@ -11,7 +11,6 @@ RUN npm run build --workspace @log/shared \
   && npm run build --workspace @log/db \
   && npm run build --workspace @log/analysis \
   && npm run build --workspace @log/ingestion \
-  && npm run build --workspace @log/ingest \
   && npm run build --workspace @log/simulator \
   && npm run build --workspace @log/agents \
   && npm run build --workspace @log/api
