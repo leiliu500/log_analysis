@@ -1,16 +1,11 @@
 /**
- * Bedrock Agent Action-Group Lambda. A single handler backs all collaborator
- * tools; it dispatches on apiPath. Deployed by infra/ and wired to the agent's
- * action groups. Returns the Bedrock-Agent response envelope.
+ * Bedrock Agent Action-Group Lambda for the scp collaborator agent. It invokes a
+ * real downstream application (the /invoke-app tool). The analysis + simulator
+ * collaborator agents were removed, so their tools (/findings/search,
+ * /logs/analyze, /simulate) are gone; the live app uses in-process equivalents.
  */
-import { embed } from '@log/analysis';
-import { runPipeline } from '@log/analysis';
-import { searchFindingsByEmbedding, recentFindings } from '@log/db';
-import { connectorFor } from '@log/ingestion';
-import { simulate } from '@log/simulator';
-import { SimulateRequest, InvokeAppRequest, type LogSourceType } from '@log/shared';
+import { InvokeAppRequest } from '@log/shared';
 import { invokeApplication } from '@log/app-scp';
-import { applicationRegistry } from '@log/applications';
 
 interface BedrockAgentEvent {
   actionGroup: string;
@@ -26,8 +21,7 @@ interface BedrockAgentEvent {
 function readParams(event: BedrockAgentEvent): Record<string, string> {
   const out: Record<string, string> = {};
   for (const p of event.parameters ?? []) out[p.name] = p.value;
-  const props =
-    event.requestBody?.content?.['application/json']?.properties ?? [];
+  const props = event.requestBody?.content?.['application/json']?.properties ?? [];
   for (const p of props) out[p.name] = p.value;
   return out;
 }
@@ -49,47 +43,6 @@ export async function handler(event: BedrockAgentEvent): Promise<unknown> {
   const params = readParams(event);
   try {
     switch (event.apiPath) {
-      // Query stored findings semantically (scoped chat / analysis-agent).
-      case '/findings/search': {
-        const q = params.query ?? '';
-        if (!q) return envelope(event, 200, { findings: await recentFindings(20) });
-        const vec = await embed(q).catch(() => []);
-        const findings = vec.length
-          ? await searchFindingsByEmbedding(vec, 10)
-          : await recentFindings(20);
-        return envelope(event, 200, { findings });
-      }
-
-      // Pull logs from a source + run the full analysis pipeline.
-      case '/logs/analyze': {
-        const source = (params.source ?? 'cloudwatch') as LogSourceType;
-        const since = Number(params.since ?? Date.now() - 15 * 60_000);
-        const connector = connectorFor(source);
-        const records = await connector.pull({ since, limit: Number(params.limit ?? 1000) });
-        const result = await runPipeline(records, {
-          embedLogs: params.embed === 'true',
-          registry: applicationRegistry,
-        });
-        return envelope(event, 200, {
-          parsed: result.parsed,
-          anomalies: result.anomalies.length,
-          findings: result.findings,
-        });
-      }
-
-      // Trigger the simulator agent.
-      case '/simulate': {
-        const req = SimulateRequest.parse({
-          application: params.application ?? 'cashMessage',
-          // Raw pasted message(s) (XML/text), written verbatim with id rewrites.
-          samples: params.samples ?? params.sampleRequest ?? '',
-          sinks: (params.sinks ?? 'cloudwatch').split(','),
-          count: Number(params.count ?? 1),
-          spreadMinutes: Number(params.spreadMinutes ?? 0),
-        });
-        return envelope(event, 200, await simulate(req));
-      }
-
       // Invoke a real downstream application.
       case '/invoke-app': {
         const req = InvokeAppRequest.parse({

@@ -16,63 +16,9 @@ locals {
   foundation_model = var.bedrock_model_arn
 }
 
-# ---------------- Collaborator: analysis-agent ----------------
-resource "aws_bedrockagent_agent" "analysis" {
-  agent_name              = "${local.name}-analysis-agent"
-  agent_resource_role_arn = aws_iam_role.bedrock_agent.arn
-  foundation_model        = local.foundation_model
-  idle_session_ttl_in_seconds = 1800
-  instruction             = <<-EOT
-    You analyze logs and answer questions using ONLY stored findings/logs
-    retrieved via the searchFindings and analyzeLogs tools. Never invent data.
-    Scope answers to what the user asked about; cite findings by title and logs
-    by timestamp/source.
-  EOT
-}
-
-resource "aws_bedrockagent_agent_action_group" "analysis_actions" {
-  agent_id          = aws_bedrockagent_agent.analysis.agent_id
-  agent_version     = "DRAFT"
-  action_group_name = "log-tools"
-  action_group_executor {
-    lambda = aws_lambda_function.action_group.arn
-  }
-  api_schema {
-    payload = file("${path.module}/schemas/actions.openapi.json")
-  }
-}
-
-resource "aws_bedrockagent_agent_alias" "analysis" {
-  agent_id         = aws_bedrockagent_agent.analysis.agent_id
-  agent_alias_name = "live"
-  depends_on       = [aws_bedrockagent_agent_action_group.analysis_actions]
-}
-
-# ---------------- Collaborator: simulator-agent ----------------
-resource "aws_bedrockagent_agent" "simulator" {
-  agent_name              = "${local.name}-simulator-agent"
-  agent_resource_role_arn = aws_iam_role.bedrock_agent.arn
-  foundation_model        = local.foundation_model
-  instruction             = <<-EOT
-    You simulate application logs. Given an application and a sample
-    request/response, call simulateLogs to generate and write logs to the
-    requested sinks. Confirm counts written per sink.
-  EOT
-}
-
-resource "aws_bedrockagent_agent_action_group" "simulator_actions" {
-  agent_id          = aws_bedrockagent_agent.simulator.agent_id
-  agent_version     = "DRAFT"
-  action_group_name = "log-tools"
-  action_group_executor { lambda = aws_lambda_function.action_group.arn }
-  api_schema { payload = file("${path.module}/schemas/actions.openapi.json") }
-}
-
-resource "aws_bedrockagent_agent_alias" "simulator" {
-  agent_id         = aws_bedrockagent_agent.simulator.agent_id
-  agent_alias_name = "live"
-  depends_on       = [aws_bedrockagent_agent_action_group.simulator_actions]
-}
+# NOTE: the analysis-agent and simulator-agent collaborators were removed — the
+# live app uses in-process equivalents (analyzeAllSources / answerLogQuestion for
+# analysis, @log/simulator for simulation), so the hosted agents were unused.
 
 # ---------------- Collaborator: scp-agent ----------------
 resource "aws_bedrockagent_agent" "scp" {
@@ -113,33 +59,9 @@ resource "aws_bedrockagent_agent" "supervisor" {
   instruction                 = <<-EOT
     You are the Supervisor. Parse and extract intent from the user request and
     route to exactly one collaborator:
-      - analysis-agent   for questions about logs/findings or on-demand analysis
-      - simulator-agent  to generate/simulate logs
       - scp-agent to call a real application endpoint (e.g. scp)
     Do not answer directly; delegate. Pass through the user's parameters.
   EOT
-}
-
-resource "aws_bedrockagent_agent_collaborator" "analysis" {
-  agent_id                   = aws_bedrockagent_agent.supervisor.agent_id
-  agent_version              = "DRAFT"
-  collaborator_name          = "analysis-agent"
-  collaboration_instruction  = "Delegate questions about logs, findings, anomalies, or on-demand analysis."
-  relay_conversation_history = "TO_COLLABORATOR"
-  agent_descriptor {
-    alias_arn = aws_bedrockagent_agent_alias.analysis.agent_alias_arn
-  }
-}
-
-resource "aws_bedrockagent_agent_collaborator" "simulator" {
-  agent_id                   = aws_bedrockagent_agent.supervisor.agent_id
-  agent_version              = "DRAFT"
-  collaborator_name          = "simulator-agent"
-  collaboration_instruction  = "Delegate requests to simulate or generate logs for an application."
-  relay_conversation_history = "TO_COLLABORATOR"
-  agent_descriptor {
-    alias_arn = aws_bedrockagent_agent_alias.simulator.agent_alias_arn
-  }
 }
 
 resource "aws_bedrockagent_agent_collaborator" "scp" {
@@ -157,8 +79,6 @@ resource "aws_bedrockagent_agent_alias" "supervisor" {
   agent_id         = aws_bedrockagent_agent.supervisor.agent_id
   agent_alias_name = "live"
   depends_on = [
-    aws_bedrockagent_agent_collaborator.analysis,
-    aws_bedrockagent_agent_collaborator.simulator,
     aws_bedrockagent_agent_collaborator.scp,
   ]
 }
