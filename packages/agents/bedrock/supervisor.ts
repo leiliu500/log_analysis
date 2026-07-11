@@ -26,8 +26,27 @@ export function isAnalyticalLogQuery(message: string): boolean {
   return (subject && (quant || window)) || problem || completeness;
 }
 
-/** Force analyze_logs for analytical log queries the LLM router may misroute. */
+/**
+ * Deterministic signal that a message is a request to SIMULATE/generate logs —
+ * an unmistakable "simulate" verb or a pasted cashMessage XML. The LLM router
+ * occasionally mislabels these (e.g. as query_findings), so the Supervisor
+ * corrects it here rather than in the dispatcher.
+ */
+export function isSimulateRequest(message: string): boolean {
+  return /\bsimulate\b/i.test(message) || /<(?:[\w.-]+:)?cashMessage[\s>]/i.test(message);
+}
+
+/** Supervisor routing corrections for the two paths the LLM router may misroute. */
 function applyRoutingOverride(message: string, decision: RouteDecision): RouteDecision {
+  // Simulate is the most specific signal — check it first.
+  if (decision.intent !== 'simulate_logs' && isSimulateRequest(message)) {
+    return {
+      ...decision,
+      intent: 'simulate_logs',
+      targetAgent: 'simulator-agent',
+      rationale: `Deterministic override → simulate_logs. ${decision.rationale ?? ''}`.trim(),
+    };
+  }
   if (
     decision.intent !== 'simulate_logs' &&
     decision.intent !== 'invoke_application' &&
