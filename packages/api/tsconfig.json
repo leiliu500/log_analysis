@@ -11,7 +11,7 @@
     { "path": "../agents/dynamic/analysis" },
     { "path": "../ingestion" },
     { "path": "../agents" },
-    { "path": "../simulator" }
+    { "path": "../agents/dynamic/simulator" }
   ],
   "include": ["src/**/*.ts"]
 }

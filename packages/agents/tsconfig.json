@@ -11,7 +11,7 @@
     { "path": "../db" },
     { "path": "./dynamic/analysis" },
     { "path": "../ingestion" },
-    { "path": "../simulator" }
+    { "path": "./dynamic/simulator" }
   ],
   "include": ["index.ts", "bedrock/**/*.ts"]
 }

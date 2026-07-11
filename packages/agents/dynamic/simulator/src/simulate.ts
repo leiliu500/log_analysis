@@ -8,8 +8,8 @@ import {
 } from '@log/shared';
 import { parseLogGroup, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/app-scp';
 import { converseJson } from '@log/analysis';
-import { routeRequest, applicationRegistry } from '@log/agents';
-import { simulate, simulateVerbatim } from '@log/simulator';
+import { applicationRegistry } from '@log/applications';
+import { simulate, simulateVerbatim } from './simulator.js';
 
 /**
  * How many sets to generate. The explicit "N request/ack/response/sets" phrase
@@ -372,11 +372,15 @@ function isSimulateRequest(prompt: string, route: RouteDecision): boolean {
  * analysis. The scheduled poller ingests + analyzes at the next interval and the
  * Dashboard reflects the resulting findings.
  */
-export async function handleSimulatePrompt(input: unknown): Promise<SimulatePromptResponse> {
+export async function handleSimulatePrompt(
+  input: unknown,
+  router: (prompt: string) => Promise<RouteDecision>,
+): Promise<SimulatePromptResponse> {
   const { prompt } = z.object({ prompt: z.string().min(1) }).parse(input);
 
-  // 1) Supervisor Agent routes the request.
-  const route = await routeRequest(prompt);
+  // 1) Supervisor Agent routes the request (injected — keeps this package free of
+  //    a dependency on @log/agents, which itself depends on the simulator writer).
+  const route = await router(prompt);
   if (!isSimulateRequest(prompt, route)) {
     return {
       route,

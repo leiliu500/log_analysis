@@ -17,12 +17,11 @@ import {
 } from '@log/db';
 import { runPipeline } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
-import { simulate } from '@log/simulator';
-import { analyzeAllSources, applicationRegistry } from '@log/agents';
+import { simulate, handleSimulatePrompt } from '@log/simulator';
+import { analyzeAllSources, applicationRegistry, routeRequest } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
 import { handleChat } from './chat.js';
-import { handleSimulatePrompt } from './simulate.js';
 
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
@@ -135,7 +134,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
   // routing decision + result so the UI can show what the LLM understood.
   api.post('/simulate/prompt', async (req, reply) => {
     try {
-      return await handleSimulatePrompt(req.body);
+      return await handleSimulatePrompt(req.body, routeRequest);
     } catch (err) {
       reply.code(400);
       return { error: (err as Error).message };

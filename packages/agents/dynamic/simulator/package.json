@@ -17,7 +17,9 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@log/analysis": "*",
     "@log/app-scp": "*",
+    "@log/applications": "*",
     "@log/ingestion": "*",
     "@log/shared": "*"
   },

@@ -9,7 +9,7 @@
     { "path": "packages/agents/dynamic/analysis" },
     { "path": "packages/ingestion" },
     { "path": "packages/agents" },
-    { "path": "packages/simulator" },
+    { "path": "packages/agents/dynamic/simulator" },
     { "path": "packages/api" }
   ]
 }
