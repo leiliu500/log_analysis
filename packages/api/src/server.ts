@@ -15,10 +15,8 @@ import {
   recentPollerRuns,
   deleteAllPollerRuns,
 } from '@log/db';
-import { runPipeline } from '@log/analysis';
-import { connectorFor } from '@log/ingestion';
 import { simulate, handleSimulatePrompt } from '@log/simulator';
-import { analyzeAllSources, applicationRegistry, routeRequest } from '@log/agents';
+import { analyzeAllSources, routeRequest } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
 import { handleChat } from './chat.js';
@@ -163,29 +161,6 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     }
   });
 
-  // -------- On-demand analysis run --------
-  const AnalyzeBody = z.object({
-    source: LogSourceType.default('cloudwatch'),
-    since: z.coerce.number().optional(),
-    limit: z.coerce.number().default(2000),
-    embedLogs: z.boolean().default(false),
-  });
-  api.post('/analyze', async (req, reply) => {
-    try {
-      const b = AnalyzeBody.parse(req.body);
-      const since = b.since ?? Date.now() - 15 * 60_000;
-      const records = await connectorFor(b.source).pull({ since, limit: b.limit });
-      const result = await runPipeline(records, { embedLogs: b.embedLogs, registry: applicationRegistry });
-      return {
-        parsed: result.parsed,
-        anomalies: result.anomalies.length,
-        findings: result.findings,
-      };
-    } catch (err) {
-      reply.code(400);
-      return { error: (err as Error).message };
-    }
-  });
 }
 
 await app.register(apiRoutes, { prefix: '/api' });
