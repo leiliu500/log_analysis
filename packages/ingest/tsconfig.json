@@ -6,7 +6,7 @@
   },
   "references": [
     { "path": "../shared" },
-    { "path": "../applications" },
+    { "path": "../apps" },
     { "path": "../db" },
     { "path": "../analysis" },
     { "path": "../ingestion" }
