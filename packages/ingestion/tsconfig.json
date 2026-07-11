@@ -9,7 +9,7 @@
     { "path": "../shared" },
     { "path": "../apps" },
     { "path": "../db" },
-    { "path": "../agents/analysis" }
+    { "path": "../agents/dynamic/analysis" }
   ],
   "include": ["src/**/*.ts"]
 }

@@ -8,7 +8,7 @@
     { "path": "../shared" },
     { "path": "../apps/scp" },
     { "path": "../db" },
-    { "path": "../agents/analysis" },
+    { "path": "../agents/dynamic/analysis" },
     { "path": "../ingestion" },
     { "path": "../agents" },
     { "path": "../simulator" }
