@@ -23,14 +23,12 @@ test('eventOf reads structured JSON request/response correlated by correlationId
   assert.equal(viaReqId?.corrId, 'req-9');
 });
 
-test('eventOf reads API Gateway execution-log text', () => {
-  const req = P.eventOf(log('(abc12345) Starting execution for request'));
-  assert.deepEqual(req, { type: 'REQUEST', corrId: 'abc12345', ackCode: undefined });
-  const resp = P.eventOf(log('(abc12345) Method completed with status: 502'));
-  assert.deepEqual(resp, { type: 'RESPONSE', corrId: 'abc12345', ackCode: '502' });
-});
-
-test('API Gateway "Method request ..." noise lines are NOT counted as REQUEST', () => {
+test('API Gateway execution-log lines do NOT spawn a transaction (keyed by gateway requestId, not business correlationID)', () => {
+  // A single call also appears in the API-Gateway execution log under the gateway
+  // requestId. Counting those as transactions would double-count one call as two
+  // agents, so eventOf ignores them — the handler's correlationID owns the tx.
+  assert.equal(P.eventOf(log('(abc12345) Starting execution for request')), undefined);
+  assert.equal(P.eventOf(log('(abc12345) Method completed with status: 502')), undefined);
   assert.equal(P.eventOf(log('(abc12345) Method request path: {aba_t=052001633}')), undefined);
   assert.equal(P.eventOf(log('(abc12345) Method request headers: {Accept=*/*}')), undefined);
 });

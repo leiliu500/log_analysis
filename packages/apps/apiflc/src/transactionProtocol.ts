@@ -6,15 +6,21 @@ import type { ParsedLog, TransactionProtocol, TxEvent } from '@log/shared';
  * correlates a REQUEST and its RESPONSE by a shared `correlationId`. This is the
  * simpler two-phase case the generic engine supports with `phases: ['RESPONSE']`.
  *
- * NOTE: apiflc's log groups (API Gateway execution logs + Lambda handlers) were
- * not yet populated when this was written, so `eventOf` covers the two most
- * likely shapes and is easy to tune to the real content:
+ * A single API call is logged across several groups (API-Gateway execution logs,
+ * the Lambda handler, the authorizer). The business transaction is correlated by
+ * the **business `correlationID`** — the one the handler logs (e.g. 1234). The
+ * API-Gateway execution log carries a *different* id, the gateway `requestId`
+ * (e.g. "(68f54c61-…)"), which is NOT the business correlation id: if we spawned
+ * transactions off it too, one call would show up as TWO agents. So `eventOf`
+ * only recognizes the business-correlated shapes:
  *   1. Structured JSON: a `messageType`/`type` of REQUEST|RESPONSE, correlated by
- *      `correlationId` (the API Gateway request id is the fallback), with
+ *      `correlationId` (the request id is a last-resort fallback), with
  *      status/statusCode/ackCode.
- *   2. API Gateway execution-log text: "(<requestId>) ... Method request ..."
- *      (REQUEST) and "(<requestId>) Method completed with status: <code>"
- *      (RESPONSE, ackCode = HTTP status) — the "(<requestId>)" is the correlation id.
+ *   2. Lambda handler text: "... correlationID: <id>; FedLine Request ..." (REQUEST)
+ *      and "... correlationID: <id>; Response from Data Services ..." (RESPONSE).
+ * The API-Gateway execution-log lines (keyed only by the gateway requestId) are
+ * treated as supporting detail, not as their own transaction — see
+ * {@link fromApiGateway}, which is intentionally NOT wired into `eventOf`.
  */
 
 function fromJson(raw: string): TxEvent | undefined {
@@ -34,7 +40,14 @@ function fromJson(raw: string): TxEvent | undefined {
   }
 }
 
-function fromApiGateway(raw: string): TxEvent | undefined {
+/**
+ * Parse an API-Gateway execution-log line. Kept for reference/possible future use
+ * but deliberately NOT used by {@link eventOf}: these lines are keyed by the
+ * gateway `requestId`, not the business `correlationID`, so treating them as
+ * transactions would double-count a single call (one agent per group). The
+ * business transaction is owned by the handler logs.
+ */
+export function fromApiGateway(raw: string): TxEvent | undefined {
   // API Gateway execution logs prefix each line with "(<requestId>)".
   const idMatch = raw.match(/\(([a-z0-9-]{8,})\)/i);
   if (!idMatch) return undefined;
@@ -71,7 +84,10 @@ export const apiflcTransactionProtocol: TransactionProtocol = {
   phases: ['RESPONSE'],
   allPhases: ['REQUEST', 'RESPONSE'],
   eventOf(log: ParsedLog): TxEvent | undefined {
-    return fromJson(log.raw) ?? fromApiGateway(log.raw) ?? fromHandler(log.raw);
+    // Business-correlated shapes only (structured JSON + handler correlationID).
+    // API-Gateway execution logs are intentionally excluded so one call is one
+    // agent — see fromApiGateway's note.
+    return fromJson(log.raw) ?? fromHandler(log.raw);
   },
   isSuccess(ackCode?: string): boolean {
     if (!ackCode) return true;

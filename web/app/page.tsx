@@ -23,6 +23,10 @@ const REFRESH_MS = 30_000;
 /** Applications known to the platform (shown even before they have data). */
 const KNOWN_APPS = ['scp', 'apiflc'] as const;
 
+/** What each application calls its correlation id — app-specific (used as the
+ *  Agent History id column header). SCP: messageId; apiflc: correlationID. */
+const CORRELATION_LABELS: Record<string, string> = { scp: 'messageId', apiflc: 'correlationID' };
+
 /** Findings newer than this are "recent (in window)"; older are history. */
 const RECENT_FINDING_MIN = 30;
 
@@ -242,7 +246,11 @@ export default function Dashboard() {
       )}
 
       {!loading && tab === 'agents' && (
-        <AgentsPanel active={shownActive} history={shownHistory} />
+        <AgentsPanel
+          active={shownActive}
+          history={shownHistory}
+          correlationLabel={appFilter === 'all' ? 'id' : CORRELATION_LABELS[appFilter] ?? 'messageId'}
+        />
       )}
 
       {!loading && tab === 'findings' && (

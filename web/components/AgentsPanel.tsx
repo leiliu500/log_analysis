@@ -72,7 +72,16 @@ function AgentCard({ a }: { a: Agent }) {
   );
 }
 
-export function AgentsPanel({ active, history }: { active: Agent[]; history: Agent[] }) {
+export function AgentsPanel({
+  active,
+  history,
+  correlationLabel = 'messageId',
+}: {
+  active: Agent[];
+  history: Agent[];
+  /** What this application calls its correlation id (scp: messageId, apiflc: correlationID). */
+  correlationLabel?: string;
+}) {
   return (
     <section className="mb-8">
       <div className="mb-3 flex items-center gap-2">
@@ -107,7 +116,7 @@ export function AgentsPanel({ active, history }: { active: Agent[]; history: Age
           <table className="w-full text-left text-xs">
             <thead className="text-slate-500">
               <tr className="border-b border-edge">
-                <th className="px-3 py-2">messageId</th>
+                <th className="px-3 py-2">{correlationLabel}</th>
                 <th className="px-3 py-2">final status</th>
                 <th className="px-3 py-2">phases</th>
                 <th className="px-3 py-2">ackCode</th>
