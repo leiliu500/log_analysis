@@ -10,7 +10,7 @@ import { connectorFor } from '@log/ingestion';
 import { simulate } from '@log/simulator';
 import { SimulateRequest, InvokeAppRequest, type LogSourceType } from '@log/shared';
 import { invokeApplication } from '@log/app-scp';
-import { applicationRegistry } from './applications.js';
+import { applicationRegistry } from '@log/applications';
 
 interface BedrockAgentEvent {
   actionGroup: string;

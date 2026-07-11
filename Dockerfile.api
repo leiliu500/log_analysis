@@ -7,9 +7,11 @@ RUN npm install --workspaces --include-workspace-root
 RUN npm run build --workspace @log/shared \
   && npm run build --workspace @log/app-scp \
   && npm run build --workspace @log/app-apiflc \
+  && npm run build --workspace @log/applications \
   && npm run build --workspace @log/db \
   && npm run build --workspace @log/analysis \
   && npm run build --workspace @log/ingestion \
+  && npm run build --workspace @log/ingest \
   && npm run build --workspace @log/simulator \
   && npm run build --workspace @log/agents \
   && npm run build --workspace @log/api

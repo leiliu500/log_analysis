@@ -7,12 +7,7 @@
   "references": [
     { "path": "../shared" },
     { "path": "../apps/scp" },
-    { "path": "../applications" },
-    { "path": "../ingest" },
-    { "path": "../db" },
-    { "path": "../analysis" },
-    { "path": "../ingestion" },
-    { "path": "../simulator" }
+    { "path": "../apps/apiflc" }
   ],
   "include": ["src/**/*.ts"]
 }

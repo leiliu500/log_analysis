@@ -10,7 +10,7 @@ import { dispatchAgentic, advanceAgents } from '@log/analysis';
 import type { ParsedLog, PollerTrigger, Finding, PollerRun } from '@log/shared';
 import { allConnectors } from '@log/ingestion';
 import { pruneFindingsOlderThan, insertPollerRun } from '@log/db';
-import { applicationRegistry } from './applications.js';
+import { applicationRegistry } from '@log/applications';
 
 export interface AnalyzeOptions {
   windowMinutes?: number;
