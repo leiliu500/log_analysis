@@ -40,6 +40,15 @@ export interface ApplicationDef {
    * Lambda / API-Gateway logs). Defaults to 'cashMessage'.
    */
   simulationMode?: 'cashMessage' | 'verbatim';
+  /**
+   * Path (relative to the `prompts/` root) of THIS application's own Simulator
+   * understanding-agent prompt. The prompt is application-specific — it knows
+   * this app's log shape and correlation field, and extracts the correlation
+   * id(s) from a pasted sample. Each app owns its own prompt (e.g. apiflc reads
+   * its `correlationID`); apps whose correlation needs no LLM extraction (e.g.
+   * scp reads `messageId` straight from the cashMessage XML) leave it unset.
+   */
+  simulateUnderstandingPromptPath?: string;
 }
 
 /**

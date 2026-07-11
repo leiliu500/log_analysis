@@ -9,7 +9,8 @@
       "Bash(node --import tsx --test packages/api/src/*.test.ts packages/agents/src/*.test.ts)",
       "Bash(xargs grep -ln \"invokeApplication\")",
       "Bash(python -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\('status:',d.get\\('status'\\),'latencyMs:',d.get\\('latencyMs'\\),'response:',str\\(d.get\\('response'\\)\\)[:120]\\) if 'error' not in d else print\\('resp:',d\\)\")",
-      "Bash(node --import tsx --test packages/agents/src/scp.test.ts)"
+      "Bash(node --import tsx --test packages/agents/src/scp.test.ts)",
+      "Bash(AWS_CONFIG_FILE=/d/Lei.Liu/.aws/config aws configure list-profiles)"
     ]
   }
 }

@@ -16,4 +16,6 @@ export const apiflcApplication: ApplicationDef = {
   defaultSamples: APIFLC_SAMPLE,
   simulationMode: 'verbatim',
   correlationLabel: 'correlationID',
+  // apiflc owns its Simulator understanding prompt (reads its correlationID).
+  simulateUnderstandingPromptPath: 'apps/apiflc/simulate.understand.md',
 };
