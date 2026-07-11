@@ -5,7 +5,7 @@ import { dirname, join, isAbsolute } from 'node:path';
 /**
  * Loader for the externalized LLM system prompts under the repo's top-level
  * `prompts/` folder. Each prompt lives in its own `.md` file (e.g.
- * `prompts/agents/supervisor.md`) so the instructions are editable and
+ * `prompts/bedrock/supervisor.md`) so the instructions are editable and
  * reviewable as prose, separate from the code that sends them.
  *
  * The same `prompts/` tree is shipped to every runtime that reads it:
@@ -46,7 +46,7 @@ const cache = new Map<string, string>();
 
 /**
  * Read a prompt by its path relative to the `prompts/` folder (e.g.
- * "agents/supervisor.md"). Cached after first read; CRLF-normalized and
+ * "bedrock/supervisor.md"). Cached after first read; CRLF-normalized and
  * trailing-whitespace-trimmed so the string matches the original inline
  * constant byte-for-byte regardless of the checkout's line endings.
  */

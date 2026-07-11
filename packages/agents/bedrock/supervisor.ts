@@ -1,7 +1,7 @@
 import { converseJson } from '@log/analysis';
 import { RouteDecision, loadPrompt } from '@log/shared';
 
-const SUPERVISOR_SYSTEM = loadPrompt('agents/supervisor.md');
+const SUPERVISOR_SYSTEM = loadPrompt('bedrock/supervisor.md');
 
 /**
  * Deterministic signal that a message is an analytical query over RAW LOGS
