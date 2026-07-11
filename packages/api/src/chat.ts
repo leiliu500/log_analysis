@@ -73,27 +73,44 @@ async function dispatch(
   message: string,
   route: RouteDecision,
 ): Promise<{ answer: string; context: ChatContext }> {
-  switch (route.intent) {
-    case 'simulate_logs': {
-      // Application-aware simulation: resolves the target app (scp / apiflc / …),
-      // loads that app's understanding prompt, and writes cashMessage or verbatim
-      // logs accordingly. Reuse the already-computed route (inject it so the
-      // simulator doesn't route a second time).
-      const resp = await handleSimulatePrompt({ prompt: message }, () => Promise.resolve(route));
-      const detail = resp.results
-        .map((r) => {
-          const written = Object.entries(r.result.written)
-            .map(([k, v]) => `${v}→${k}`)
-            .join(', ');
-          return `• ${r.instruction} (${written || '0 written'})`;
-        })
-        .join('\n');
-      return {
-        answer: `${resp.note}${detail ? `\n\n${detail}` : ''}`,
-        context: { findings: [], logs: [], route },
-      };
-    }
+  // The Converse router (routeRequest) is an LLM and occasionally misclassifies;
+  // deterministic guardrails keep the two application-aware flows reliable
+  // regardless of the router's intent. Both handlers resolve the target
+  // application (scp / apiflc / …) and load that application's own prompt.
+  const wantsSimulate =
+    route.intent === 'simulate_logs' ||
+    /\bsimulate\b/i.test(message) ||
+    /<(?:[\w.-]+:)?cashMessage[\s>]/i.test(message);
+  const wantsAssistant =
+    route.intent === 'analyze_logs' ||
+    (/\b(how many|number of|count|list|show|which|what are)\b/i.test(message) &&
+      /\b(request|ack|response|message|log|transaction|correlation\s?id|message\s?id)\b/i.test(message));
 
+  // Simulate → the application-aware simulator (understanding prompt + cashMessage
+  // or verbatim writes). Inject the known route so it doesn't route twice.
+  if (wantsSimulate) {
+    const resp = await handleSimulatePrompt({ prompt: message }, () => Promise.resolve(route));
+    const detail = resp.results
+      .map((r) => {
+        const written = Object.entries(r.result.written)
+          .map(([k, v]) => `${v}→${k}`)
+          .join(', ');
+        return `• ${r.instruction} (${written || '0 written'})`;
+      })
+      .join('\n');
+    return {
+      answer: `${resp.note}${detail ? `\n\n${detail}` : ''}`,
+      context: { findings: [], logs: [], route },
+    };
+  }
+
+  // Assistant → the application-aware Log Assistant (per-app qa prompt + protocol).
+  if (wantsAssistant) {
+    const { answer, logs } = await answerLogQuestion(message, route);
+    return { answer, context: { findings: [], logs, route } };
+  }
+
+  switch (route.intent) {
     case 'invoke_application': {
       const req = InvokeAppRequest.parse({
         application: route.targetApplication ?? route.parameters.application,
@@ -104,12 +121,6 @@ async function dispatch(
         answer: `Invoked "${req.application}" → HTTP ${result.status} in ${result.latencyMs}ms.\n\n\`\`\`json\n${JSON.stringify(result.response, null, 2).slice(0, 2000)}\n\`\`\``,
         context: { findings: [], logs: [], route },
       };
-    }
-
-    case 'analyze_logs': {
-      // Pull raw logs over the requested window and answer the question.
-      const { answer, logs } = await answerLogQuestion(message, route);
-      return { answer, context: { findings: [], logs, route } };
     }
 
     case 'query_findings':
