@@ -18,7 +18,7 @@ import {
 import { routeRequest } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
 import { simulate, buildSimulateRequest } from '@log/simulator';
-import { answerLogQuestion } from './analyze.js';
+import { answerLogQuestion } from './qa.js';
 
 const ANSWER_SYSTEM = loadPrompt('api/chat.md');
 

@@ -26,7 +26,7 @@ export function extractWindowMinutes(message: string, fromLlm: unknown): number 
 }
 
 /** Generic fallback prompt when the resolved application declares none. */
-const GENERIC_SYSTEM = loadPrompt('api/analyze.md');
+const GENERIC_SYSTEM = loadPrompt('api/qa.md');
 
 /**
  * The application the Log Assistant answers for — resolved dynamically from the

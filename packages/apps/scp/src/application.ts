@@ -16,7 +16,7 @@ export const scpApplication: ApplicationDef = {
   correlationLabel: 'messageId',
   // Log Assistant: SCP's grounded-Q&A prompt + its richer messageId view (an
   // ACK/RESPONSE has its own messageId plus the request's id as initMessageId).
-  assistantPromptPath: 'apps/scp/analyze.md',
+  assistantPromptPath: 'apps/scp/qa.md',
   assistantMeta(log) {
     const m = scpMessageMeta(log);
     if (m.type !== 'REQUEST' && m.type !== 'ACK' && m.type !== 'RESPONSE') return undefined;

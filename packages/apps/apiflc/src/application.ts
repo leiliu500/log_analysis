@@ -21,5 +21,5 @@ export const apiflcApplication: ApplicationDef = {
   // Log Assistant: apiflc's grounded-Q&A prompt. It has no assistantMeta — the
   // assistant derives (type, id=corrId, ackCode) from the REQUEST→RESPONSE
   // protocol's eventOf (apiflc's own id IS its correlationID).
-  assistantPromptPath: 'apps/apiflc/analyze.md',
+  assistantPromptPath: 'apps/apiflc/qa.md',
 };
