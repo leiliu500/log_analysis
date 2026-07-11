@@ -186,6 +186,80 @@ export interface SimulateCommand {
 }
 
 const EXTRACT_ONE_SYSTEM = loadPrompt('api/simulate.extract-one.md');
+const UNDERSTAND_SYSTEM = loadPrompt('api/simulate.understand.md');
+
+/**
+ * What the Simulator's LLM understanding step resolved from the user's request:
+ * which application it targets, that application's correlation field, how many
+ * sets to generate, and — per target log group — the correlation id extracted
+ * from the pasted sample. Application-specific: the correlation field is the
+ * app's own (`messageId` for scp, `correlationID` for apiflc), so the id is
+ * understood by meaning, not by a hardcoded regex.
+ */
+export interface SimulationPlan {
+  application?: string;
+  correlationLabel: string;
+  count: number;
+  groups: Array<{ logGroup: string; correlationId?: string }>;
+}
+
+/** Coerce the LLM's reply into a validated {@link SimulationPlan}. */
+function normalizePlan(
+  raw: Record<string, unknown>,
+  registry = applicationRegistry,
+): SimulationPlan | undefined {
+  const appId = typeof raw.application === 'string' ? raw.application.trim() : undefined;
+  const app = registry.byId(appId);
+  const groups: SimulationPlan['groups'] = [];
+  for (const g of Array.isArray(raw.groups) ? raw.groups : []) {
+    if (!g || typeof g !== 'object') continue;
+    const lg = (g as Record<string, unknown>).logGroup;
+    const cid = (g as Record<string, unknown>).correlationId;
+    if (typeof lg !== 'string' || !lg.trim()) continue;
+    const entry: SimulationPlan['groups'][number] = { logGroup: lg.trim() };
+    if (typeof cid === 'string' && cid.trim()) entry.correlationId = cid.trim();
+    groups.push(entry);
+  }
+  if (!app && groups.length === 0) return undefined;
+  const count = Math.max(1, Math.floor(Number(raw.count) || 1));
+  const correlationLabel =
+    app?.correlationLabel ??
+    (typeof raw.correlationLabel === 'string' ? raw.correlationLabel : 'messageId');
+  return { application: app?.id, correlationLabel, count, groups };
+}
+
+/**
+ * The Simulator Agent's LLM understanding step. Given the user's request (which
+ * may embed pasted raw logs) and the installed application catalog, the LLM
+ * resolves the target application, its correlation field, the set count, and the
+ * correlation id present in each target log group. Application-aware and
+ * dynamic: the app is chosen from the user's input rather than hardcoded, and
+ * the correlation id is extracted using that app's own field. Returns undefined
+ * (caller falls back to deterministic matching) if the model is unavailable or
+ * the reply is unusable.
+ */
+export async function understandSimulation(
+  prompt: string,
+  registry = applicationRegistry,
+): Promise<SimulationPlan | undefined> {
+  const catalog = registry.all().map((a) => ({
+    id: a.id,
+    displayName: a.displayName,
+    correlationLabel: a.correlationLabel ?? 'messageId',
+    simulationMode: a.simulationMode ?? 'cashMessage',
+    logGroups: [...a.logGroups],
+  }));
+  const user = `Installed applications:\n${JSON.stringify(catalog, null, 2)}\n\nUser request (may include pasted raw logs):\n"""\n${prompt.slice(0, 16000)}\n"""`;
+  try {
+    const raw = await converseJson<Record<string, unknown>>(user, {
+      system: UNDERSTAND_SYSTEM,
+      temperature: 0,
+    });
+    return normalizePlan(raw, registry);
+  } catch {
+    return undefined;
+  }
+}
 
 function normalizeCommand(c: Record<string, unknown>): SimulateCommand {
   const rawTypes = Array.isArray(c.messageTypes) ? c.messageTypes : [];
@@ -320,32 +394,42 @@ export async function handleSimulatePrompt(input: unknown): Promise<SimulateProm
     };
   }
 
-  // 2a) Application dispatch. If the prompt names a specific application's log
-  //     group whose simulator model is "verbatim" (e.g. apiflc's raw Lambda /
-  //     API-Gateway logs), write the pasted logs (or the app's sample) as-is to
-  //     that group — not the SCP cashMessage path.
-  const appMatch = applicationRegistry.matchLogGroup(prompt);
-  if (appMatch && appMatch.app.simulationMode === 'verbatim') {
-    const app = appMatch.app;
-    const count = parseCount(prompt, undefined);
+  // 2a) Application dispatch via the LLM understanding step. The Simulator Agent
+  //     asks the model to read the request (with any pasted logs) and resolve the
+  //     target application + its correlation id(s) per log group — application-
+  //     specific and dynamic. Falls back to deterministic log-group matching if
+  //     the model is unavailable. If the resolved app's simulator model is
+  //     "verbatim" (e.g. apiflc's raw Lambda / API-Gateway logs), write the
+  //     pasted logs as-is with the understood correlation id preserved.
+  const plan = await understandSimulation(prompt);
+  const app =
+    applicationRegistry.byId(plan?.application) ?? applicationRegistry.matchLogGroup(prompt)?.app;
+
+  if (app && (app.simulationMode ?? 'cashMessage') === 'verbatim') {
+    const count = plan?.count ?? parseCount(prompt, undefined);
     const phases = app.protocol.allPhases.filter(
       (p): p is 'REQUEST' | 'ACK' | 'RESPONSE' => p === 'REQUEST' || p === 'ACK' || p === 'RESPONSE',
     );
+    // The LLM's per-group correlation id (understood via the app's own field).
+    const corrByGroup = new Map<string, string>();
+    for (const g of plan?.groups ?? []) if (g.correlationId) corrByGroup.set(g.logGroup, g.correlationId);
 
     // A single paste may target several of the app's log groups (each labeled
     // with its group). Split into per-group segments; else one segment for the
     // matched group with the pasted body (or the app's default sample).
+    const fallbackGroup =
+      applicationRegistry.matchLogGroup(prompt)?.group ?? plan?.groups[0]?.logGroup ?? app.logGroups[0]!;
     const split = app.splitByLogGroup?.(prompt) ?? [];
     const targets =
       split.length > 0
         ? split
         : [
             {
-              group: appMatch.group,
+              group: fallbackGroup,
               samples:
                 prompt
                   .split(/\r?\n/)
-                  .filter((l) => !l.includes(appMatch.group) || /[(]|status:|correlationID:/i.test(l))
+                  .filter((l) => !l.includes(fallbackGroup) || /[(]|status:|correlationID:/i.test(l))
                   .join('\n')
                   .trim() || app.defaultSamples || '',
             },
@@ -360,6 +444,9 @@ export async function handleSimulatePrompt(input: unknown): Promise<SimulateProm
         sinks: ['cloudwatch'],
         count,
         logGroup: t.group,
+        // Preserve the correlation id the LLM understood for this group (the
+        // simulator falls back to reading it from the sample when absent).
+        startMessageId: corrByGroup.get(t.group),
       });
       const result = await simulateVerbatim(req);
       results.push({
@@ -378,7 +465,7 @@ export async function handleSimulatePrompt(input: unknown): Promise<SimulateProm
     return {
       route,
       results,
-      note: `Simulator Agent wrote ${wrote} log line(s) across ${groups.length} ${app.id} log group(s): ${groups.join(', ')}. No analysis ran now — the scheduled poller will ingest and analyze these at the next interval, then update the Dashboard.`,
+      note: `Simulator Agent understood application "${app.id}" and wrote ${wrote} log line(s) across ${groups.length} log group(s): ${groups.join(', ')}. No analysis ran now — the scheduled poller will ingest and analyze these at the next interval, then update the Dashboard.`,
     };
   }
 
