@@ -31,16 +31,12 @@ const SCENARIO = [
   mk('ACK', 'IM-4765', 'FCC-USSS-28090845', 'FAILED'),
 ];
 
-test('failure question: reports the FAILED ack', () => {
-  const a = directAnswer('Are there any exception or error or failure', 'cloudwatch', 60, SCENARIO)!;
-  assert.match(a, /^Yes/);
-  assert.ok(a.includes('FAILED') && a.includes('FCC-USSS-28090845'));
-});
-
-test('failure question with none: truthful No', () => {
-  const ok = [mk('REQUEST', '001'), mk('ACK', 'A', '001', 'OK'), mk('RESPONSE', 'R', '001', 'PROCESSED_SUCCESSFULLY')];
-  const a = directAnswer('any ACK failure', 'cloudwatch', 60, ok)!;
-  assert.match(a, /^No —/);
+test('failure/error questions delegate to the LLM (not hardcoded) → null', () => {
+  // Aggregating "all failures or errors" is an interpretive answer owned by the
+  // application's qa.md prompt, not directAnswer. These must fall through.
+  assert.equal(directAnswer('Does scp have failure or error', 'cloudwatch', 60, SCENARIO), null);
+  assert.equal(directAnswer('Are there any exception or error or failure', 'cloudwatch', 60, SCENARIO), null);
+  assert.equal(directAnswer('are there any failed acks', 'cloudwatch', 60, SCENARIO), null);
 });
 
 test('completeness: which message only has ACK and no response', () => {

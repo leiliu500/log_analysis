@@ -178,15 +178,12 @@ export function directAnswer(
       .trim();
   }
 
-  // (b) Failure / error questions → messages with a non-success ackCode.
-  if (/\b(exception|errors?|failure|failures|failed|faults?|reject(ed)?|nack|unsuccessful|declined|problems?)\b/.test(m)) {
-    const failed = enriched.filter((e) => isFailAck(proto, e.meta.ackCode));
-    const coded = enriched.filter((e) => e.meta.ackCode).length;
-    if (!failed.length) {
-      return `No — no failures/errors on ${source} in ${win}. All ${coded} ackCode(s) indicate success.`;
-    }
-    return [`Yes — ${failed.length} message(s) with a failed ackCode on ${source} in ${win}:`, '', ...failed.map((e) => fmt(e, label))].join('\n');
-  }
+  // Failure / error aggregation is NOT done here — it is an interpretive,
+  // aggregate answer (which acks failed, which transactions never completed,
+  // how to summarise them) that belongs to the application's qa.md prompt, not
+  // hardcoded rules. Such questions fall through to the grounded LLM path, which
+  // sees every correlated message (type, id, initMessageId, ackCode) and
+  // aggregates the failures itself.
 
   // (c) Completeness: transactions with the request but a missing follow-up phase.
   if (
