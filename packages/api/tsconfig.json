@@ -7,6 +7,7 @@
   "references": [
     { "path": "../shared" },
     { "path": "../apps/scp" },
+    { "path": "../apps/apiflc" },
     { "path": "../db" },
     { "path": "../agents/dynamic/analysis" },
     { "path": "../ingestion" },

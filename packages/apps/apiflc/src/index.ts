@@ -9,3 +9,4 @@ export * from './logGroups.js';
 export * from './transactionProtocol.js';
 export * from './samples.js';
 export * from './application.js';
+export * from './httpOutcomes.js';

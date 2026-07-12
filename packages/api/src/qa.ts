@@ -9,6 +9,7 @@ import { loadPrompt } from '@log/shared';
 import { converse, parseBatch } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
 import { applicationRegistry } from '@log/agents';
+import { apiflcHttpOutcomes } from '@log/app-apiflc';
 
 /** Parse a time window (in minutes) from the question or the LLM's param. */
 export function extractWindowMinutes(message: string, fromLlm: unknown): number {
@@ -282,9 +283,13 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
     .filter((e) => e.meta.type)
     .map((e) => fmt(e, label).replace(/^- /, ''))
     .join('\n');
+  // apiflc-specific: its HTTP status lives in the API-Gateway execution log (no
+  // transaction type, so absent from the table above). Join apiflc's three log
+  // groups and surface each call's HTTP outcome so the assistant can cite it.
+  const extra = app.id === 'apiflc' ? apiflcHttpOutcomes(parsed) : '';
 
   const answer = await converse(
-    `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}`,
+    `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}`,
     { system, temperature: 0, maxTokens: 2500 },
   );
 

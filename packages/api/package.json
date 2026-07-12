@@ -14,6 +14,7 @@
     "@fastify/cors": "^10.0.0",
     "@log/agents": "*",
     "@log/analysis": "*",
+    "@log/app-apiflc": "*",
     "@log/app-scp": "*",
     "@log/db": "*",
     "@log/ingestion": "*",
