@@ -13,16 +13,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <div className="flex min-h-screen">
           <aside className="w-56 shrink-0 border-r border-edge bg-panel p-4">
-            <div className="mb-6 text-lg font-semibold text-white">🛰️ LogIntel</div>
+            <div className="mb-6 text-lg font-semibold text-white">🛰️ Agentic Log</div>
             <nav className="space-y-1 text-sm">
               <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/">
                 Dashboard
               </Link>
               <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/chat">
                 Chatbot
-              </Link>
-              <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/scp">
-                SCP
               </Link>
             </nav>
             <p className="mt-8 text-xs text-slate-500">
