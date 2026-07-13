@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { verifyToken, createToken, SESSION_COOKIE, SESSION_MINUTES } from '@/lib/auth';
 
-/** Paths reachable without a session (the login page + its API routes). */
-const PUBLIC = ['/login', '/api/login', '/api/logout'];
+/** Paths reachable without a session (the login page + its auth routes). Note the
+ *  ALB routes /api/* to the backend, so the web auth endpoints live under /auth. */
+const PUBLIC = ['/login', '/auth/login', '/auth/logout'];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
