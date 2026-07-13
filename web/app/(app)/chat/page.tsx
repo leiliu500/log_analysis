@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react';
 import type { ChatResponse } from '@log/shared';
-import { api } from '../../lib/api';
+import { api } from '@/lib/api';
 
 interface Msg {
   role: 'user' | 'assistant';

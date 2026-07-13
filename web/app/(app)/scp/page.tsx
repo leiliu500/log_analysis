@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { api } from '../../lib/api';
+import { api } from '@/lib/api';
 
 const SAMPLE_PAYLOAD = JSON.stringify(
   {

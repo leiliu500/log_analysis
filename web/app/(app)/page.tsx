@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Finding, Agent, PollerRun } from '@log/shared';
-import { api } from '../lib/api';
-import { FindingCard } from '../components/FindingCard';
-import { FindingsHistoryTable } from '../components/FindingsHistoryTable';
-import { AgentsPanel } from '../components/AgentsPanel';
-import { ScheduleTab } from '../components/ScheduleTab';
+import { api } from '@/lib/api';
+import { FindingCard } from '@/components/FindingCard';
+import { FindingsHistoryTable } from '@/components/FindingsHistoryTable';
+import { AgentsPanel } from '@/components/AgentsPanel';
+import { ScheduleTab } from '@/components/ScheduleTab';
 
 const ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
