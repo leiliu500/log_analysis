@@ -99,3 +99,29 @@ test('"how many ACK and responses" counts BOTH types (not just one)', () => {
 test('open-ended question falls through to the LLM (null)', () => {
   assert.equal(directAnswer('why did the transaction fail', 'cloudwatch', 10, ALL), null);
 });
+
+// A content question about a specific id must reach the qa agent: only the agent
+// sees the RAW MESSAGES block, so only it can reproduce a logged body. A phase
+// checklist ("REQUEST ✓, RESPONSE ✓") is a wrong answer to "what is the response".
+test('specific-id CONTENT question falls through to the LLM (null)', () => {
+  for (const q of [
+    'What is apiflc response in handler for correlation ID 001 ?',
+    'show the response for messageId=001',
+    'what was the request for correlation id 001',
+    'give me the response payload for 001',
+    'extract the response data for messageId=001',
+  ]) {
+    assert.equal(directAnswer(q, 'cloudwatch', 60, SCENARIO), null, `should fall through: ${q}`);
+  }
+});
+
+// ...but a specific-id STATUS question stays deterministic (ids/phases from logs).
+test('specific-id STATUS question stays on the deterministic path', () => {
+  const a = directAnswer('does messageId=FCC-USSS-28090845 only has ACK with failure', 'cloudwatch', 60, SCENARIO);
+  assert.ok(a && /REQUEST ✓/.test(a), 'status question must not fall through');
+});
+
+test('wantsContent: needs a phase for a bare verb, so listing questions stay deterministic', () => {
+  const a = directAnswer('show all messageId in the last 10 minutes', 'cloudwatch', 10, ALL);
+  assert.ok(a && a.includes('IM-4774'), 'id listing must stay deterministic');
+});

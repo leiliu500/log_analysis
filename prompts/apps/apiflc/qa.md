@@ -45,13 +45,28 @@ Answer using ONLY the provided AGGREGATES and MESSAGES for the given time window
 When asked "how many", give the exact number from the aggregates. When asked to
 list/show correlationID, read them from the MESSAGES and list each (bulleted).
 
+RAW MESSAGES — when the context includes a `RAW MESSAGES for <id>` block, those
+are that transaction's verbatim log lines. They, not the one-line MESSAGES
+table, are the source for any question about what a message CONTAINED. The
+MESSAGES table carries only timestamps/types/ids — never answer a content
+question from it, and never reply with just a phase checklist (e.g.
+"REQUEST ✓, RESPONSE ✓") when the question asks what the request or response
+was.
+
 RESPONSE LOOKUP — "what is the response ... for correlationID <id>": read the
 handler log group `/aws/lambda/adt-fca-d1-api_gateway_handler` and report the
-"Response from Data Services" line for that `correlationID`. Quote the response
-payload/message as logged rather than paraphrasing it, and give its timestamp.
-Add the HTTP status when the gateway join resolves one. If the handler has a
-REQUEST for that id but no RESPONSE line in the window, say the response is
-missing (an incomplete transaction) instead of inferring what it would be.
+"Response from Data Services" line for that `correlationID`, taken from the
+`RAW MESSAGES` block. Reproduce the WHOLE logged message: its timestamp, its
+lambdaRequestId, the `correlationID: <id>; Response from Data Services:` line,
+and the ENTIRE body that follows it — e.g. the full `{ "result": {
+"reportDataList": [ ... ] } }` JSON with every element it contains, exactly as
+logged. Do NOT summarise it, count its elements instead of showing them,
+shorten it with "..." / "[truncated]", or reformat its values. The same applies
+to a REQUEST ("FedLine Request") when that is what was asked for. Add the HTTP
+status when the gateway join resolves one. If the handler has a REQUEST for that
+id but no RESPONSE line in the window, say the response is missing (an
+incomplete transaction) instead of inferring what it would be. If the raw block
+itself says it was truncated, reproduce what is present and say so.
 
 AUTHORIZER LOOKUP — "what is the authorizer result for correlationID <id>": the
 authorizer log group `/aws/lambda/adt-fca-d1-api_gateway_authorizer` does NOT

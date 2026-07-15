@@ -84,6 +84,34 @@ const fmt = (e: Enriched, label: string): string =>
   `${e.meta.corrId && e.meta.corrId !== e.meta.id ? `, initMessageId=${e.meta.corrId}` : ''}` +
   `${e.meta.ackCode ? `, ackCode=${e.meta.ackCode}` : ''}`;
 
+/**
+ * Cap on the verbatim raw-log block handed to the qa agent. A single apiflc
+ * RESPONSE body can be several KB; this bounds the prompt while still carrying
+ * whole messages (the block is truncated only at the very end, and says so).
+ */
+const MAX_RAW_CHARS = 60_000;
+
+/**
+ * The raw, verbatim log lines for one transaction id — the qa agent's only source
+ * for a message's CONTENT (the one-line MESSAGES table carries ids/types only, so
+ * without this the agent has nothing to reproduce a response body from).
+ * Matches on the correlated id and on a plain textual mention, so lines that carry
+ * the id but no parsed transaction event (e.g. apiflc's API-Gateway execution
+ * lines, keyed by gateway requestId but carrying `X-Correlation-ID=<id>`) are
+ * included too.
+ */
+function rawMessagesFor(id: string, enriched: Enriched[]): string {
+  const hits = enriched.filter((e) => e.meta.corrId === id || e.meta.id === id || e.log.raw.includes(id));
+  if (!hits.length) return '';
+  const body = [...hits]
+    .sort((a, b) => a.log.timestamp - b.log.timestamp)
+    .map((e) => `--- ${tsOf(e)} ${e.meta.type ?? e.log.level.toUpperCase()} ---\n${e.log.raw.trim()}`)
+    .join('\n\n');
+  const clipped =
+    body.length > MAX_RAW_CHARS ? `${body.slice(0, MAX_RAW_CHARS)}\n…[truncated — raw block exceeded ${MAX_RAW_CHARS} chars]` : body;
+  return `RAW MESSAGES for ${id} (verbatim — reproduce the body from these, do not summarise):\n${clipped}`;
+}
+
 /** A request correlated with its follow-up phases, grouped by correlation id. */
 interface Tx {
   corrId: string;
@@ -117,6 +145,34 @@ export function askedTypes(message: string, allPhases: readonly string[]): strin
   return out;
 }
 
+const CONTENT_NOUN = /\b(payloads?|bod(y|ies)|contents?|data|results?|details?|raw|full|json|message text)\b/i;
+const CONTENT_VERB = /\bwhat\s+(is|was|are|were)\b|\bshow\b|\bdisplay\b|\bprint\b|\bextract\b|\bgive\s+me\b|\bfetch\b/i;
+
+/**
+ * Does the question ask for a message's logged CONTENT (its body/payload) rather
+ * than its phase status? "What is the RESPONSE for correlationID 1234" wants the
+ * logged response body; "does messageId=X only have an ACK" wants the checklist.
+ * A content noun alone qualifies; a content verb only qualifies when the question
+ * also names a phase — so "show all messageIds" stays on the deterministic path.
+ */
+export function wantsContent(message: string, allPhases: readonly string[]): boolean {
+  if (CONTENT_NOUN.test(message)) return true;
+  return CONTENT_VERB.test(message) && askedTypes(message, allPhases).length > 0;
+}
+
+/** The transaction id the question names, if any (explicit `<label> id=X`, else a known id). */
+export function mentionedId(message: string, enriched: Enriched[]): string | undefined {
+  const mentions = (id: string | undefined): id is string => {
+    if (!id || id.length < 3) return false;
+    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^A-Za-z0-9._-])${esc}([^A-Za-z0-9._-]|$)`).test(message);
+  };
+  const explicitId = message.match(/(?:message|correlation)[_\s-]?id\s*[=:]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/i)?.[1];
+  const corrIds = [...new Set(enriched.map((e) => e.meta.corrId).filter(Boolean) as string[])];
+  const ownIds = enriched.map((e) => e.meta.id).filter(Boolean) as string[];
+  return explicitId ?? corrIds.find(mentions) ?? ownIds.find(mentions);
+}
+
 /**
  * Answer count / list / failure / completeness questions DETERMINISTICALLY from
  * the parsed logs — never via the LLM — so ids and counts are always the real
@@ -138,16 +194,13 @@ export function directAnswer(
   const followups = proto.phases; // non-initial phases
 
   // (a) A specific id mentioned → describe that transaction end-to-end.
-  const mentions = (id: string | undefined): id is string => {
-    if (!id || id.length < 3) return false;
-    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(^|[^A-Za-z0-9._-])${esc}([^A-Za-z0-9._-]|$)`).test(message);
-  };
-  const explicitId = message.match(/(?:message|correlation)[_\s-]?id\s*[=:]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/i)?.[1];
-  const corrIds = [...new Set(enriched.map((e) => e.meta.corrId).filter(Boolean) as string[])];
-  const ownIds = enriched.map((e) => e.meta.id).filter(Boolean) as string[];
-  const mentioned = explicitId ?? corrIds.find(mentions) ?? ownIds.find(mentions);
+  const mentioned = mentionedId(message, enriched);
   if (mentioned) {
+    // ...unless the question asks for the message CONTENT ("what is the RESPONSE
+    // for correlationID 1234"). A phase checklist cannot answer that — the logged
+    // body is the answer, and reproducing it is the qa agent's job (it is handed
+    // the raw messages for this id). Fall through to the grounded LLM path.
+    if (wantsContent(message, allPhases)) return null;
     const txs = correlate(enriched);
     const t =
       txs.get(mentioned) ??
@@ -287,10 +340,16 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
   // transaction type, so absent from the table above). Join apiflc's three log
   // groups and surface each call's HTTP outcome so the assistant can cite it.
   const extra = app.id === 'apiflc' ? apiflcHttpOutcomes(parsed) : '';
+  // The table above is one line per message (ids only). When the question names a
+  // transaction, also hand over that id's verbatim log lines so the agent can
+  // resolve its actual request/response content.
+  const focusId = mentionedId(message, enriched);
+  const rawBlock = focusId ? rawMessagesFor(focusId, enriched) : '';
 
   const answer = await converse(
-    `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}`,
-    { system, temperature: 0, maxTokens: 2500 },
+    `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}${rawBlock ? `\n\n${rawBlock}` : ''}`,
+    // A response body can be several KB; 2500 tokens would truncate it mid-JSON.
+    { system, temperature: 0, maxTokens: rawBlock ? 8000 : 2500 },
   );
 
   return { answer, logs: parsed.slice(0, 50), meta: answerMeta };
