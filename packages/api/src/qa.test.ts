@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { ParsedLog } from '@log/shared';
 import { isContinuationLine } from '@log/shared';
 import { scpTransactionProtocol as P } from '@log/app-scp';
-import { directAnswer as da, extractWindowMinutes, humanWindow } from './qa.js';
+import { directAnswer as da, extractWindowMinutes, humanWindow, mentionsId } from './qa.js';
 
 // Minimal enriched rows like answerLogQuestion builds. corrId is the request's
 // id (REQUEST: its own id; ACK/RESPONSE: the request id via init).
@@ -91,6 +91,23 @@ test('humanWindow: largest whole unit', () => {
   assert.equal(humanWindow(1440), 'the last 1 day(s)');
   assert.equal(humanWindow(120), 'the last 2 hour(s)');
   assert.equal(humanWindow(45), 'the last 45 minute(s)');
+});
+
+// "Show me scp request for message ID:001" returned apiflc's FedLine logs, because a
+// bare substring test hits "001" inside the ABA number 052001633 in an apiflc URL.
+// Ids are short and numeric — they must only match as whole tokens.
+test('mentionsId matches whole tokens, not substrings of longer numbers', () => {
+  const apiflc = "path: '/d1/eddReport/exportdetailinternal/121000374/052001633/0520016333300/FF/4/2024-04-01/2024-05-01'";
+  assert.equal(mentionsId(apiflc, '001'), false, '001 must not match inside 052001633');
+  assert.equal(mentionsId('        <messageId>001</messageId>', '001'), true, 'the real scp message must match');
+
+  // The apiflc ids that must still resolve.
+  assert.equal(mentionsId('INFO correlationID: 1234; Response from Data Services:', '1234'), true);
+  assert.equal(mentionsId('{Accept=*/*, X-Correlation-ID=1234, X-Amzn-Trace-Id=Root=1-6a45}', '1234'), true);
+  assert.equal(mentionsId("correlationID: '1234',", '1234'), true);
+  // ...but not as a fragment of a longer id.
+  assert.equal(mentionsId('"depositID": "12345678"', '1234'), false);
+  assert.equal(mentionsId('"differenceID": "1211075852"', '1234'), false);
 });
 
 test('"how many requests" counts REQUESTs and lists the REAL ids', () => {

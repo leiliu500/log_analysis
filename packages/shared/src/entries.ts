@@ -41,12 +41,20 @@ export interface LogEntry {
  * entry above it. Records are processed in timestamp order, and an entry never
  * spans streams (a continuation must come from the same stream as its head), so
  * interleaved groups cannot bleed into one another.
+ *
+ * `startsEntry` forces a record to begin a new entry regardless of its text, and
+ * callers that know their records' shape SHOULD pass it: {@link isContinuationLine}
+ * recognises AWS Lambda / API-Gateway line starts only, so a log in any other
+ * format (SCP's `<ns2:cashMessage>` XML, say) looks like a continuation and two
+ * consecutive messages in one stream would silently merge into a single entry.
+ * Pass "is this record a transaction message?" and each one stays its own entry.
  */
-export function coalesceEntries(logs: readonly ParsedLog[]): LogEntry[] {
+export function coalesceEntries(logs: readonly ParsedLog[], startsEntry?: (log: ParsedLog) => boolean): LogEntry[] {
   const out: LogEntry[] = [];
   for (const log of [...logs].sort((a, b) => a.timestamp - b.timestamp)) {
     const last = out[out.length - 1];
-    if (last && last.head.stream === log.stream && isContinuationLine(log.raw)) {
+    const continues = isContinuationLine(log.raw) && startsEntry?.(log) !== true;
+    if (last && last.head.stream === log.stream && continues) {
       last.lines.push(log);
       last.raw += `\n${log.raw.trimEnd()}`;
     } else {

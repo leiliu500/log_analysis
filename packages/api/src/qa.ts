@@ -136,15 +136,21 @@ const MAX_RAW_CHARS = 60_000;
  *   - `related` (the app's own id chain) pulls in the rest of the call, whose other
  *     groups key it by different ids entirely — apiflc's authorizer log never
  *     mentions the correlationID, and only ONE gateway line does.
- *   - A textual mention still counts, so an id-bearing line is never missed when the
- *     app declares no {@link ApplicationDef.relatedLogs}.
+ *   - A WHOLE-TOKEN textual mention still counts, so an id-bearing line is never
+ *     missed when the app declares no {@link ApplicationDef.relatedLogs}.
  */
 function rawMessagesFor(id: string, enriched: Enriched[], related: ReadonlySet<ParsedLog>): string {
   const metaOf = new Map<ParsedLog, AssistantMeta>(enriched.map((e) => [e.log, e.meta]));
-  const picked = coalesceEntries(enriched.map((e) => e.log)).filter((entry) => {
+  // Each transaction message starts its own entry — without this, consecutive
+  // messages in one stream merge and a request for id X returns X and its neighbours.
+  const entries = coalesceEntries(
+    enriched.map((e) => e.log),
+    (log) => !!metaOf.get(log)?.type,
+  );
+  const picked = entries.filter((entry) => {
     const meta = metaOf.get(entry.head);
     return (
-      meta?.corrId === id || meta?.id === id || entry.raw.includes(id) || entry.lines.some((l) => related.has(l))
+      meta?.corrId === id || meta?.id === id || mentionsId(entry.raw, id) || entry.lines.some((l) => related.has(l))
     );
   });
   if (!picked.length) return '';
@@ -208,13 +214,20 @@ export function wantsContent(message: string, allPhases: readonly string[]): boo
   return CONTENT_VERB.test(message) && askedTypes(message, allPhases).length > 0;
 }
 
+/**
+ * Does `text` name this id as a WHOLE token? Never use a bare substring test: ids are
+ * often short and numeric, so `"001".includes` hits inside an unrelated `052001633`
+ * (an ABA number in an apiflc URL) and drags a foreign application's logs in.
+ */
+export function mentionsId(text: string, id: string): boolean {
+  if (id.length < 3) return false;
+  const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^A-Za-z0-9._-])${esc}([^A-Za-z0-9._-]|$)`).test(text);
+}
+
 /** The transaction id the question names, if any (explicit `<label> id=X`, else a known id). */
 export function mentionedId(message: string, enriched: Enriched[]): string | undefined {
-  const mentions = (id: string | undefined): id is string => {
-    if (!id || id.length < 3) return false;
-    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(^|[^A-Za-z0-9._-])${esc}([^A-Za-z0-9._-]|$)`).test(message);
-  };
+  const mentions = (id: string | undefined): id is string => !!id && mentionsId(message, id);
   const explicitId = message.match(/(?:message|correlation)[_\s-]?id\s*[=:]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/i)?.[1];
   const corrIds = [...new Set(enriched.map((e) => e.meta.corrId).filter(Boolean) as string[])];
   const ownIds = enriched.map((e) => e.meta.id).filter(Boolean) as string[];
@@ -352,7 +365,12 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
   const since = Date.now() - windowMinutes * 60_000;
 
   const records = await connectorFor(source).pull({ since, limit: 5000 });
-  const parsed = parseBatch(records);
+  // The connector pulls the WHOLE source — every application's log groups at once.
+  // Scope to the resolved application: its aggregates, ids and raw messages must not
+  // mix in another application's logs (an SCP question must never surface apiflc
+  // lines). Ownership is by log group, falling back to whichever protocol recognises
+  // the log for sources that do not name groups.
+  const parsed = parseBatch(records).filter((l) => applicationRegistry.forLog(l)?.id === app.id);
 
   const meta = metaFor(app);
   const enriched = parsed.map((l) => ({ log: l, meta: meta(l) }));
