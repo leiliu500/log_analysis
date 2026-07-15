@@ -45,6 +45,53 @@ Answer using ONLY the provided AGGREGATES and MESSAGES for the given time window
 When asked "how many", give the exact number from the aggregates. When asked to
 list/show correlationID, read them from the MESSAGES and list each (bulleted).
 
+RESPONSE LOOKUP — "what is the response ... for correlationID <id>": read the
+handler log group `/aws/lambda/adt-fca-d1-api_gateway_handler` and report the
+"Response from Data Services" line for that `correlationID`. Quote the response
+payload/message as logged rather than paraphrasing it, and give its timestamp.
+Add the HTTP status when the gateway join resolves one. If the handler has a
+REQUEST for that id but no RESPONSE line in the window, say the response is
+missing (an incomplete transaction) instead of inferring what it would be.
+
+AUTHORIZER LOOKUP — "what is the authorizer result for correlationID <id>": the
+authorizer log group `/aws/lambda/adt-fca-d1-api_gateway_authorizer` does NOT
+carry the correlationID, so resolve its `lambdaRequestId` by the trace-id join
+before reading any line:
+1. In the gateway execution log, find the line with `X-Correlation-ID=<id>` and
+   take its `X-Amzn-Trace-Id=Root=1-xxxxxxxx-...`.
+2. In the authorizer log, find the line whose `XRAY TraceId: 1-xxxxxxxx-...`
+   equals that Root, and take that line's authorizer `lambdaRequestId`.
+3. Report every authorizer line carrying that `lambdaRequestId` — that is the
+   authorizer's own record for the call (allow/deny, policy, principal, any
+   error), quoted as logged with its timestamp.
+Attribute the result back to the correlationID (e.g. "correlationID 1234 →
+authorizer request 7f3a… → allowed"). NEVER match an authorizer line to a
+correlationID by timestamp proximity or by the handler's lambdaRequestId — the
+authorizer runs under its OWN lambdaRequestId, and only the trace-id chain
+links them. If the gateway line for that id has no trace id, or no authorizer
+line carries the matching XRAY TraceId, say the authorizer record cannot be
+resolved for that correlationID and name which link is missing.
+
+GATEWAY EXECUTION LOOKUP — "what is the API-Gateway request/response execution
+for correlationID <id>": read the execution log group
+`API-Gateway-Execution-Logs_9ioz6z9om1/d1`. Every line is prefixed with its
+`(<gatewayRequestId>)`, so resolve that id first:
+1. Find the line carrying `X-Correlation-ID=<id>` and take its `(<gatewayRequestId>)`
+   prefix.
+2. Report the lines sharing that prefix in timestamp order — that is the call's
+   full execution trace. Group them as REQUEST side (method request headers,
+   `Endpoint request URI`/body sent to the integration) and RESPONSE side
+   (`Endpoint response` body/headers, `Received response. Status: <code>,
+   Integration latency: <ms> ms`, `Method completed with status: <code>`).
+Quote the request and response bodies as logged, and state the HTTP status
+explicitly — this group is the authoritative source for it. The
+`(<gatewayRequestId>)` prefix is the API-Gateway request id and is NOT the
+business correlationID; `x-amzn-RequestId=<id>` on these lines is the HANDLER's
+lambdaRequestId, not the gateway request id — do not report either as the
+correlationID or substitute one for the other. If no line carries
+`X-Correlation-ID=<id>`, say the call was not found in the execution log for
+the window rather than guessing a prefix from timestamp proximity.
+
 When asked about failures, errors, or problems ("does apiflc have any failure or
 error", "what went wrong"), AGGREGATE EVERY failing or incomplete transaction — do
 not stop at the first. Correlate by correlationID (joining the three logs as
