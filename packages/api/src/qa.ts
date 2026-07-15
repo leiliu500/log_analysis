@@ -92,21 +92,51 @@ const fmt = (e: Enriched, label: string): string =>
 const MAX_RAW_CHARS = 60_000;
 
 /**
+ * Does this raw line START a log entry, rather than continue the previous one?
+ * A Lambda/API-Gateway entry begins with an ISO timestamp, a `(<gatewayRequestId>)`
+ * prefix, or a START/END/REPORT marker. Anything else (a bare `{ "result": ... }`,
+ * `Payload: '...'`) is the tail of the entry above it.
+ */
+const STARTS_ENTRY = /^\s*(\d{4}-\d{2}-\d{2}T[\d:.]+Z?\s|\([A-Za-z0-9-]{8,}\)|(START|END|REPORT)\s+RequestId)/;
+export const isContinuationLine = (raw: string): boolean => !STARTS_ENTRY.test(raw);
+
+/**
  * The raw, verbatim log lines for one transaction id — the qa agent's only source
  * for a message's CONTENT (the one-line MESSAGES table carries ids/types only, so
  * without this the agent has nothing to reproduce a response body from).
- * Matches on the correlated id and on a plain textual mention, so lines that carry
- * the id but no parsed transaction event (e.g. apiflc's API-Gateway execution
- * lines, keyed by gateway requestId but carrying `X-Correlation-ID=<id>`) are
- * included too.
+ *
+ * Lambda emits a multi-line log as ONE CLOUDWATCH EVENT PER PHYSICAL LINE, and only
+ * the first line carries the correlationID: the handler's "Response from Data
+ * Services:" header and its `{ "result": ... }` body are separate events 1ms apart,
+ * and the body mentions no id. So matching on the id alone yields a header with no
+ * content. Each id-bearing line therefore also takes the contiguous lines that
+ * follow it in the same stream until the next entry starts, reassembling the whole
+ * logged message. Matching on a textual mention (not just the correlated id) also
+ * picks up lines with no parsed event — e.g. apiflc's API-Gateway execution lines,
+ * keyed by gateway requestId but carrying `X-Correlation-ID=<id>`.
  */
 function rawMessagesFor(id: string, enriched: Enriched[]): string {
-  const hits = enriched.filter((e) => e.meta.corrId === id || e.meta.id === id || e.log.raw.includes(id));
-  if (!hits.length) return '';
-  const body = [...hits]
-    .sort((a, b) => a.log.timestamp - b.log.timestamp)
-    .map((e) => `--- ${tsOf(e)} ${e.meta.type ?? e.log.level.toUpperCase()} ---\n${e.log.raw.trim()}`)
-    .join('\n\n');
+  const ordered = [...enriched].sort((a, b) => a.log.timestamp - b.log.timestamp);
+  const keep = new Set<number>();
+  ordered.forEach((e, i) => {
+    if (!(e.meta.corrId === id || e.meta.id === id || e.log.raw.includes(id))) return;
+    keep.add(i);
+    for (let j = i + 1; j < ordered.length; j++) {
+      const next = ordered[j]!;
+      if (next.log.stream !== e.log.stream || !isContinuationLine(next.log.raw)) break;
+      keep.add(j);
+    }
+  });
+  if (!keep.size) return '';
+
+  // Rejoin each entry with its continuation lines so the agent sees whole messages.
+  const blocks: string[] = [];
+  for (const i of [...keep].sort((a, b) => a - b)) {
+    const e = ordered[i]!;
+    if (isContinuationLine(e.log.raw) && blocks.length) blocks[blocks.length - 1] += `\n${e.log.raw.trimEnd()}`;
+    else blocks.push(`--- ${tsOf(e)} ${e.meta.type ?? e.log.level.toUpperCase()} ---\n${e.log.raw.trimEnd()}`);
+  }
+  const body = blocks.join('\n\n');
   const clipped =
     body.length > MAX_RAW_CHARS ? `${body.slice(0, MAX_RAW_CHARS)}\n…[truncated — raw block exceeded ${MAX_RAW_CHARS} chars]` : body;
   return `RAW MESSAGES for ${id} (verbatim — reproduce the body from these, do not summarise):\n${clipped}`;

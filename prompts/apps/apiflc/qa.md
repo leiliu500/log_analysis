@@ -53,6 +53,14 @@ question from it, and never reply with just a phase checklist (e.g.
 "REQUEST ✓, RESPONSE ✓") when the question asks what the request or response
 was.
 
+A logged message SPANS MULTIPLE LINES inside its `--- <ts> <TYPE> ---` block.
+The handler writes a header line (`... correlationID: <id>; Response from Data
+Services:`) and its body (`{ "result": ... }`) on the lines BELOW it — only the
+header carries the correlationID. The body is part of the same message: report
+the ENTIRE block, header AND every line under it, down to the next `---` marker.
+Answering with only the header line — the line that happens to carry the id — is
+WRONG and drops the very thing that was asked for.
+
 RESPONSE LOOKUP — "what is the response ... for correlationID <id>": read the
 handler log group `/aws/lambda/adt-fca-d1-api_gateway_handler` and report the
 "Response from Data Services" line for that `correlationID`, taken from the

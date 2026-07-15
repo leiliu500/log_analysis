@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ParsedLog } from '@log/shared';
 import { scpTransactionProtocol as P } from '@log/app-scp';
-import { directAnswer as da, extractWindowMinutes } from './qa.js';
+import { directAnswer as da, extractWindowMinutes, isContinuationLine } from './qa.js';
 
 // Minimal enriched rows like answerLogQuestion builds. corrId is the request's
 // id (REQUEST: its own id; ACK/RESPONSE: the request id via init).
@@ -124,4 +124,21 @@ test('specific-id STATUS question stays on the deterministic path', () => {
 test('wantsContent: needs a phase for a bare verb, so listing questions stay deterministic', () => {
   const a = directAnswer('show all messageId in the last 10 minutes', 'cloudwatch', 10, ALL);
   assert.ok(a && a.includes('IM-4774'), 'id listing must stay deterministic');
+});
+
+// Lambda emits a multi-line log as one CloudWatch event PER LINE: the handler's
+// "Response from Data Services:" header and its JSON body arrive as separate
+// events ~1ms apart, and only the header carries the correlationID. Continuation
+// lines must therefore be recognised, or a content answer is a bare header.
+test('isContinuationLine: entry starts vs. body lines', () => {
+  // Real shapes pulled from /aws/lambda/adt-fca-d1-api_gateway_handler.
+  const header = '2026-07-02T04:34:48.381Z 45e5ece0-7dbe-490a-880b-38670acab559 INFO correlationID: 1234; Response from Data Services:';
+  const gateway = '(68f54c61-aaaa-bbbb) Received response. Status: 200';
+  const report = 'REPORT RequestId: 45e5ece0-7dbe-490a-880b-38670acab559\tDuration: 5051.55 ms';
+  for (const l of [header, gateway, report]) assert.equal(isContinuationLine(l), false, `starts an entry: ${l}`);
+
+  // The response body + the request's trailing lines — none carry the id.
+  const body = '{ "result": { "reportDataList": [ { "edd": { "differenceDetail": { "adviceNumber": 7 } } } ] } }';
+  const payload = 'Payload: \'{"headerParameters":{"correlation_id":"correlationID: 1234;"}}\'';
+  for (const l of [body, payload]) assert.equal(isContinuationLine(l), true, `continues an entry: ${l}`);
 });
