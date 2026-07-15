@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { ParsedLog } from '@log/shared';
 import { isContinuationLine } from '@log/shared';
 import { scpTransactionProtocol as P } from '@log/app-scp';
-import { directAnswer as da, extractWindowMinutes } from './qa.js';
+import { directAnswer as da, extractWindowMinutes, humanWindow } from './qa.js';
 
 // Minimal enriched rows like answerLogQuestion builds. corrId is the request's
 // id (REQUEST: its own id; ACK/RESPONSE: the request id via init).
@@ -60,6 +60,37 @@ test('explicit messageId not in window → truthful not-found', () => {
 test('window parsing: "last 10 minutes"', () => {
   assert.equal(extractWindowMinutes('How many requests sent in the last 10 minutes', undefined), 10);
   assert.equal(extractWindowMinutes('past 2 hours', undefined), 120);
+});
+
+// The window decides which logs are PULLED, before the assistant's prompt is read —
+// a misread window leaves the agent with no data, which no prompt can recover.
+test('window parsing: "today" is a day, not the 60-minute default', () => {
+  assert.equal(extractWindowMinutes('Show me apiflc API Gateway Execution request and response for correlation ID 1234 today ?', undefined), 1440);
+  assert.equal(extractWindowMinutes("what went wrong today", undefined), 1440);
+  assert.equal(extractWindowMinutes('any errors this morning', undefined), 1440);
+});
+
+test('window parsing: bare units and weeks', () => {
+  assert.equal(extractWindowMinutes('what happened in the last hour', undefined), 60);
+  assert.equal(extractWindowMinutes('errors in the past day', undefined), 1440);
+  assert.equal(extractWindowMinutes('requests in the last week', undefined), 10080);
+  assert.equal(extractWindowMinutes('how many requests in the last 30 mins', undefined), 30);
+});
+
+test('window: the question\'s own words beat the router\'s default param', () => {
+  // The router defaults windowMinutes when it cannot tell; that must not silently
+  // override an explicit "today" in the user's question.
+  assert.equal(extractWindowMinutes('what is the response for 1234 today', 60), 1440);
+  assert.equal(extractWindowMinutes('what is the response for 1234 in the last 10 minutes', 60), 10);
+  // With no window in the question, the router's param still wins over the default.
+  assert.equal(extractWindowMinutes('what is the response for 1234', 120), 120);
+  assert.equal(extractWindowMinutes('what is the response for 1234', undefined), 60);
+});
+
+test('humanWindow: largest whole unit', () => {
+  assert.equal(humanWindow(1440), 'the last 1 day(s)');
+  assert.equal(humanWindow(120), 'the last 2 hour(s)');
+  assert.equal(humanWindow(45), 'the last 45 minute(s)');
 });
 
 test('"how many requests" counts REQUESTs and lists the REAL ids', () => {

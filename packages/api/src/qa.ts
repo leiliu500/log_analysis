@@ -11,19 +11,52 @@ import { connectorFor } from '@log/ingestion';
 import { applicationRegistry } from '@log/agents';
 import { apiflcHttpOutcomes } from '@log/app-apiflc';
 
-/** Parse a time window (in minutes) from the question or the LLM's param. */
+const DAY_MINUTES = 1440;
+const UNIT_MINUTES: Record<string, number> = { minute: 1, min: 1, hour: 60, hr: 60, day: DAY_MINUTES, week: 7 * DAY_MINUTES };
+
+/**
+ * The time window named in the question itself, in minutes — undefined when it
+ * names none.
+ *
+ * NOTE the window is not something a prompt can influence: it decides which logs
+ * are PULLED, long before the assistant's prompt is read, so a question whose
+ * window is misread simply has no data to answer from.
+ *
+ * "today" is a rolling 24h rather than "since midnight". The window model is
+ * relative-only (N minutes back from now) and the API runs in UTC while users are
+ * not: taking midnight UTC would collapse "today" to a near-empty window every
+ * evening Pacific (17:30 PDT is already 00:30 UTC). 24h always covers the user's
+ * calendar day whatever their zone, at the cost of possibly reaching into late
+ * yesterday. To make it an exact local day instead, resolve midnight in a declared
+ * timezone here.
+ */
+export function windowFromMessage(message: string): number | undefined {
+  if (/\btoday\b|\bthis morning\b|\bso far today\b/i.test(message)) return DAY_MINUTES;
+  const m = message.match(/(?:recent|last|past|within|latest)\s+(?:(\d+)\s*)?(minutes?|mins?|hours?|hrs?|days?|weeks?)\b/i);
+  if (!m) return undefined;
+  const n = m[1] ? Number(m[1]) : 1; // "the last hour" == 1 hour
+  const unit = UNIT_MINUTES[m[2]!.toLowerCase().replace(/s$/, '')];
+  return unit ? n * unit : undefined;
+}
+
+/**
+ * Parse a time window (in minutes) from the question or the router's param. A window
+ * the user stated in their own words wins over the router's: the router defaults the
+ * param when it cannot tell, which would silently override an explicit "today".
+ */
 export function extractWindowMinutes(message: string, fromLlm: unknown): number {
+  const fromText = windowFromMessage(message);
+  if (fromText !== undefined) return fromText;
   if (typeof fromLlm === 'number' && fromLlm > 0) return Math.floor(fromLlm);
   if (typeof fromLlm === 'string' && /^\d+$/.test(fromLlm)) return Number(fromLlm);
-  const m = message.match(/(?:recent|last|past|within|latest)\s+(\d+)\s*(minute|min|hour|hr|day)s?/i);
-  if (m) {
-    const n = Number(m[1]);
-    const unit = m[2]!.toLowerCase();
-    if (unit.startsWith('hour') || unit === 'hr') return n * 60;
-    if (unit.startsWith('day')) return n * 1440;
-    return n;
-  }
   return 60;
+}
+
+/** The window in the largest whole unit that fits — "1440 minute(s)" reads as nonsense. */
+export function humanWindow(minutes: number): string {
+  if (minutes % DAY_MINUTES === 0) return `the last ${minutes / DAY_MINUTES} day(s)`;
+  if (minutes % 60 === 0) return `the last ${minutes / 60} hour(s)`;
+  return `the last ${minutes} minute(s)`;
 }
 
 /** Generic fallback prompt when the resolved application declares none. */
@@ -204,7 +237,7 @@ export function directAnswer(
   label = 'messageId',
 ): string | null {
   const m = message.toLowerCase();
-  const win = `the last ${windowMinutes} minute(s)`;
+  const win = humanWindow(windowMinutes);
   const allPhases = proto.allPhases;
   const followups = proto.phases; // non-initial phases
 
@@ -341,7 +374,7 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
   const summary = [
     `Application: ${app.displayName} (${app.id})`,
     `Source: ${source}`,
-    `Window: last ${windowMinutes} minute(s) (since ${new Date(since).toISOString()})`,
+    `Window: ${humanWindow(windowMinutes)} (since ${new Date(since).toISOString()})`,
     `Total log entries: ${parsed.length}`,
     `Count by messageType: ${JSON.stringify(byMessageType)}`,
     `Count by level: ${JSON.stringify(byLevel)}`,
