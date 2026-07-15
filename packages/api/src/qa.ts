@@ -5,7 +5,7 @@ import type {
   AssistantMeta,
   TransactionProtocol,
 } from '@log/shared';
-import { loadPrompt } from '@log/shared';
+import { loadPrompt, coalesceEntries } from '@log/shared';
 import { converse, parseBatch } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
 import { applicationRegistry } from '@log/agents';
@@ -92,54 +92,39 @@ const fmt = (e: Enriched, label: string): string =>
 const MAX_RAW_CHARS = 60_000;
 
 /**
- * Does this raw line START a log entry, rather than continue the previous one?
- * A Lambda/API-Gateway entry begins with an ISO timestamp, a `(<gatewayRequestId>)`
- * prefix, or a START/END/REPORT marker. Anything else (a bare `{ "result": ... }`,
- * `Payload: '...'`) is the tail of the entry above it.
- */
-const STARTS_ENTRY = /^\s*(\d{4}-\d{2}-\d{2}T[\d:.]+Z?\s|\([A-Za-z0-9-]{8,}\)|(START|END|REPORT)\s+RequestId)/;
-export const isContinuationLine = (raw: string): boolean => !STARTS_ENTRY.test(raw);
-
-/**
- * The raw, verbatim log lines for one transaction id — the qa agent's only source
+ * The raw, verbatim log entries for one transaction id — the qa agent's only source
  * for a message's CONTENT (the one-line MESSAGES table carries ids/types only, so
  * without this the agent has nothing to reproduce a response body from).
  *
- * Lambda emits a multi-line log as ONE CLOUDWATCH EVENT PER PHYSICAL LINE, and only
- * the first line carries the correlationID: the handler's "Response from Data
- * Services:" header and its `{ "result": ... }` body are separate events 1ms apart,
- * and the body mentions no id. So matching on the id alone yields a header with no
- * content. Each id-bearing line therefore also takes the contiguous lines that
- * follow it in the same stream until the next entry starts, reassembling the whole
- * logged message. Matching on a textual mention (not just the correlated id) also
- * picks up lines with no parsed event — e.g. apiflc's API-Gateway execution lines,
- * keyed by gateway requestId but carrying `X-Correlation-ID=<id>`.
+ * Selection is deliberately wider than "records containing the id":
+ *   - Entries are COALESCED first ({@link coalesceEntries}), because CloudWatch
+ *     stores one event per physical line and only an entry's first line carries the
+ *     id — matching per record yields a header with no body under it.
+ *   - `related` (the app's own id chain) pulls in the rest of the call, whose other
+ *     groups key it by different ids entirely — apiflc's authorizer log never
+ *     mentions the correlationID, and only ONE gateway line does.
+ *   - A textual mention still counts, so an id-bearing line is never missed when the
+ *     app declares no {@link ApplicationDef.relatedLogs}.
  */
-function rawMessagesFor(id: string, enriched: Enriched[]): string {
-  const ordered = [...enriched].sort((a, b) => a.log.timestamp - b.log.timestamp);
-  const keep = new Set<number>();
-  ordered.forEach((e, i) => {
-    if (!(e.meta.corrId === id || e.meta.id === id || e.log.raw.includes(id))) return;
-    keep.add(i);
-    for (let j = i + 1; j < ordered.length; j++) {
-      const next = ordered[j]!;
-      if (next.log.stream !== e.log.stream || !isContinuationLine(next.log.raw)) break;
-      keep.add(j);
-    }
+function rawMessagesFor(id: string, enriched: Enriched[], related: ReadonlySet<ParsedLog>): string {
+  const metaOf = new Map<ParsedLog, AssistantMeta>(enriched.map((e) => [e.log, e.meta]));
+  const picked = coalesceEntries(enriched.map((e) => e.log)).filter((entry) => {
+    const meta = metaOf.get(entry.head);
+    return (
+      meta?.corrId === id || meta?.id === id || entry.raw.includes(id) || entry.lines.some((l) => related.has(l))
+    );
   });
-  if (!keep.size) return '';
+  if (!picked.length) return '';
 
-  // Rejoin each entry with its continuation lines so the agent sees whole messages.
-  const blocks: string[] = [];
-  for (const i of [...keep].sort((a, b) => a - b)) {
-    const e = ordered[i]!;
-    if (isContinuationLine(e.log.raw) && blocks.length) blocks[blocks.length - 1] += `\n${e.log.raw.trimEnd()}`;
-    else blocks.push(`--- ${tsOf(e)} ${e.meta.type ?? e.log.level.toUpperCase()} ---\n${e.log.raw.trimEnd()}`);
-  }
-  const body = blocks.join('\n\n');
+  const body = picked
+    .map((entry) => {
+      const meta = metaOf.get(entry.head);
+      return `--- ${new Date(entry.head.timestamp).toISOString()} ${meta?.type ?? entry.head.level.toUpperCase()} [${entry.head.stream}] ---\n${entry.raw}`;
+    })
+    .join('\n\n');
   const clipped =
     body.length > MAX_RAW_CHARS ? `${body.slice(0, MAX_RAW_CHARS)}\n…[truncated — raw block exceeded ${MAX_RAW_CHARS} chars]` : body;
-  return `RAW MESSAGES for ${id} (verbatim — reproduce the body from these, do not summarise):\n${clipped}`;
+  return `RAW MESSAGES for ${id} (verbatim, every log group for this call — reproduce bodies from these, do not summarise):\n${clipped}`;
 }
 
 /** A request correlated with its follow-up phases, grouped by correlation id. */
@@ -371,10 +356,13 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
   // groups and surface each call's HTTP outcome so the assistant can cite it.
   const extra = app.id === 'apiflc' ? apiflcHttpOutcomes(parsed) : '';
   // The table above is one line per message (ids only). When the question names a
-  // transaction, also hand over that id's verbatim log lines so the agent can
-  // resolve its actual request/response content.
+  // transaction, also hand over that call's verbatim log entries so the agent can
+  // resolve its actual request/response content. The app resolves its own id chain
+  // (apiflc: correlationID → gateway requestId → X-Ray trace → authorizer), so the
+  // agent sees every group's lines for the call — not just those quoting the id.
   const focusId = mentionedId(message, enriched);
-  const rawBlock = focusId ? rawMessagesFor(focusId, enriched) : '';
+  const related = new Set<ParsedLog>(focusId ? (app.relatedLogs?.(focusId, parsed) ?? []) : []);
+  const rawBlock = focusId ? rawMessagesFor(focusId, enriched, related) : '';
 
   const answer = await converse(
     `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}${rawBlock ? `\n\n${rawBlock}` : ''}`,

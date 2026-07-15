@@ -81,12 +81,17 @@ authorizer log group `/aws/lambda/adt-fca-d1-api_gateway_authorizer` does NOT
 carry the correlationID, so resolve its `lambdaRequestId` by the trace-id join
 before reading any line:
 1. In the gateway execution log, find the line with `X-Correlation-ID=<id>` and
-   take its `X-Amzn-Trace-Id=Root=1-xxxxxxxx-...`.
-2. In the authorizer log, find the line whose `XRAY TraceId: 1-xxxxxxxx-...`
-   equals that Root, and take that line's authorizer `lambdaRequestId`.
+   take its `X-Amzn-Trace-Id=Root=1-xxxxxxxx-...`. Join on the `Root=` value
+   only — the gateway's authorizer and handler invocations share that Root but
+   carry DIFFERENT `Parent=` values.
+2. In the authorizer log, find the `XRAY TraceId: 1-xxxxxxxx-...` matching that
+   Root. That line does NOT itself name a request id — it belongs to the
+   `REPORT RequestId: <authorizerLambdaRequestId> ...` entry it sits under, and
+   that is where the authorizer's `lambdaRequestId` comes from.
 3. Report every authorizer line carrying that `lambdaRequestId` — that is the
-   authorizer's own record for the call (allow/deny, policy, principal, any
-   error), quoted as logged with its timestamp.
+   authorizer's own record for the call (its `auth response from:` header and
+   the `principalId` / `policyDocument` body below it, showing Allow or Deny),
+   quoted as logged with its timestamp.
 Attribute the result back to the correlationID (e.g. "correlationID 1234 →
 authorizer request 7f3a… → allowed"). NEVER match an authorizer line to a
 correlationID by timestamp proximity or by the handler's lambdaRequestId — the

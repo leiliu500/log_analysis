@@ -1,6 +1,7 @@
 import type { ApplicationDef } from '@log/shared';
 import { APIFLC_LOG_GROUPS, parseApiflcLogGroup, splitApiflcByLogGroup } from './logGroups.js';
 import { apiflcTransactionProtocol } from './transactionProtocol.js';
+import { apiflcRelatedLogs } from './join.js';
 import { APIFLC_SAMPLE } from './samples.js';
 
 /** The apiflc application: its CloudWatch log groups + REQUEST→RESPONSE protocol. */
@@ -13,6 +14,9 @@ export const apiflcApplication: ApplicationDef = {
   // A single paste may target several groups (handler / authorizer / execution).
   matchLogGroup: parseApiflcLogGroup,
   splitByLogGroup: splitApiflcByLogGroup,
+  // Log Assistant: one apiflc call is logged under three different ids, so resolve
+  // a question's id to the whole call (handler + authorizer + gateway execution).
+  relatedLogs: apiflcRelatedLogs,
   defaultSamples: APIFLC_SAMPLE,
   simulationMode: 'verbatim',
   correlationLabel: 'correlationID',

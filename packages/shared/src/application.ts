@@ -26,6 +26,18 @@ export interface ApplicationDef {
    * single-group request.
    */
   splitByLogGroup?(message: string): Array<{ group: string; samples: string }>;
+
+  /**
+   * Every log record belonging to the same call as `id`, resolved across this
+   * application's log groups by their shared identifiers. For apps whose groups key
+   * the same call by DIFFERENT ids, a question about one id ("the authorizer result
+   * for correlationID 1234") cannot be answered from records carrying that id —
+   * apiflc's authorizer log, for one, never mentions the correlationID. This hook
+   * follows the app's own id chain so the Log Assistant is handed the whole call.
+   * Returns [] when the id resolves to nothing; apps whose groups share one id need
+   * not implement it.
+   */
+  relatedLogs?(id: string, logs: readonly ParsedLog[]): ParsedLog[];
   /** Sample log content the simulator writes when the user pastes none. */
   defaultSamples?: string;
   /**

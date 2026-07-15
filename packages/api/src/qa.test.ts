@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ParsedLog } from '@log/shared';
+import { isContinuationLine } from '@log/shared';
 import { scpTransactionProtocol as P } from '@log/app-scp';
-import { directAnswer as da, extractWindowMinutes, isContinuationLine } from './qa.js';
+import { directAnswer as da, extractWindowMinutes } from './qa.js';
 
 // Minimal enriched rows like answerLogQuestion builds. corrId is the request's
 // id (REQUEST: its own id; ACK/RESPONSE: the request id via init).
