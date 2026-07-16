@@ -142,22 +142,18 @@ test('events on an already-terminal agent are ignored (idempotent)', () => {
   assert.equal(a.active, false);
 });
 
-// A non-completed close (failed/error) is the finding's trigger; its fingerprint
-// must identify the OCCURRENCE, not just the messageId. The old `tx:<messageId>`
-// collided when the simulator reused an id, so a second errored 005 was silently
-// deduped away and left in history with no finding. Keyed by closedAt, each
-// closing is its own finding, and re-running reconciliation is idempotent.
-test('finding fingerprint is unique per close, stable on re-run', () => {
-  const first = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW });
-  const again = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW }); // same close
-  const later = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW + 60_000 }); // a new tx, reused id
-
-  assert.equal(agentFindingFingerprint(first), agentFindingFingerprint(again), 'same close ⇒ idempotent');
-  assert.notEqual(agentFindingFingerprint(first), agentFindingFingerprint(later), 'a later reuse ⇒ its own finding');
-  assert.match(agentFindingFingerprint(first), /^tx:005:/);
+// message_id is the agents PRIMARY KEY: one agent per id, immutable once terminal.
+// So the finding identity is the id alone — a second finding for it is a duplicate.
+// It must NOT vary with closedAt (that reintroduces the duplicate the migration
+// cleaned up: a new-scheme finding fails to match the existing tx:<id> one).
+test('finding fingerprint is the messageId alone, independent of close time', () => {
+  const a = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW });
+  const b = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW + 60_000 });
+  assert.equal(agentFindingFingerprint(a), 'tx:005');
+  assert.equal(agentFindingFingerprint(a), agentFindingFingerprint(b), 'same id ⇒ same finding, whatever the close time');
 });
 
-test('a timed-out agent carries the closedAt its fingerprint needs', () => {
+test('a timed-out agent maps to its stable finding fingerprint', () => {
   const known = agent({
     waitingFor: 'RESPONSE',
     phaseTs: { REQUEST: NOW - 40 * 60_000, ACK: NOW - 39 * 60_000 },
@@ -166,8 +162,7 @@ test('a timed-out agent carries the closedAt its fingerprint needs', () => {
   });
   const a = step([], [known]).agents.get('001')!;
   assert.equal(a.status, 'error');
-  assert.equal(a.closedAt, NOW);
-  assert.equal(agentFindingFingerprint(a), `tx:001:${NOW}`);
+  assert.equal(agentFindingFingerprint(a), 'tx:001');
 });
 
 test('agentEvents extracts ordered request/ack/response from parsed logs', () => {

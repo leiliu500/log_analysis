@@ -192,8 +192,14 @@ export interface AdvanceResult {
 
 const ALERT_SEVERITIES: Severity[] = ['high', 'critical'];
 
-/** The finding's stable identity: one per closed-agent OCCURRENCE. */
-export const agentFindingFingerprint = (a: Agent): string => `tx:${a.messageId}:${a.closedAt ?? a.updatedAt}`;
+/**
+ * The finding's stable identity. `message_id` is the agents PRIMARY KEY, so there
+ * is exactly ONE agent per id and, once terminal, it is immutable — the id alone
+ * uniquely identifies the closed transaction, and a second finding for it is always
+ * a duplicate. (Do NOT fold in closedAt: it does not disambiguate anything here, and
+ * it stops this from matching findings written under the same scheme.)
+ */
+export const agentFindingFingerprint = (a: Agent): string => `tx:${a.messageId}`;
 
 /**
  * DB-backed driver — the complete per-poll lifecycle step. Loads the relevant

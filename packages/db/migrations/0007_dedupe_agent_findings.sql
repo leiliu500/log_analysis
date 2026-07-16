@@ -1,0 +1,13 @@
+-- One-time cleanup of duplicate agent-lifecycle findings.
+--
+-- A prior release keyed agent findings by `tx:<messageId>:<closedAt>` instead of the
+-- stable `tx:<messageId>`. Because message_id is the agents PRIMARY KEY (one agent
+-- per id), the closedAt suffix disambiguated nothing — it only stopped the new
+-- finding from matching the pre-existing `tx:<messageId>` one, so reconciliation
+-- minted a second, duplicate finding into "Findings & Anomaly History".
+--
+-- Delete those suffixed duplicates. Every agent retains its canonical `tx:<messageId>`
+-- finding; any that ends up without one is re-minted (idempotently) by the next poll's
+-- reconciliation. Matches only `tx:<id>:<epoch-ms>` (a trailing ':' + 10+ digits), so
+-- the canonical `tx:<messageId>` findings and non-agent fingerprints are untouched.
+DELETE FROM findings WHERE fingerprint ~ '^tx:.+:[0-9]{10,}$';
