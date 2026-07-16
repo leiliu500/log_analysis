@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Agent, ParsedLog, TransactionProtocol } from '@log/shared';
 import { ApplicationRegistry } from '@log/shared';
-import { stepAgents, agentEvents, type AgentEvent } from './agentLifecycle.js';
+import { stepAgents, agentEvents, agentFindingFingerprint, type AgentEvent } from './agentLifecycle.js';
 import { parseBatch } from './parser.js';
 
 const NOW = 1_700_000_000_000;
@@ -140,6 +140,34 @@ test('events on an already-terminal agent are ignored (idempotent)', () => {
   const a = r.agents.get('001')!;
   assert.equal(a.status, 'completed'); // unchanged
   assert.equal(a.active, false);
+});
+
+// A non-completed close (failed/error) is the finding's trigger; its fingerprint
+// must identify the OCCURRENCE, not just the messageId. The old `tx:<messageId>`
+// collided when the simulator reused an id, so a second errored 005 was silently
+// deduped away and left in history with no finding. Keyed by closedAt, each
+// closing is its own finding, and re-running reconciliation is idempotent.
+test('finding fingerprint is unique per close, stable on re-run', () => {
+  const first = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW });
+  const again = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW }); // same close
+  const later = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW + 60_000 }); // a new tx, reused id
+
+  assert.equal(agentFindingFingerprint(first), agentFindingFingerprint(again), 'same close ⇒ idempotent');
+  assert.notEqual(agentFindingFingerprint(first), agentFindingFingerprint(later), 'a later reuse ⇒ its own finding');
+  assert.match(agentFindingFingerprint(first), /^tx:005:/);
+});
+
+test('a timed-out agent carries the closedAt its fingerprint needs', () => {
+  const known = agent({
+    waitingFor: 'RESPONSE',
+    phaseTs: { REQUEST: NOW - 40 * 60_000, ACK: NOW - 39 * 60_000 },
+    spawnedAt: NOW - 40 * 60_000,
+    updatedAt: NOW - 39 * 60_000,
+  });
+  const a = step([], [known]).agents.get('001')!;
+  assert.equal(a.status, 'error');
+  assert.equal(a.closedAt, NOW);
+  assert.equal(agentFindingFingerprint(a), `tx:001:${NOW}`);
 });
 
 test('agentEvents extracts ordered request/ack/response from parsed logs', () => {

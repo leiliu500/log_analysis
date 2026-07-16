@@ -7,7 +7,7 @@ import {
   pruneClosedAgentsOlderThan,
   insertFinding,
   insertAlert,
-  findingExistsByFingerprint,
+  getUnreportedClosedAgents,
 } from '@log/db';
 
 /**
@@ -191,24 +191,30 @@ export interface AdvanceResult {
 }
 
 const ALERT_SEVERITIES: Severity[] = ['high', 'critical'];
-const FINDING_DEDUP_MS = 30 * 60_000;
+
+/** The finding's stable identity: one per closed-agent OCCURRENCE. */
+export const agentFindingFingerprint = (a: Agent): string => `tx:${a.messageId}:${a.closedAt ?? a.updatedAt}`;
 
 /**
  * DB-backed driver — the complete per-poll lifecycle step. Loads the relevant
  * agents (all active + any matching this window's ids), advances the state
  * machine against the protocol, persists changes, and reports a Finding for every
- * agent that newly closes as failed or errored (timeout). Runs even with no new
- * logs so idle polls still fire timeouts + their Findings.
+ * agent in history that closed NOT-completed (failed / error) and has none yet.
+ * Runs even with no new logs so idle polls still fire timeouts + their Findings.
  */
 export async function advanceAgents(
   parsed: ParsedLog[],
   registry: ApplicationRegistry,
-  opts: { now?: number; timeoutMs?: number; windowMs?: number } = {},
+  opts: { now?: number; timeoutMs?: number; windowMs?: number; findingsTtlMs?: number } = {},
 ): Promise<AdvanceResult> {
   const now = opts.now ?? Date.now();
   const windowMs = opts.windowMs ?? 5 * 60_000;
   const timeoutMs =
     opts.timeoutMs ?? Number(process.env.INGEST_AGENT_TIMEOUT_MINUTES ?? 30) * 60_000;
+  // Reconcile only within findings retention, so an agent whose finding was pruned
+  // isn't recreated (it would churn back every poll). Defaults match the poller.
+  const findingsTtlMs =
+    opts.findingsTtlMs ?? Number(process.env.FINDINGS_HISTORY_TTL_MINUTES ?? 1440) * 60_000;
 
   const events = agentEvents(parsed, registry);
   const ids = [...new Set(events.map((e) => e.corrId))];
@@ -224,19 +230,19 @@ export async function advanceAgents(
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
   await upsertAgents(toPersist);
 
-  // Agents that newly closed as failed/error this cycle → one Finding each.
+  // Report every non-completed closed agent lacking a finding — those that closed
+  // this poll AND any that slipped through earlier (a fingerprint collision on a
+  // reused messageId, a restart, a DB blip). Driven off persisted history rather
+  // than only this poll's transitions, so the "not completed ⇒ a finding" property
+  // is self-healing. The per-occurrence fingerprint makes each mint idempotent.
   const findings: Finding[] = [];
   const findingsByApp: Record<string, number> = {};
-  for (const id of step.changed) {
-    const post = step.agents.get(id)!;
-    const pre = known.get(id);
-    if ((post.status !== 'failed' && post.status !== 'error') || (pre && !pre.active)) continue;
+  const unreported = await getUnreportedClosedAgents(now - findingsTtlMs);
+  for (const a of unreported) {
     try {
-      const fp = `tx:${post.messageId}`;
-      if (await findingExistsByFingerprint(fp, now - FINDING_DEDUP_MS)) continue;
-      const f = agentFinding(post, now, windowMs);
+      const f = agentFinding(a, now, windowMs);
       await insertFinding(f);
-      findingsByApp[post.application ?? 'unknown'] = (findingsByApp[post.application ?? 'unknown'] ?? 0) + 1;
+      findingsByApp[a.application ?? 'unknown'] = (findingsByApp[a.application ?? 'unknown'] ?? 0) + 1;
       if (ALERT_SEVERITIES.includes(f.severity)) {
         await insertAlert({
           id: randomUUID(),
@@ -280,7 +286,7 @@ function agentFinding(a: Agent, now: number, windowMs: number): Finding {
     confidence: 0.9,
     sources: a.source ? [a.source as LogSourceType] : [],
     application: a.application,
-    fingerprint: `tx:${a.messageId}`,
+    fingerprint: agentFindingFingerprint(a),
     evidence: [],
     reasoning: [
       a.detail ?? (failed ? 'A phase carried a failure ackCode.' : 'A phase was not received before the timeout.'),

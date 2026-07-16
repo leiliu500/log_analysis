@@ -228,6 +228,30 @@ export async function getAgentHistory(limit = 200): Promise<Agent[]> {
   return rows.map(rawRowToAgent);
 }
 
+/**
+ * Closed non-completed agents (failed / errored) that closed on/after `since` and
+ * have NO finding yet — the backlog the lifecycle must report on. This is what makes
+ * "every non-completed agent in history is a finding" self-healing: an agent whose
+ * finding was missed at close time (a fingerprint collision on a reused messageId, a
+ * restart, a DB blip) is picked up here on a later poll. The per-occurrence
+ * fingerprint `tx:<messageId>:<closedAt>` is matched so distinct closings of the
+ * same id are tracked independently.
+ */
+export async function getUnreportedClosedAgents(since: number, limit = 500): Promise<Agent[]> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT a.* FROM agents a
+    WHERE a.active = FALSE
+      AND a.status IN ('failed', 'error')
+      AND a.closed_at >= ${since}
+      AND NOT EXISTS (
+        SELECT 1 FROM findings f
+        WHERE f.fingerprint = 'tx:' || a.message_id || ':' || a.closed_at
+      )
+    ORDER BY a.closed_at DESC
+    LIMIT ${limit}`;
+  return rows.map(rawRowToAgent);
+}
+
 export async function pruneClosedAgentsOlderThan(cutoff: number): Promise<number> {
   const sqlc = getSql();
   const rows = await sqlc`DELETE FROM agents WHERE active = FALSE AND closed_at < ${cutoff} RETURNING message_id`;

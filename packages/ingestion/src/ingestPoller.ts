@@ -86,7 +86,11 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
   try {
     const timeoutMs =
       opts.agentTimeoutMinutes != null ? opts.agentTimeoutMinutes * 60_000 : undefined;
-    const life = await advanceAgents(allParsed, applicationRegistry, { windowMs, timeoutMs });
+    const life = await advanceAgents(allParsed, applicationRegistry, {
+      windowMs,
+      timeoutMs,
+      findingsTtlMs: ttlMinutes * 60_000,
+    });
     agents = {
       spawned: life.spawned,
       advanced: life.advanced,
