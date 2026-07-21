@@ -65,6 +65,7 @@ export default function ValidationPage() {
   const shownHistory = byApp(history);
 
   const failures = shownHistory.filter((v) => v.result === 'failure').length;
+  const issues = shownHistory.filter((v) => v.result === 'completed_with_issues').length;
 
   return (
     <div className="p-8">
@@ -93,6 +94,10 @@ export default function ValidationPage() {
           ) : failures > 0 ? (
             <span className="rounded-md bg-red-500/20 px-2 py-1 text-red-300">
               Validation failure — {failures} inconsistent transaction{failures === 1 ? '' : 's'}
+            </span>
+          ) : issues > 0 ? (
+            <span className="rounded-md bg-amber-500/20 px-2 py-1 text-amber-300">
+              Completed with issues — {issues} transaction{issues === 1 ? '' : 's'} have high/critical findings
             </span>
           ) : (
             <span className="rounded-md bg-emerald-500/20 px-2 py-1 text-emerald-300">

@@ -20,8 +20,19 @@ function ago(ts?: number): string {
 
 const RESULT_STYLES: Record<string, string> = {
   success: 'bg-emerald-500/20 text-emerald-300',
+  completed_with_issues: 'bg-amber-500/20 text-amber-300',
   failure: 'bg-red-500/20 text-red-300',
   pending: 'bg-sky-500/20 text-sky-300',
+};
+
+const isElevated = (s?: string): boolean => s === 'high' || s === 'critical';
+
+/** Compact result labels for the badge (the raw union value is verbose). */
+const RESULT_LABELS: Record<string, string> = {
+  success: 'success',
+  completed_with_issues: 'completed · issues',
+  failure: 'failure',
+  pending: 'pending',
 };
 
 /** A protocol phase progress pip (mirrors AgentsPanel so the two views read alike). */
@@ -85,6 +96,7 @@ export function ValidationPanel({
   correlationLabel?: string;
 }) {
   const failures = history.filter((v) => v.result === 'failure').length;
+  const issues = history.filter((v) => v.result === 'completed_with_issues').length;
 
   return (
     <section className="mb-8">
@@ -116,7 +128,13 @@ export function ValidationPanel({
           <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-xs text-red-300">
             {failures} failure{failures === 1 ? '' : 's'}
           </span>
-        ) : history.length > 0 ? (
+        ) : null}
+        {issues > 0 ? (
+          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300">
+            {issues} with issues
+          </span>
+        ) : null}
+        {failures === 0 && issues === 0 && history.length > 0 ? (
           <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-300">all consistent</span>
         ) : null}
       </div>
@@ -132,6 +150,7 @@ export function ValidationPanel({
                 <th className="px-3 py-2">SLA</th>
                 <th className="px-3 py-2">expected</th>
                 <th className="px-3 py-2">actual</th>
+                <th className="px-3 py-2">findings</th>
                 <th className="px-3 py-2">delta</th>
                 <th className="px-3 py-2">validated</th>
               </tr>
@@ -142,8 +161,8 @@ export function ValidationPanel({
                   <td className="px-3 py-1.5">{v.messageId}</td>
                   <td className="px-3 py-1.5 text-slate-400">{v.agentStatus}</td>
                   <td className="px-3 py-1.5">
-                    <span className={`rounded px-1.5 py-0.5 ${RESULT_STYLES[v.result] ?? 'bg-slate-500/20 text-slate-300'}`}>
-                      {v.result}
+                    <span className={`whitespace-nowrap rounded px-1.5 py-0.5 ${RESULT_STYLES[v.result] ?? 'bg-slate-500/20 text-slate-300'}`}>
+                      {RESULT_LABELS[v.result] ?? v.result}
                     </span>
                   </td>
                   <td className={`px-3 py-1.5 ${v.missingPhases.length ? 'text-red-400' : 'text-slate-400'}`}>
@@ -161,6 +180,16 @@ export function ValidationPanel({
                   </td>
                   <td className="px-3 py-1.5 text-slate-400">
                     {v.actualFinding ? `finding · ${v.actualSeverity ?? '—'}` : 'no finding'}
+                  </td>
+                  <td className={`px-3 py-1.5 font-sans ${isElevated(v.maxQualitySeverity) ? 'text-amber-300' : 'text-slate-400'}`}>
+                    {v.qualityFindings.length ? (
+                      <span title={v.qualityFindings.map((q) => `${q.severity}: ${q.title}`).join('\n')}>
+                        {v.maxQualitySeverity}: {v.qualityFindings[0]?.title}
+                        {v.qualityFindings.length > 1 ? ` (+${v.qualityFindings.length - 1})` : ''}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
                   </td>
                   <td className={`px-3 py-1.5 font-sans ${v.delta.length ? 'text-red-400' : 'text-slate-500'}`}>
                     {v.delta.length ? v.delta.join('; ') : '—'}

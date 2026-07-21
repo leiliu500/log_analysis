@@ -1,4 +1,5 @@
 import type { ParsedLog } from './logs.js';
+import type { Severity } from './findings.js';
 import type { TransactionProtocol } from './transactionProtocol.js';
 
 /**
@@ -121,6 +122,15 @@ export interface ApplicationValidation {
    * 30-minute budget from 'ACK', apiflc measures its 2-minute budget from 'REQUEST'.
    */
   responseTimeoutFrom: string;
+  /**
+   * The minimum severity of an associated analysis finding (anomaly/correlation on
+   * the transaction's logs) that makes a COMPLETED transaction "completed with
+   * issues" rather than a clean success. Findings below this level are still
+   * recorded but don't change the result. Defaults to 'high'. This is the tunable
+   * knob each application owns; the enforcement (linking + verdict) is generic,
+   * deterministic engine code.
+   */
+  qualityIssueSeverity?: Severity;
 }
 
 /** What the Log Assistant reads from one log for an application. */

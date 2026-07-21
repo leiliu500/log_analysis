@@ -27,8 +27,19 @@ Validate ALL of these phases against the transaction's regular agent:
    implies — failed ⇒ high, timeout ⇒ medium — and a completed agent must have
    none.
 
-Result. If a closed transaction matches on every point — phases complete,
-RESPONSE within the 2-minute SLA, finding present/absent at the correct level —
-the validation result is SUCCESS. Any discrepancy (missing phase, SLA breach,
-missing / unexpected / wrong-level finding) is a VALIDATION FAILURE; record each
-discrepancy as a delta. An active transaction still within its SLA is PENDING.
+4. Associated quality findings. A COMPLETED transaction can still have analysis
+   findings (anomaly / correlation) on its logs — e.g. a high integration-latency
+   anomaly on a 200 response — linked to the transaction by shared log identity
+   (including the API-Gateway execution log, resolved to the business
+   correlationID through apiflc's cross-log-group join). These are NOT lifecycle
+   failures (the agent completed correctly), but they are recorded and surfaced.
+   A completed transaction carrying an associated finding at or above apiflc's
+   issue threshold (high) is reported as COMPLETED WITH ISSUES; associated
+   findings below that level are listed but keep the result SUCCESS.
+
+Result. For a closed transaction: a lifecycle discrepancy (missing phase, SLA
+breach, missing / unexpected / wrong-level finding) is a VALIDATION FAILURE —
+record each as a delta, and this takes precedence. Otherwise, a completed
+transaction with an associated high/critical finding is COMPLETED WITH ISSUES;
+a clean completion (or one with only info/low findings) within the 2-minute SLA
+is SUCCESS. An active transaction still within its SLA is PENDING.

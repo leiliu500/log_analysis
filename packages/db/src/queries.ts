@@ -318,6 +318,20 @@ export async function getAgentFindingSeverities(messageIds: string[]): Promise<M
   return out;
 }
 
+/**
+ * Analysis findings (anomaly / correlation / …) created at/after `since` — i.e.
+ * every finding EXCEPT the `tx:<messageId>` lifecycle findings. These are the
+ * findings the validator associates with completed transactions (by shared log
+ * identity) to distinguish a clean completion from one with quality issues.
+ */
+export async function getNonTransactionFindingsSince(since: number, limit = 2000): Promise<Finding[]> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT * FROM findings
+    WHERE created_at >= ${since} AND fingerprint NOT LIKE 'tx:%'
+    ORDER BY created_at DESC LIMIT ${limit}`;
+  return rows.map(rawRowToFinding);
+}
+
 export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<void> {
   if (!vas.length) return;
   const sqlc = getSql();
@@ -326,11 +340,13 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
       await tx`INSERT INTO validation_agents
         (message_id, application, agent_status, active, result, expected_finding, expected_severity,
          actual_finding, actual_severity, delta, missing_phases, sla_breached, sla_budget_minutes,
-         sla_from_phase, response_latency_ms, phases, phase_ts, detail, spawned_at, updated_at, closed_at)
+         sla_from_phase, response_latency_ms, quality_findings, max_quality_severity,
+         phases, phase_ts, detail, spawned_at, updated_at, closed_at)
         VALUES (${v.messageId}, ${v.application ?? null}, ${v.agentStatus}, ${v.active}, ${v.result},
                 ${v.expectedFinding}, ${v.expectedSeverity ?? null}, ${v.actualFinding}, ${v.actualSeverity ?? null},
                 ${JSON.stringify(v.delta)}::jsonb, ${JSON.stringify(v.missingPhases)}::jsonb, ${v.slaBreached},
                 ${v.slaBudgetMinutes ?? null}, ${v.slaFromPhase ?? null}, ${v.responseLatencyMs ?? null},
+                ${JSON.stringify(v.qualityFindings)}::jsonb, ${v.maxQualitySeverity ?? null},
                 ${JSON.stringify(v.phases)}::jsonb, ${JSON.stringify(v.phaseTs)}::jsonb,
                 ${v.detail ?? null}, ${v.spawnedAt}, ${v.updatedAt}, ${v.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
@@ -341,6 +357,7 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
           delta = EXCLUDED.delta, missing_phases = EXCLUDED.missing_phases, sla_breached = EXCLUDED.sla_breached,
           sla_budget_minutes = EXCLUDED.sla_budget_minutes, sla_from_phase = EXCLUDED.sla_from_phase,
           response_latency_ms = EXCLUDED.response_latency_ms,
+          quality_findings = EXCLUDED.quality_findings, max_quality_severity = EXCLUDED.max_quality_severity,
           phases = EXCLUDED.phases, phase_ts = EXCLUDED.phase_ts,
           detail = EXCLUDED.detail, updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
     }
@@ -391,6 +408,8 @@ function rawRowToValidationAgent(r: Record<string, unknown>): ValidationAgent {
     slaBudgetMinutes: num(r.sla_budget_minutes),
     slaFromPhase: (r.sla_from_phase ?? undefined) as string | undefined,
     responseLatencyMs: num(r.response_latency_ms),
+    qualityFindings: jsonbField<ValidationAgent['qualityFindings']>(r.quality_findings, []),
+    maxQualitySeverity: (r.max_quality_severity ?? undefined) as ValidationAgent['maxQualitySeverity'],
     phases: jsonbField<string[]>(r.phases, []),
     phaseTs: jsonbField<Record<string, number>>(r.phase_ts, {}),
     detail: (r.detail ?? undefined) as string | undefined,

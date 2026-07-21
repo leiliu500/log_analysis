@@ -35,5 +35,8 @@ export const scpApplication: ApplicationDef = {
     promptPath: 'apps/scp/validation.md',
     responseTimeoutMinutes: 30,
     responseTimeoutFrom: 'ACK',
+    // A completed transaction with an associated high/critical finding is
+    // "completed with issues" (surfaced, not a failure).
+    qualityIssueSeverity: 'high',
   },
 };

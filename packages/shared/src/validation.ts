@@ -10,11 +10,30 @@ import type { Severity } from './findings.js';
  * separate poller from the ingestion path — it only READS `agents` + `findings`
  * and WRITES `validation_agents`, so it can never mutate or block regular ingest.
  *
- *   pending  → the regular agent is still active (awaiting); no expectation yet   (active)
- *   success  → the regular agent closed and findings match (presence + level)     (inactive)
- *   failure  → a delta was found (missing / unexpected / wrong-level finding)      (inactive)
+ *   pending                → the regular agent is still active (awaiting); no expectation yet (active)
+ *   success                → closed, the invariant holds and (if completed) no high/critical
+ *                            associated analysis finding                                     (inactive)
+ *   completed_with_issues  → completed correctly (no lifecycle failure), BUT the transaction
+ *                            has ≥1 high/critical associated analysis finding (e.g. a high-
+ *                            latency anomaly on a 200 response) — surfaced, not a failure     (inactive)
+ *   failure                → a lifecycle delta was found (missing / unexpected / wrong-level
+ *                            finding, missing phase, or SLA breach)                           (inactive)
  */
-export type ValidationResult = 'pending' | 'success' | 'failure';
+export type ValidationResult = 'pending' | 'success' | 'completed_with_issues' | 'failure';
+
+/**
+ * An analysis finding (anomaly/correlation/…, NOT a `tx:` lifecycle finding) that
+ * belongs to a completed transaction — associated by shared log identity (the
+ * finding's evidence logs are part of the transaction's call). Surfaced on the
+ * validation agent so a clean completion is distinguished from one with quality
+ * issues (high latency, etc.) instead of the finding being silently ignored.
+ */
+export interface QualityFinding {
+  id: string;
+  severity: Severity;
+  kind: string;
+  title: string;
+}
 
 export interface ValidationAgent {
   /** Correlation id — mirrors the regular agent's messageId. */
@@ -53,6 +72,14 @@ export interface ValidationAgent {
   slaFromPhase?: string;
   /** Measured latency from the SLA anchor phase to the RESPONSE (or to now, if overdue). */
   responseLatencyMs?: number;
+  /**
+   * Analysis findings (anomaly/correlation/…) associated with this completed
+   * transaction by shared log identity. Empty for a clean completion. A high/critical
+   * one drives the `completed_with_issues` result.
+   */
+  qualityFindings: QualityFinding[];
+  /** The highest severity among {@link qualityFindings}, if any. */
+  maxQualitySeverity?: Severity;
   /** The protocol's ordered phases (copied from the agent), for progress rendering. */
   phases: string[];
   /** Phase name → timestamp (copied from the agent). */

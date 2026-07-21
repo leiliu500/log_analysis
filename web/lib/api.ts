@@ -59,9 +59,13 @@ export const api = {
     req<{
       checked: number;
       passed: number;
+      issues: number;
       failed: number;
       pending: number;
-      byApplication: Record<string, { checked: number; passed: number; failed: number; pending: number }>;
+      byApplication: Record<
+        string,
+        { checked: number; passed: number; issues: number; failed: number; pending: number }
+      >;
     }>('/validate', { method: 'POST', body: JSON.stringify({}) }),
   /** Scheduled-ingestion run history for the Schedule tab. */
   schedule: () => req<{ runs: PollerRun[] }>('/schedule?limit=100'),

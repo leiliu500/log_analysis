@@ -131,3 +131,60 @@ test('completed agent WITH an unexpected finding → failure', () => {
   assert.equal(v.result, 'failure');
   assert.match(v.delta.join(), /unexpected finding/);
 });
+
+const completedClean = {
+  ...base,
+  messageId: 'q',
+  status: 'completed' as const,
+  active: false,
+  phaseTs: { REQUEST: 0, ACK: 1 * MIN, RESPONSE: 2 * MIN },
+};
+const qf = (severity: string) => [{ id: 'f1', severity: severity as never, kind: 'anomaly', title: 'High integration latency' }];
+
+test('completed + HIGH associated finding → completed_with_issues (not a failure)', () => {
+  const v = validateAgent(completedClean, undefined, 50 * MIN, SCP, qf('high'));
+  assert.equal(v.result, 'completed_with_issues');
+  assert.equal(v.maxQualitySeverity, 'high');
+  assert.equal(v.qualityFindings.length, 1);
+  assert.deepEqual(v.delta, []); // lifecycle is clean — the finding is not a delta
+});
+
+test('completed + only INFO associated finding → success (findings still recorded)', () => {
+  const v = validateAgent(completedClean, undefined, 50 * MIN, SCP, qf('info'));
+  assert.equal(v.result, 'success');
+  assert.equal(v.maxQualitySeverity, 'info');
+  assert.equal(v.qualityFindings.length, 1);
+});
+
+test('completed + HIGH associated finding BUT missing phase → failure (delta wins)', () => {
+  const v = validateAgent(
+    { ...completedClean, phaseTs: { REQUEST: 0, ACK: 1 * MIN } }, // missing RESPONSE
+    undefined,
+    50 * MIN,
+    SCP,
+    qf('critical'),
+  );
+  assert.equal(v.result, 'failure');
+  assert.match(v.delta.join(), /missing phase/);
+});
+
+test('per-app threshold: medium finding → issues when app sets qualityIssueSeverity=medium', () => {
+  const ctx = { ...SCP, qualityIssueSeverity: 'medium' as const };
+  const withMedium = validateAgent(completedClean, undefined, 50 * MIN, ctx, qf('medium'));
+  assert.equal(withMedium.result, 'completed_with_issues');
+  // default (high) threshold would keep a medium finding as success
+  const defaultThreshold = validateAgent(completedClean, undefined, 50 * MIN, SCP, qf('medium'));
+  assert.equal(defaultThreshold.result, 'success');
+});
+
+test('failed agent ignores quality findings (result unaffected)', () => {
+  const v = validateAgent(
+    { ...base, messageId: 'q2', status: 'failed', active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN } },
+    'high',
+    50 * MIN,
+    SCP,
+    qf('critical'),
+  );
+  assert.equal(v.result, 'success'); // failed+high finding = correct; quality not applied
+  assert.deepEqual(v.qualityFindings, []);
+});
