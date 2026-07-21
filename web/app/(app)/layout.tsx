@@ -15,6 +15,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/">
             Dashboard
           </Link>
+          <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/validation">
+            Validation
+          </Link>
           <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/chat">
             Chatbot
           </Link>

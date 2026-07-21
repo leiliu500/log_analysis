@@ -16,6 +16,11 @@ resource "aws_cloudwatch_log_group" "ingest" {
   retention_in_days = 30
 }
 
+resource "aws_cloudwatch_log_group" "validation" {
+  name              = "/aws/lambda/${local.name}-validation"
+  retention_in_days = 30
+}
+
 locals {
   lambda_env = {
     DATABASE_URL = local.database_url
@@ -63,6 +68,27 @@ resource "aws_lambda_function" "ingest_poller" {
   depends_on = [aws_cloudwatch_log_group.ingest]
 }
 
+# Autonomous validation poller. Runs on its OWN schedule, fully decoupled from the
+# ingest poller: it only reads the agents + findings tables and writes the
+# validation_agents table, so it can never mutate or block the ingestion path.
+resource "aws_lambda_function" "validation_poller" {
+  function_name    = "${local.name}-validation"
+  role             = aws_iam_role.lambda.arn
+  runtime          = "nodejs20.x"
+  handler          = "index.validationPollerHandler"
+  filename         = data.archive_file.lambda.output_path
+  source_code_hash = data.archive_file.lambda.output_base64sha256
+  timeout          = 120
+  memory_size      = 1024
+
+  vpc_config {
+    subnet_ids         = aws_subnet.private[*].id
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+  environment { variables = local.lambda_env }
+  depends_on = [aws_cloudwatch_log_group.validation]
+}
+
 # Allow the Bedrock Agent to invoke the action-group Lambda.
 # Allow the supervisor AND every collaborator agent to invoke the action-group
 # Lambda. Each collaborator's action group calls this Lambda under its own agent
@@ -89,6 +115,20 @@ resource "aws_scheduler_schedule" "ingest" {
   }
 }
 
+# Autonomous validation every 5 minutes, running in parallel with (and independent
+# of) ingestion. Offset so it observes state the ingest poller has committed.
+resource "aws_scheduler_schedule" "validation" {
+  name       = "${local.name}-validation-schedule"
+  group_name = "default"
+  flexible_time_window { mode = "OFF" }
+  schedule_expression = "rate(5 minutes)"
+  target {
+    arn      = aws_lambda_function.validation_poller.arn
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({})
+  }
+}
+
 resource "aws_iam_role" "scheduler" {
   name = "${local.name}-scheduler"
   assume_role_policy = jsonencode({
@@ -107,9 +147,12 @@ resource "aws_iam_role_policy" "scheduler" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["lambda:InvokeFunction"]
-      Resource = aws_lambda_function.ingest_poller.arn
+      Effect = "Allow"
+      Action = ["lambda:InvokeFunction"]
+      Resource = [
+        aws_lambda_function.ingest_poller.arn,
+        aws_lambda_function.validation_poller.arn,
+      ]
     }]
   })
 }

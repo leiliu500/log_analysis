@@ -1,4 +1,12 @@
-import type { Finding, ChatResponse, SimulateResult, RouteDecision, Agent, PollerRun } from '@log/shared';
+import type {
+  Finding,
+  ChatResponse,
+  SimulateResult,
+  RouteDecision,
+  Agent,
+  PollerRun,
+  ValidationAgent,
+} from '@log/shared';
 
 const BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
@@ -40,6 +48,21 @@ export const api = {
     }),
   /** Stateful agent lifecycle: active agents (cards) + closed agents (history). */
   agents: () => req<{ active: Agent[]; history: Agent[] }>('/agents'),
+  /**
+   * Validation agents: the autonomous 1:1 shadow of the agent lifecycle. Active
+   * (pending, shadowing active agents) + history (each success/failure + delta).
+   */
+  validationAgents: () =>
+    req<{ active: ValidationAgent[]; history: ValidationAgent[] }>('/validation-agents'),
+  /** On-demand "Validate now" — the scheduled validation Lambda runs this autonomously. */
+  validateNow: () =>
+    req<{
+      checked: number;
+      passed: number;
+      failed: number;
+      pending: number;
+      byApplication: Record<string, { checked: number; passed: number; failed: number; pending: number }>;
+    }>('/validate', { method: 'POST', body: JSON.stringify({}) }),
   /** Scheduled-ingestion run history for the Schedule tab. */
   schedule: () => req<{ runs: PollerRun[] }>('/schedule?limit=100'),
   chat: (sessionId: string, message: string) =>

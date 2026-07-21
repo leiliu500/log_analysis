@@ -12,11 +12,14 @@ import {
   getActiveAgents,
   getAgentHistory,
   deleteAllAgents,
+  getActiveValidationAgents,
+  getValidationHistory,
+  deleteAllValidationAgents,
   recentPollerRuns,
   deleteAllPollerRuns,
 } from '@log/db';
 import { simulate, handleSimulatePrompt } from '@log/simulator';
-import { analyzeAllSources, routeRequest } from '@log/agents';
+import { analyzeAllSources, routeRequest, validateAgents, applicationRegistry } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
 import { handleChat } from './chat.js';
@@ -66,6 +69,31 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     return { active, history };
   });
 
+  // -------- Validation agents (autonomous 1:1 shadow of the agent lifecycle) --------
+  // Active validation agents (pending, shadowing active agents) + closed ones
+  // (validation history, each success/failure with its delta). Read-only view of
+  // what the separate validation poller has persisted.
+  api.get('/validation-agents', async (req) => {
+    const q = req.query as { active?: string; history?: string };
+    const [active, history] = await Promise.all([
+      getActiveValidationAgents(Math.min(Number(q.active ?? 500), 2000)),
+      getValidationHistory(Math.min(Number(q.history ?? 200), 1000)),
+    ]);
+    return { active, history };
+  });
+
+  // On-demand validation pass (the scheduled validation Lambda runs this
+  // autonomously; this is the manual "Validate now" trigger). Isolated from
+  // ingestion — only reads agents+findings and writes validation_agents.
+  api.post('/validate', async (req) => {
+    try {
+      return await validateAgents(applicationRegistry);
+    } catch (err) {
+      req.log.error(err, 'validation pass failed');
+      return { checked: 0, passed: 0, failed: 0, pending: 0, byApplication: {} };
+    }
+  });
+
   // -------- Schedule: scheduled-ingestion run history --------
   // Timeline of poller runs (EventBridge cron every ~5 min + on-demand "Analyze
   // now"), so the dashboard's Schedule tab can show what each trigger did.
@@ -80,7 +108,11 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
   // Clear the findings table (and cascade alerts), plus the agent lifecycle —
   // the dashboard's "Clear" control resets the whole view.
   api.delete('/findings', async () => {
-    const [deleted, agentsDeleted] = await Promise.all([deleteAllFindings(), deleteAllAgents()]);
+    const [deleted, agentsDeleted] = await Promise.all([
+      deleteAllFindings(),
+      deleteAllAgents(),
+      deleteAllValidationAgents(),
+    ]);
     return { deleted, agentsDeleted };
   });
 
@@ -92,6 +124,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
       deleteAllLogs(),
       deleteAllAgents(),
       deleteAllPollerRuns(),
+      deleteAllValidationAgents(),
     ]);
     return { findingsDeleted, logsDeleted, scheduleDeleted };
   });

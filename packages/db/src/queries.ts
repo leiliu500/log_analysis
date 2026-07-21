@@ -1,5 +1,13 @@
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
-import type { Finding, ParsedLog, ChatMessage, LogSourceType, Agent, PollerRun } from '@log/shared';
+import type {
+  Finding,
+  ParsedLog,
+  ChatMessage,
+  LogSourceType,
+  Agent,
+  PollerRun,
+  ValidationAgent,
+} from '@log/shared';
 import { getDb, getSql, type Sql } from './client.js';
 import {
   parsedLogs,
@@ -278,6 +286,113 @@ function rawRowToAgent(r: Record<string, unknown>): Agent {
     logGroup: (r.log_group ?? undefined) as string | undefined,
     ackCode: (r.ack_code ?? undefined) as string | undefined,
     severity: (r.severity ?? undefined) as string | undefined,
+    detail: (r.detail ?? undefined) as string | undefined,
+    spawnedAt: Number(r.spawned_at),
+    updatedAt: Number(r.updated_at),
+    closedAt: num(r.closed_at),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Validation agents (autonomous 1:1 shadow of the agent lifecycle)
+// ---------------------------------------------------------------------------
+
+/**
+ * The severity of the agent-lifecycle finding for each messageId, keyed by the
+ * finding fingerprint scheme `tx:<messageId>`. The validation engine's only read
+ * against `findings`: it returns messageId → severity for every id that has a
+ * `tx:` finding, so a missing key means "no finding exists for that agent".
+ */
+export async function getAgentFindingSeverities(messageIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!messageIds.length) return out;
+  const sqlc = getSql();
+  const fps = messageIds.map((id) => `tx:${id}`);
+  const rows = await sqlc<{ fingerprint: string; severity: string }[]>`
+    SELECT fingerprint, severity FROM findings WHERE fingerprint = ANY(${sqlc.array(fps)})`;
+  for (const r of rows) {
+    if (typeof r.fingerprint === 'string' && r.fingerprint.startsWith('tx:')) {
+      out.set(r.fingerprint.slice(3), r.severity);
+    }
+  }
+  return out;
+}
+
+export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<void> {
+  if (!vas.length) return;
+  const sqlc = getSql();
+  await sqlc.begin(async (tx) => {
+    for (const v of vas) {
+      await tx`INSERT INTO validation_agents
+        (message_id, application, agent_status, active, result, expected_finding, expected_severity,
+         actual_finding, actual_severity, delta, missing_phases, sla_breached, sla_budget_minutes,
+         sla_from_phase, response_latency_ms, phases, phase_ts, detail, spawned_at, updated_at, closed_at)
+        VALUES (${v.messageId}, ${v.application ?? null}, ${v.agentStatus}, ${v.active}, ${v.result},
+                ${v.expectedFinding}, ${v.expectedSeverity ?? null}, ${v.actualFinding}, ${v.actualSeverity ?? null},
+                ${JSON.stringify(v.delta)}::jsonb, ${JSON.stringify(v.missingPhases)}::jsonb, ${v.slaBreached},
+                ${v.slaBudgetMinutes ?? null}, ${v.slaFromPhase ?? null}, ${v.responseLatencyMs ?? null},
+                ${JSON.stringify(v.phases)}::jsonb, ${JSON.stringify(v.phaseTs)}::jsonb,
+                ${v.detail ?? null}, ${v.spawnedAt}, ${v.updatedAt}, ${v.closedAt ?? null})
+        ON CONFLICT (message_id) DO UPDATE SET
+          application = COALESCE(validation_agents.application, EXCLUDED.application),
+          agent_status = EXCLUDED.agent_status, active = EXCLUDED.active, result = EXCLUDED.result,
+          expected_finding = EXCLUDED.expected_finding, expected_severity = EXCLUDED.expected_severity,
+          actual_finding = EXCLUDED.actual_finding, actual_severity = EXCLUDED.actual_severity,
+          delta = EXCLUDED.delta, missing_phases = EXCLUDED.missing_phases, sla_breached = EXCLUDED.sla_breached,
+          sla_budget_minutes = EXCLUDED.sla_budget_minutes, sla_from_phase = EXCLUDED.sla_from_phase,
+          response_latency_ms = EXCLUDED.response_latency_ms,
+          phases = EXCLUDED.phases, phase_ts = EXCLUDED.phase_ts,
+          detail = EXCLUDED.detail, updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
+    }
+  });
+}
+
+/** Active validation agents (cards) — those shadowing a still-active agent (pending). */
+export async function getActiveValidationAgents(limit = 500): Promise<ValidationAgent[]> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT * FROM validation_agents WHERE active = TRUE ORDER BY spawned_at DESC LIMIT ${limit}`;
+  return rows.map(rawRowToValidationAgent);
+}
+
+/** Closed validation agents (history) — evaluated success/failure, newest first. */
+export async function getValidationHistory(limit = 200): Promise<ValidationAgent[]> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT * FROM validation_agents WHERE active = FALSE ORDER BY closed_at DESC NULLS LAST LIMIT ${limit}`;
+  return rows.map(rawRowToValidationAgent);
+}
+
+export async function pruneClosedValidationAgentsOlderThan(cutoff: number): Promise<number> {
+  const sqlc = getSql();
+  const rows = await sqlc`DELETE FROM validation_agents WHERE active = FALSE AND closed_at < ${cutoff} RETURNING message_id`;
+  return rows.length;
+}
+
+export async function deleteAllValidationAgents(): Promise<number> {
+  const sqlc = getSql();
+  const rows = await sqlc`DELETE FROM validation_agents RETURNING message_id`;
+  return rows.length;
+}
+
+function rawRowToValidationAgent(r: Record<string, unknown>): ValidationAgent {
+  const num = (v: unknown): number | undefined => (v === null || v === undefined ? undefined : Number(v));
+  return {
+    messageId: r.message_id as string,
+    application: (r.application ?? undefined) as string | undefined,
+    agentStatus: r.agent_status as ValidationAgent['agentStatus'],
+    active: r.active as boolean,
+    result: r.result as ValidationAgent['result'],
+    expectedFinding: r.expected_finding as boolean,
+    expectedSeverity: (r.expected_severity ?? undefined) as ValidationAgent['expectedSeverity'],
+    actualFinding: r.actual_finding as boolean,
+    actualSeverity: (r.actual_severity ?? undefined) as string | undefined,
+    delta: jsonbField<string[]>(r.delta, []),
+    missingPhases: jsonbField<string[]>(r.missing_phases, []),
+    slaBreached: (r.sla_breached ?? false) as boolean,
+    slaBudgetMinutes: num(r.sla_budget_minutes),
+    slaFromPhase: (r.sla_from_phase ?? undefined) as string | undefined,
+    responseLatencyMs: num(r.response_latency_ms),
+    phases: jsonbField<string[]>(r.phases, []),
+    phaseTs: jsonbField<Record<string, number>>(r.phase_ts, {}),
     detail: (r.detail ?? undefined) as string | undefined,
     spawnedAt: Number(r.spawned_at),
     updatedAt: Number(r.updated_at),

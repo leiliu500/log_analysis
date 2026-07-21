@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "test": "node --test --import tsx ./*.test.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {

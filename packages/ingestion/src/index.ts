@@ -3,3 +3,4 @@
 // agentic analysis + the transaction-agent lifecycle.
 export * from './source/index.js';
 export * from './ingestPoller.js';
+export * from './validationPoller.js';

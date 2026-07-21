@@ -9,6 +9,8 @@ export const scpApplication: ApplicationDef = {
   displayName: 'SCP',
   logGroups: APPLICATION_LOG_GROUPS,
   protocol: scpTransactionProtocol,
+  // Regular ingestion agent: SCP's own REQUEST→ACK→RESPONSE transaction spec.
+  transactionPromptPath: 'apps/scp/transaction.md',
   // Simulator: SCP uses the correlated cashMessage REQUEST/ACK/RESPONSE set model.
   matchLogGroup: parseLogGroup,
   defaultSamples: DEFAULT_CASHMESSAGE_SAMPLES,
@@ -26,5 +28,12 @@ export const scpApplication: ApplicationDef = {
       corrId: m.type === 'REQUEST' ? m.messageId : m.initMessageId,
       ackCode: m.ackCode,
     };
+  },
+  // Validation agent: validate all REQUEST→ACK→RESPONSE phases; the RESPONSE that
+  // completes the transaction is expected within 30 minutes of the ACK.
+  validation: {
+    promptPath: 'apps/scp/validation.md',
+    responseTimeoutMinutes: 30,
+    responseTimeoutFrom: 'ACK',
   },
 };

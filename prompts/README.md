@@ -15,6 +15,24 @@ from `@log/shared` (see [packages/shared/src/prompts.ts](../packages/shared/src/
 | [api/simulate.segment.md](api/simulate.segment.md) | `packages/api/src/simulate.ts` | Split one request into separate simulation commands. |
 | [api/simulate.extract-one.md](api/simulate.extract-one.md) | `packages/api/src/simulate.ts` | Convert one simulation command into structured parameters. |
 
+## Application-specific prompts (`apps/<id>/`)
+
+Each onboarded application owns its own prompts under `apps/<id>/`, kept fully
+separate from every other app. They are declared **by path on the app's
+`ApplicationDef`** (in its `@log/app-<id>` package), so adding/onboarding an app
+never touches another app's prompts. The composition root is
+[packages/apps/index.ts](../packages/apps/index.ts); a consistency test
+([packages/apps/prompts.consistency.test.ts](../packages/apps/prompts.consistency.test.ts))
+asserts every declared path here actually resolves via `loadPrompt`.
+
+| File | Declared by (`ApplicationDef` field) | Role |
+|------|--------------------------------------|------|
+| `apps/scp/transaction.md`, `apps/apiflc/transaction.md` | `transactionPromptPath` | The **regular ingestion agent**'s transaction lifecycle spec — spawn / advance / close (SCP: REQUEST→ACK→RESPONSE; apiflc: REQUEST→RESPONSE). |
+| `apps/scp/validation.md`, `apps/apiflc/validation.md` | `validation.promptPath` | The **validation agent**'s spec — phase completeness + response SLA (SCP: 30 min after ACK; apiflc: 2 min after REQUEST) + finding/level invariant. |
+| `apps/scp/qa.md`, `apps/apiflc/qa.md` | `assistantPromptPath` | The app's grounded Log-Assistant (scoped Q&A) system prompt. |
+| `apps/apiflc/simulate.understand.md` | `simulateUnderstandingPromptPath` | The app's Simulator understanding-agent prompt (extracts its correlation id). |
+| `apps/scp/simulate.segment.md`, `apps/scp/simulate.extract-one.md` | (SCP simulator) | SCP simulator segmentation / extraction prompts. |
+
 ## How it loads
 
 `loadPrompt('agents/supervisor.md')` resolves this folder by walking up from the

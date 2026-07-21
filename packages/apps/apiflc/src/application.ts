@@ -10,6 +10,8 @@ export const apiflcApplication: ApplicationDef = {
   displayName: 'apiflc',
   logGroups: APIFLC_LOG_GROUPS,
   protocol: apiflcTransactionProtocol,
+  // Regular ingestion agent: apiflc's own REQUEST→RESPONSE transaction spec.
+  transactionPromptPath: 'apps/apiflc/transaction.md',
   // Simulator: apiflc logs are raw Lambda / API-Gateway lines — write verbatim.
   // A single paste may target several groups (handler / authorizer / execution).
   matchLogGroup: parseApiflcLogGroup,
@@ -26,4 +28,11 @@ export const apiflcApplication: ApplicationDef = {
   // assistant derives (type, id=corrId, ackCode) from the REQUEST→RESPONSE
   // protocol's eventOf (apiflc's own id IS its correlationID).
   assistantPromptPath: 'apps/apiflc/qa.md',
+  // Validation agent: validate all REQUEST→RESPONSE phases; the RESPONSE that
+  // completes the transaction is expected within 2 minutes of the REQUEST.
+  validation: {
+    promptPath: 'apps/apiflc/validation.md',
+    responseTimeoutMinutes: 2,
+    responseTimeoutFrom: 'REQUEST',
+  },
 };

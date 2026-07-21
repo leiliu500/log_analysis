@@ -2,6 +2,7 @@ export * from './logs.js';
 export * from './entries.js';
 export * from './findings.js';
 export * from './agentLifecycle.js';
+export * from './validation.js';
 export * from './transactionProtocol.js';
 export * from './application.js';
 export * from './agents.js';
