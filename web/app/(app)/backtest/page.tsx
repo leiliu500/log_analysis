@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { BacktestSummary } from '@log/shared';
 import { api } from '@/lib/api';
 import { BacktestPanel } from '@/components/BacktestPanel';
@@ -28,10 +28,8 @@ export default function BacktestPage() {
     }
   }, []);
 
-  // Run once on first load so the page isn't empty.
-  useEffect(() => {
-    void run();
-  }, [run]);
+  // Manual only — the backtest runs when the user clicks "Run backtest". A page
+  // refresh therefore resets to the empty state instead of auto-running.
 
   return (
     <div className="p-8">
