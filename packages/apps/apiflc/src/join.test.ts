@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ParsedLog } from '@log/shared';
 import { apiflcRelatedLogs, apiflcIdsOf } from './join.js';
-import { apiflcHttpOutcomes } from './httpOutcomes.js';
+import { apiflcHttpOutcomes, apiflcDeriveOutcome } from './httpOutcomes.js';
 
 const HANDLER = '/aws/lambda/adt-fca-d1-api_gateway_handler';
 const AUTHZ = '/aws/lambda/adt-fca-d1-api_gateway_authorizer';
@@ -84,4 +84,59 @@ test('an id that is not in the window resolves to nothing', () => {
 
 test('httpOutcomes attributes the HTTP status to the business correlationID', () => {
   assert.match(apiflcHttpOutcomes(LOGS), new RegExp(`correlationID=${CORR}: HTTP 200`));
+});
+
+// --- Join correctness properties (the join is a correctness dependency of both the
+// Log Assistant and the validation engine; over-linking = a finding/outcome attached
+// to the wrong transaction, under-linking = one silently dropped). --------------------
+
+// A second, fully independent call in the same window — must never entangle with the first.
+const CORR2 = '5678';
+const GW_REQ2 = '11111111-2222-3333-4444-555555555555';
+const HANDLER_REQ2 = '99999999-8888-7777-6666-555555555555';
+const TRACE2 = '1-6b45ea62-64e4e5dd10e9b6af71959158';
+const LOGS2: ParsedLog[] = [
+  ...LOGS.filter((l) => !l.raw.includes('9999')), // drop the earlier bare unrelated line
+  mk(GW, `(${GW_REQ2}) Method request headers: {X-Correlation-ID=${CORR2}, X-Amzn-Trace-Id=Root=${TRACE2}}`),
+  mk(GW, `(${GW_REQ2}) Method completed with status: 500`),
+  mk(GW, `(${GW_REQ2}) Endpoint response headers: {x-amzn-RequestId=${HANDLER_REQ2}}`),
+  mk(HANDLER, `2026-07-02T04:40:00.000Z ${HANDLER_REQ2} INFO correlationID: ${CORR2}; Response from Data Services:`),
+];
+
+test('property: a log line is never attributed to two different transactions (no over-linking)', () => {
+  const a = new Set(apiflcRelatedLogs(CORR, LOGS2));
+  const b = new Set(apiflcRelatedLogs(CORR2, LOGS2));
+  const overlap = [...a].filter((l) => b.has(l));
+  assert.deepEqual(overlap, [], 'two distinct calls share log lines — the join over-linked');
+  assert.ok(a.size > 0 && b.size > 0, 'both calls must resolve to some lines');
+});
+
+test('property: every id of a call resolves to the identical line set (consistent components)', () => {
+  const canonical = new Set(apiflcRelatedLogs(CORR, LOGS2));
+  for (const id of [GW_REQ, HANDLER_REQ, TRACE, AUTHZ_REQ]) {
+    const s = new Set(apiflcRelatedLogs(id, LOGS2));
+    assert.equal(s.size, canonical.size, `resolving from ${id} yields a different-sized set`);
+    for (const l of s) assert.ok(canonical.has(l), `resolving from ${id} pulled a line not in the correlationID's set`);
+  }
+});
+
+test('property: resolution is idempotent', () => {
+  assert.deepEqual(apiflcRelatedLogs(CORR, LOGS2), apiflcRelatedLogs(CORR, LOGS2));
+});
+
+test('deriveOutcome: 200 → completed, 500 → failed, attributed to the right call', () => {
+  const ok = apiflcDeriveOutcome(CORR, apiflcRelatedLogs(CORR, LOGS2));
+  assert.equal(ok.status, 'completed');
+  assert.match(ok.detail ?? '', /HTTP 200/);
+  assert.ok(ok.phasesSeen.includes('RESPONSE'));
+
+  const bad = apiflcDeriveOutcome(CORR2, apiflcRelatedLogs(CORR2, LOGS2));
+  assert.equal(bad.status, 'failed');
+  assert.match(bad.detail ?? '', /HTTP 500/);
+});
+
+test('deriveOutcome: an id with no logs is unknown, never a guess', () => {
+  const d = apiflcDeriveOutcome('nope', apiflcRelatedLogs('nope', LOGS2));
+  assert.equal(d.status, 'unknown');
+  assert.deepEqual(d.evidenceLogIds, []);
 });

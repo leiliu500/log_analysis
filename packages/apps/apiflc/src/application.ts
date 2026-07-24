@@ -2,6 +2,7 @@ import type { ApplicationDef } from '@log/shared';
 import { APIFLC_LOG_GROUPS, parseApiflcLogGroup, splitApiflcByLogGroup } from './logGroups.js';
 import { apiflcTransactionProtocol } from './transactionProtocol.js';
 import { apiflcRelatedLogs } from './join.js';
+import { apiflcDeriveOutcome } from './httpOutcomes.js';
 import { APIFLC_SAMPLE } from './samples.js';
 
 /** The apiflc application: its CloudWatch log groups + REQUEST→RESPONSE protocol. */
@@ -19,6 +20,10 @@ export const apiflcApplication: ApplicationDef = {
   // Log Assistant: one apiflc call is logged under three different ids, so resolve
   // a question's id to the whole call (handler + authorizer + gateway execution).
   relatedLogs: apiflcRelatedLogs,
+  // Validation: re-derive the terminal outcome from the gateway HTTP status (which
+  // no protocol event carries), so an agent that recorded a 500 as `completed` is
+  // caught by the status-vs-reality check.
+  deriveOutcome: apiflcDeriveOutcome,
   defaultSamples: APIFLC_SAMPLE,
   simulationMode: 'verbatim',
   correlationLabel: 'correlationID',
