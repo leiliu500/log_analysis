@@ -298,7 +298,7 @@ export function validateAgent(
 }
 
 /** Resolve one application's validation context from the registry (phases + SLA). */
-function appContextFor(agent: Pick<Agent, 'application'>, registry?: ApplicationRegistry): AppValidationContext {
+export function appContextFor(agent: Pick<Agent, 'application'>, registry?: ApplicationRegistry): AppValidationContext {
   const app = registry?.byId(agent.application);
   const proto = app?.protocol;
   const allPhases = proto?.allPhases ?? [];
@@ -318,7 +318,7 @@ function appContextFor(agent: Pick<Agent, 'application'>, registry?: Application
  * gateway requestId to the business correlationID), or, for an app without one,
  * every window log the protocol correlates to this transaction (scp's messageId).
  */
-function relatedLogsFor(app: ApplicationDef | undefined, messageId: string, windowLogs: ParsedLog[]): ParsedLog[] {
+export function relatedLogsFor(app: ApplicationDef | undefined, messageId: string, windowLogs: ParsedLog[]): ParsedLog[] {
   if (!app) return [];
   if (app.relatedLogs) return app.relatedLogs(messageId, windowLogs);
   return windowLogs.filter((l) => app.protocol.eventOf(l)?.corrId === messageId);
@@ -332,7 +332,7 @@ function relatedLogsFor(app: ApplicationDef | undefined, messageId: string, wind
  * phase present ⇒ completed, else unknown. Returns `unknown` whenever the evidence
  * is insufficient — it never guesses, so absence alone can never fault an agent.
  */
-function deriveOutcome(
+export function deriveOutcome(
   app: ApplicationDef | undefined,
   messageId: string,
   relatedLogs: ParsedLog[],

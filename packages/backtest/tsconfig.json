@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../shared" },
+    { "path": "../apps" },
+    { "path": "../apps/scp" },
+    { "path": "../apps/apiflc" },
+    { "path": "../agents/dynamic/analysis" }
+  ],
+  "include": ["src/**/*.ts"]
+}

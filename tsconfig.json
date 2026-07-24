@@ -10,6 +10,7 @@
     { "path": "packages/ingestion" },
     { "path": "packages/agents" },
     { "path": "packages/agents/dynamic/simulator" },
-    { "path": "packages/api" }
+    { "path": "packages/api" },
+    { "path": "packages/backtest" }
   ]
 }

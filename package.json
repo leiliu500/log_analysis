@@ -24,6 +24,7 @@
     "db:seed": "npm run seed --workspace @log/db",
     "simulate": "npm run start --workspace @log/simulator",
     "bundle:lambda": "node scripts/bundle-lambda.mjs",
+    "backtest": "npm run backtest --workspace @log/backtest",
     "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
