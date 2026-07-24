@@ -27,6 +27,27 @@ const RESULT_STYLES: Record<string, string> = {
 
 const isElevated = (s?: string): boolean => s === 'high' || s === 'critical';
 
+/**
+ * Categorize a delta string into a compact, colour-coded chip so the richer
+ * validation checks (status-vs-reality, evidence gaps, SCP ordering/duplicate,
+ * system-of-record) are legible at a glance instead of one long red blob. The full
+ * delta text stays available on hover. Order matters — most specific first.
+ */
+function deltaChip(d: string): { label: string; cls: string } {
+  const t = d.toLowerCase();
+  if (t.includes('status mismatch')) return { label: 'status mismatch', cls: 'bg-rose-500/25 text-rose-200 border-rose-500/50' };
+  if (t.includes('unverified completion')) return { label: 'unverified', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
+  if (t.includes('incomplete evidence')) return { label: 'evidence gap', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+  if (t.includes('ordering violation')) return { label: 'ordering', cls: 'bg-orange-500/20 text-orange-300 border-orange-500/40' };
+  if (t.includes('duplicate')) return { label: 'duplicate', cls: 'bg-orange-500/20 text-orange-300 border-orange-500/40' };
+  if (t.includes('system-of-record')) return { label: 'record mismatch', cls: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40' };
+  if (t.includes('sla breach')) return { label: 'SLA breach', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
+  if (t.includes('missing phase')) return { label: 'missing phase', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
+  if (t.includes('missing finding') || t.includes('unexpected finding') || t.includes('wrong level')) return { label: 'finding', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
+  if (t.includes('overdue') || t.includes('stuck')) return { label: 'stuck', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+  return { label: 'delta', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
+}
+
 /** Compact result labels for the badge (the raw union value is verbose). */
 const RESULT_LABELS: Record<string, string> = {
   success: 'success',
@@ -97,6 +118,9 @@ export function ValidationPanel({
 }) {
   const failures = history.filter((v) => v.result === 'failure').length;
   const issues = history.filter((v) => v.result === 'completed_with_issues').length;
+  // Completed cleanly BUT carried an associated finding below the app's issue
+  // threshold — recorded, not flagged. Surfaced so the suppression is observable.
+  const suppressed = history.filter((v) => v.result === 'success' && v.qualityFindings.length > 0).length;
 
   return (
     <section className="mb-8">
@@ -136,6 +160,14 @@ export function ValidationPanel({
         ) : null}
         {failures === 0 && issues === 0 && history.length > 0 ? (
           <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-300">all consistent</span>
+        ) : null}
+        {suppressed > 0 ? (
+          <span
+            className="rounded-full bg-slate-500/20 px-2 py-0.5 text-xs text-slate-300"
+            title="Completed cleanly but carried an associated finding below the app's issue threshold — recorded, not flagged as an issue."
+          >
+            {suppressed} suppressed
+          </span>
         ) : null}
       </div>
       {history.length > 0 ? (
@@ -191,8 +223,21 @@ export function ValidationPanel({
                       '—'
                     )}
                   </td>
-                  <td className={`px-3 py-1.5 font-sans ${v.delta.length ? 'text-red-400' : 'text-slate-500'}`}>
-                    {v.delta.length ? v.delta.join('; ') : '—'}
+                  <td className="px-3 py-1.5 font-sans">
+                    {v.delta.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {v.delta.map((d, i) => {
+                          const c = deltaChip(d);
+                          return (
+                            <span key={i} title={d} className={`cursor-help whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] ${c.cls}`}>
+                              {c.label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <span className="text-slate-500">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-1.5 text-slate-500">{v.closedAt ? clock(v.closedAt) : ago(v.updatedAt)}</td>
                 </tr>

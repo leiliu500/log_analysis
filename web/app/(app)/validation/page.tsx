@@ -66,6 +66,7 @@ export default function ValidationPage() {
 
   const failures = shownHistory.filter((v) => v.result === 'failure').length;
   const issues = shownHistory.filter((v) => v.result === 'completed_with_issues').length;
+  const suppressed = shownHistory.filter((v) => v.result === 'success' && v.qualityFindings.length > 0).length;
 
   return (
     <div className="p-8">
@@ -81,9 +82,12 @@ export default function ValidationPage() {
       </div>
       <p className="mb-4 text-sm text-slate-400">
         Autonomous validation agents shadow the ingestion agents 1:1 and continuously prove, per
-        application, that every non-completed closed agent has exactly one finding at the expected
-        level (failed → high, timeout → medium) and completed agents have none. Runs in a separate
-        poller from ingestion. This view auto-refreshes every {REFRESH_MS / 1000}s.
+        application, that every transaction is consistent — the finding/level invariant (failed →
+        high, timeout → medium; completed → none), phase completeness, the response SLA, the terminal
+        outcome re-derived from the raw logs (status-vs-reality), evidence completeness, and
+        app-specific rules (e.g. SCP REQUEST→ACK→RESPONSE ordering + duplicate-phase integrity). Any
+        discrepancy is a colour-coded delta below. Runs in a separate poller from ingestion; this
+        view auto-refreshes every {REFRESH_MS / 1000}s.
       </p>
 
       {/* Result summary + application filter */}
@@ -107,6 +111,14 @@ export default function ValidationPage() {
           <span className="text-xs text-slate-500">
             {shownActive.length} pending · {shownHistory.length} validated
           </span>
+          {suppressed > 0 && (
+            <span
+              className="rounded-md bg-slate-500/20 px-2 py-1 text-xs text-slate-300"
+              title="Completed cleanly but carried an associated finding below the app's issue threshold — recorded, not flagged."
+            >
+              {suppressed} suppressed
+            </span>
+          )}
         </div>
         <label className="mb-1 flex items-center gap-2 text-xs text-slate-400">
           Application
