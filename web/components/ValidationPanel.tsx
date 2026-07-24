@@ -125,10 +125,10 @@ export function ValidationPanel({
   return (
     <section className="mb-8">
       <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-lg font-semibold text-white">Active Validation Agents</h2>
+        <h2 className="text-lg font-semibold text-white">Active Validation Workers</h2>
         <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs text-sky-300">{active.length}</span>
         <span className="text-xs text-slate-500">
-          one validation agent per in-flight transaction — pending until the agent closes
+          one validation worker per in-flight transaction — pending until the agent closes
         </span>
       </div>
 
@@ -140,8 +140,8 @@ export function ValidationPanel({
         </div>
       ) : (
         <p className="mb-6 text-sm text-slate-500">
-          No active validation agents. They shadow active ingestion agents — simulate an incomplete
-          transaction so an agent stays active and a pending validation agent appears here.
+          No active validation workers. They shadow active ingestion agents — simulate an incomplete
+          transaction so an agent stays active and a pending validation worker appears here.
         </p>
       )}
 

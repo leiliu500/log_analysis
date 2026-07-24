@@ -153,7 +153,7 @@ export function DashboardView() {
   return (
     <div className="p-8">
       <div className="mb-1 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-white">Ingestion &amp; Agent Dashboard</h1>
+        <h1 className="text-2xl font-semibold text-white">Ingestion Agents</h1>
         <div className="flex gap-2">
           <button
             onClick={() => void analyzeNow()}

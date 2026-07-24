@@ -14,7 +14,7 @@ import { BacktestView } from '@/components/BacktestView';
  */
 const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
-  { key: 'validation', label: 'Validation' },
+  { key: 'validation', label: 'Validation Workers' },
   { key: 'backtest', label: 'Backtest' },
 ] as const;
 type TopTab = (typeof TABS)[number]['key'];
