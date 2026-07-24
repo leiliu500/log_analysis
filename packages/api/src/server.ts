@@ -21,6 +21,7 @@ import {
 import { simulate, handleSimulatePrompt } from '@log/simulator';
 import { analyzeAllSources, routeRequest, validateAgents, applicationRegistry } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
+import { runBacktest, corpus, toSummary } from '@log/backtest';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
 import { handleChat } from './chat.js';
 
@@ -91,6 +92,19 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     } catch (err) {
       req.log.error(err, 'validation pass failed');
       return { checked: 0, passed: 0, issues: 0, failed: 0, pending: 0, suppressed: 0, byApplication: {} };
+    }
+  });
+
+  // On-demand validation BACKTEST — replays the hand-labelled gold-set corpus
+  // through the real validation engine (pure, in-process, no DB writes) and returns
+  // the JSON-safe summary the /backtest UI renders: overall + per-app + per-mode
+  // metrics and every case's outcome. This is the FP/FN/hallucination measurement.
+  api.post('/backtest', async (req) => {
+    try {
+      return toSummary(runBacktest(corpus), Date.now());
+    } catch (err) {
+      req.log.error(err, 'backtest run failed');
+      throw err;
     }
   });
 

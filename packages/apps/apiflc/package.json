@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./backtest": {
+      "types": "./dist/backtestCases.d.ts",
+      "default": "./dist/backtestCases.js"
     }
   },
   "scripts": {

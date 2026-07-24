@@ -15,13 +15,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/">
             Dashboard
           </Link>
-          <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/validation">
-            Validation
-          </Link>
           <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/chat">
             Chatbot
           </Link>
         </nav>
+        <p className="mt-4 px-3 text-[11px] text-slate-600">
+          Dashboard · Validation · Backtest are tabs within the Dashboard.
+        </p>
         <p className="mt-8 text-xs text-slate-500">
           Bedrock agents · CloudWatch · Splunk · Grafana · Email
         </p>

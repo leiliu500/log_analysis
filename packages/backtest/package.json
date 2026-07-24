@@ -1,5 +1,5 @@
 {
-  "name": "@log/app-scp",
+  "name": "@log/backtest",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,18 +9,19 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./backtest": {
-      "types": "./dist/backtestCases.d.ts",
-      "default": "./dist/backtestCases.js"
     }
   },
   "scripts": {
     "build": "tsc -b",
     "test": "node --test --import tsx ./src/*.test.ts",
+    "backtest": "tsx src/cli.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@log/analysis": "*",
+    "@log/app-apiflc": "*",
+    "@log/app-scp": "*",
+    "@log/applications": "*",
     "@log/shared": "*"
   },
   "devDependencies": {

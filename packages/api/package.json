@@ -16,6 +16,7 @@
     "@log/analysis": "*",
     "@log/app-apiflc": "*",
     "@log/app-scp": "*",
+    "@log/backtest": "*",
     "@log/db": "*",
     "@log/ingestion": "*",
     "@log/shared": "*",

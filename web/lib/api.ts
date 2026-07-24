@@ -6,6 +6,7 @@ import type {
   Agent,
   PollerRun,
   ValidationAgent,
+  BacktestSummary,
 } from '@log/shared';
 
 const BASE =
@@ -67,6 +68,12 @@ export const api = {
         { checked: number; passed: number; issues: number; failed: number; pending: number }
       >;
     }>('/validate', { method: 'POST', body: JSON.stringify({}) }),
+  /**
+   * Run the validation BACKTEST on demand — replays the gold-set corpus through the
+   * real validation engine and returns the FP/FN/hallucination summary for the
+   * /backtest page. Pure/in-process on the API; no data is written.
+   */
+  runBacktest: () => req<BacktestSummary>('/backtest', { method: 'POST', body: JSON.stringify({}) }),
   /** Scheduled-ingestion run history for the Schedule tab. */
   schedule: () => req<{ runs: PollerRun[] }>('/schedule?limit=100'),
   chat: (sessionId: string, message: string) =>
