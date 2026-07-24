@@ -71,7 +71,7 @@ export function ValidationView() {
   return (
     <div className="p-8">
       <div className="mb-1 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-white">Validation Agents</h1>
+        <h1 className="text-2xl font-semibold text-white">Validation Workers</h1>
         <button
           onClick={() => void validateNow()}
           disabled={validating || loading}
@@ -81,8 +81,8 @@ export function ValidationView() {
         </button>
       </div>
       <p className="mb-4 text-sm text-slate-400">
-        Autonomous validation agents shadow the ingestion agents 1:1 and continuously prove, per
-        application, that every transaction is consistent — the finding/level invariant (failed →
+        Autonomous, <b>deterministic</b> validation workers shadow the ingestion agents 1:1 and
+        continuously prove, per application, that every transaction is consistent — the finding/level invariant (failed →
         high, timeout → medium; completed → none), phase completeness, the response SLA, the terminal
         outcome re-derived from the raw logs (status-vs-reality), evidence completeness, and
         app-specific rules (e.g. SCP REQUEST→ACK→RESPONSE ordering + duplicate-phase integrity). Any
@@ -126,7 +126,7 @@ export function ValidationView() {
             value={appFilter}
             onChange={(e) => setAppFilter(e.target.value)}
             className="rounded-md border border-edge bg-panel px-2 py-1 text-sm text-slate-200"
-            title="Filter validation agents by application"
+            title="Filter validation workers by application"
           >
             <option value="all">All applications</option>
             {apps.map((a) => (
