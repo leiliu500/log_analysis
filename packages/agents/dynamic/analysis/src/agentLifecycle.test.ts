@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Agent, ParsedLog, TransactionProtocol } from '@log/shared';
 import { ApplicationRegistry } from '@log/shared';
-import { stepAgents, agentEvents, agentFindingFingerprint, type AgentEvent } from './agentLifecycle.js';
+import { stepAgents, agentEvents, agentAnomalyFingerprint, type AgentEvent } from './agentLifecycle.js';
 import { parseBatch } from './parser.js';
 
 const NOW = 1_700_000_000_000;
@@ -143,17 +143,17 @@ test('events on an already-terminal agent are ignored (idempotent)', () => {
 });
 
 // message_id is the agents PRIMARY KEY: one agent per id, immutable once terminal.
-// So the finding identity is the id alone — a second finding for it is a duplicate.
+// So the anomaly identity is the id alone — a second anomaly for it is a duplicate.
 // It must NOT vary with closedAt (that reintroduces the duplicate the migration
-// cleaned up: a new-scheme finding fails to match the existing tx:<id> one).
-test('finding fingerprint is the messageId alone, independent of close time', () => {
+// cleaned up: a new-scheme anomaly fails to match the existing tx:<id> one).
+test('anomaly fingerprint is the messageId alone, independent of close time', () => {
   const a = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW });
   const b = agent({ messageId: '005', status: 'error', active: false, closedAt: NOW + 60_000 });
-  assert.equal(agentFindingFingerprint(a), 'tx:005');
-  assert.equal(agentFindingFingerprint(a), agentFindingFingerprint(b), 'same id ⇒ same finding, whatever the close time');
+  assert.equal(agentAnomalyFingerprint(a), 'tx:005');
+  assert.equal(agentAnomalyFingerprint(a), agentAnomalyFingerprint(b), 'same id ⇒ same anomaly, whatever the close time');
 });
 
-test('a timed-out agent maps to its stable finding fingerprint', () => {
+test('a timed-out agent maps to its stable anomaly fingerprint', () => {
   const known = agent({
     waitingFor: 'RESPONSE',
     phaseTs: { REQUEST: NOW - 40 * 60_000, ACK: NOW - 39 * 60_000 },
@@ -162,7 +162,7 @@ test('a timed-out agent maps to its stable finding fingerprint', () => {
   });
   const a = step([], [known]).agents.get('001')!;
   assert.equal(a.status, 'error');
-  assert.equal(agentFindingFingerprint(a), 'tx:001');
+  assert.equal(agentAnomalyFingerprint(a), 'tx:001');
 });
 
 test('agentEvents extracts ordered request/ack/response from parsed logs', () => {

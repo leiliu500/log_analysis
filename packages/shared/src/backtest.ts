@@ -1,7 +1,7 @@
 import type { Agent } from './agentLifecycle.js';
 import type { ParsedLog } from './logs.js';
-import type { Severity } from './findings.js';
-import type { QualityFinding, ValidationResult } from './validation.js';
+import type { Severity } from './anomalies.js';
+import type { QualityAnomaly, ValidationResult } from './validation.js';
 import type { ReconciliationResult } from './application.js';
 
 // ---------------------------------------------------------------------------
@@ -97,10 +97,10 @@ export interface GoldCase {
   >;
   /** The raw parsed logs for this transaction — the INDEPENDENT ground truth. */
   logs: ParsedLog[];
-  /** Severity of the `tx:<messageId>` lifecycle finding that exists in the store, if any. */
-  findingSeverity?: Severity;
-  /** Associated non-`tx:` quality findings (anomaly/correlation) on this transaction, if any. */
-  qualityFindings?: QualityFinding[];
+  /** Severity of the `tx:<messageId>` lifecycle anomaly that exists in the store, if any. */
+  anomalySeverity?: Severity;
+  /** Associated non-`tx:` quality anomalies (anomaly/correlation) on this transaction, if any. */
+  qualityAnomalies?: QualityAnomaly[];
   /** Does the window cover the whole transaction lifetime? false ⇒ some logs rolled off. Default true. */
   windowComplete?: boolean;
   /** A synthetic system-of-record reconciliation result, to exercise the reconcile hook. */

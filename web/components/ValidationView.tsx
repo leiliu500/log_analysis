@@ -66,7 +66,7 @@ export function ValidationView() {
 
   const failures = shownHistory.filter((v) => v.result === 'failure').length;
   const issues = shownHistory.filter((v) => v.result === 'completed_with_issues').length;
-  const suppressed = shownHistory.filter((v) => v.result === 'success' && v.qualityFindings.length > 0).length;
+  const suppressed = shownHistory.filter((v) => v.result === 'success' && v.qualityAnomalies.length > 0).length;
 
   return (
     <div className="p-8">
@@ -82,7 +82,7 @@ export function ValidationView() {
       </div>
       <p className="mb-4 text-sm text-slate-400">
         Autonomous, <b>deterministic</b> validation workers shadow the ingestion agents 1:1 and
-        continuously prove, per application, that every transaction is consistent — the finding/level invariant (failed →
+        continuously prove, per application, that every transaction is consistent — the anomaly/level invariant (failed →
         high, timeout → medium; completed → none), phase completeness, the response SLA, the terminal
         outcome re-derived from the raw logs (status-vs-reality), evidence completeness, and
         app-specific rules (e.g. SCP REQUEST→ACK→RESPONSE ordering + duplicate-phase integrity). Any
@@ -101,7 +101,7 @@ export function ValidationView() {
             </span>
           ) : issues > 0 ? (
             <span className="rounded-md bg-amber-500/20 px-2 py-1 text-amber-300">
-              Completed with issues — {issues} transaction{issues === 1 ? '' : 's'} have high/critical findings
+              Completed with issues — {issues} transaction{issues === 1 ? '' : 's'} have high/critical anomalies
             </span>
           ) : (
             <span className="rounded-md bg-emerald-500/20 px-2 py-1 text-emerald-300">
@@ -114,7 +114,7 @@ export function ValidationView() {
           {suppressed > 0 && (
             <span
               className="rounded-md bg-slate-500/20 px-2 py-1 text-xs text-slate-300"
-              title="Completed cleanly but carried an associated finding below the app's issue threshold — recorded, not flagged."
+              title="Completed cleanly but carried an associated anomaly below the app's issue threshold — recorded, not flagged."
             >
               {suppressed} suppressed
             </span>

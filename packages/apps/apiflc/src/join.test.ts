@@ -87,7 +87,7 @@ test('httpOutcomes attributes the HTTP status to the business correlationID', ()
 });
 
 // --- Join correctness properties (the join is a correctness dependency of both the
-// Log Assistant and the validation engine; over-linking = a finding/outcome attached
+// Log Assistant and the validation engine; over-linking = a anomaly/outcome attached
 // to the wrong transaction, under-linking = one silently dropped). --------------------
 
 // A second, fully independent call in the same window — must never entangle with the first.

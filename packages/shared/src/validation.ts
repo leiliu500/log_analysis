@@ -1,34 +1,34 @@
 import type { Agent } from './agentLifecycle.js';
-import type { Severity } from './findings.js';
+import type { Severity } from './anomalies.js';
 
 /**
  * A validation agent — an autonomous shadow of a regular ingestion {@link Agent},
  * keyed by the same `messageId`. It independently proves the lifecycle's core
  * invariant per transaction, with no human interaction: every NON-completed
- * closed agent must have exactly one finding `tx:<messageId>` at the severity its
+ * closed agent must have exactly one anomaly `tx:<messageId>` at the severity its
  * close reason implies, and a completed agent must have none. It runs in a
- * separate poller from the ingestion path — it only READS `agents` + `findings`
+ * separate poller from the ingestion path — it only READS `agents` + `anomalies`
  * and WRITES `validation_agents`, so it can never mutate or block regular ingest.
  *
  *   pending                → the regular agent is still active (awaiting); no expectation yet (active)
  *   success                → closed, the invariant holds and (if completed) no high/critical
- *                            associated analysis finding                                     (inactive)
+ *                            associated analysis anomaly                                     (inactive)
  *   completed_with_issues  → completed correctly (no lifecycle failure), BUT the transaction
- *                            has ≥1 high/critical associated analysis finding (e.g. a high-
+ *                            has ≥1 high/critical associated analysis anomaly (e.g. a high-
  *                            latency anomaly on a 200 response) — surfaced, not a failure     (inactive)
  *   failure                → a lifecycle delta was found (missing / unexpected / wrong-level
- *                            finding, missing phase, or SLA breach)                           (inactive)
+ *                            anomaly, missing phase, or SLA breach)                           (inactive)
  */
 export type ValidationResult = 'pending' | 'success' | 'completed_with_issues' | 'failure';
 
 /**
- * An analysis finding (anomaly/correlation/…, NOT a `tx:` lifecycle finding) that
+ * An analysis anomaly (anomaly/correlation/…, NOT a `tx:` lifecycle anomaly) that
  * belongs to a completed transaction — associated by shared log identity (the
- * finding's evidence logs are part of the transaction's call). Surfaced on the
+ * anomaly's evidence logs are part of the transaction's call). Surfaced on the
  * validation agent so a clean completion is distinguished from one with quality
- * issues (high latency, etc.) instead of the finding being silently ignored.
+ * issues (high latency, etc.) instead of the anomaly being silently ignored.
  */
-export interface QualityFinding {
+export interface QualityAnomaly {
   id: string;
   severity: Severity;
   kind: string;
@@ -45,13 +45,13 @@ export interface ValidationAgent {
   /** True while the regular agent is active (validation pending). */
   active: boolean;
   result: ValidationResult;
-  /** Whether the invariant requires a finding for this agent. */
-  expectedFinding: boolean;
-  /** The severity level the finding is expected to carry (when expected). */
+  /** Whether the invariant requires a anomaly for this agent. */
+  expectedAnomaly: boolean;
+  /** The severity level the anomaly is expected to carry (when expected). */
   expectedSeverity?: Severity;
-  /** Whether a `tx:<messageId>` finding actually exists. */
-  actualFinding: boolean;
-  /** The severity level the actual finding carries. */
+  /** Whether a `tx:<messageId>` anomaly actually exists. */
+  actualAnomaly: boolean;
+  /** The severity level the actual anomaly carries. */
   actualSeverity?: string;
   /** Human-readable mismatches; empty on success. */
   delta: string[];
@@ -73,12 +73,12 @@ export interface ValidationAgent {
   /** Measured latency from the SLA anchor phase to the RESPONSE (or to now, if overdue). */
   responseLatencyMs?: number;
   /**
-   * Analysis findings (anomaly/correlation/…) associated with this completed
+   * Analysis anomalies (anomaly/correlation/…) associated with this completed
    * transaction by shared log identity. Empty for a clean completion. A high/critical
    * one drives the `completed_with_issues` result.
    */
-  qualityFindings: QualityFinding[];
-  /** The highest severity among {@link qualityFindings}, if any. */
+  qualityAnomalies: QualityAnomaly[];
+  /** The highest severity among {@link qualityAnomalies}, if any. */
   maxQualitySeverity?: Severity;
   /** The protocol's ordered phases (copied from the agent), for progress rendering. */
   phases: string[];
@@ -92,13 +92,13 @@ export interface ValidationAgent {
 }
 
 /**
- * The invariant, encoded once (mirrors `agentFinding` in the analysis package):
- *   failed    ⇒ a finding at 'high'
- *   error     ⇒ a finding at 'medium' (timeout)
- *   completed ⇒ no finding
+ * The invariant, encoded once (mirrors `agentAnomaly` in the analysis package):
+ *   failed    ⇒ a anomaly at 'high'
+ *   error     ⇒ a anomaly at 'medium' (timeout)
+ *   completed ⇒ no anomaly
  *   awaiting  ⇒ no expectation yet (still active)
  */
-export function expectedFindingFor(agent: Pick<Agent, 'status'>): {
+export function expectedAnomalyFor(agent: Pick<Agent, 'status'>): {
   expected: boolean;
   severity?: Severity;
 } {

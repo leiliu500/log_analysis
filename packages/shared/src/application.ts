@@ -1,5 +1,5 @@
 import type { ParsedLog } from './logs.js';
-import type { Severity } from './findings.js';
+import type { Severity } from './anomalies.js';
 import type { TransactionProtocol } from './transactionProtocol.js';
 
 /**
@@ -109,7 +109,7 @@ export interface ApplicationDef {
    * to check, per app and with no human interaction, that every regular agent's
    * transaction is consistent: all protocol phases accounted for AND the final
    * response received within this app's SLA. Absent ⇒ the validator only checks
-   * the finding/level invariant (no phase/SLA checks).
+   * the anomaly/level invariant (no phase/SLA checks).
    */
   validation?: ApplicationValidation;
 }
@@ -172,9 +172,9 @@ export interface ApplicationValidation {
    */
   responseTimeoutFrom: string;
   /**
-   * The minimum severity of an associated analysis finding (anomaly/correlation on
+   * The minimum severity of an associated analysis anomaly (anomaly/correlation on
    * the transaction's logs) that makes a COMPLETED transaction "completed with
-   * issues" rather than a clean success. Findings below this level are still
+   * issues" rather than a clean success. Anomalies below this level are still
    * recorded but don't change the result. Defaults to 'high'. This is the tunable
    * knob each application owns; the enforcement (linking + verdict) is generic,
    * deterministic engine code.
@@ -195,7 +195,7 @@ export interface ApplicationValidation {
     relatedLogs: readonly ParsedLog[];
   }): Promise<ReconciliationResult> | ReconciliationResult;
   /**
-   * App-specific extra validation rules, beyond the generic finding / phase / SLA /
+   * App-specific extra validation rules, beyond the generic anomaly / phase / SLA /
    * outcome checks the platform applies to EVERY app. Given a closed transaction's
    * related logs, it returns a human-readable delta for each violation (empty =
    * clean); each delta is a validation failure like any other. This is where an app

@@ -43,7 +43,7 @@ function deltaChip(d: string): { label: string; cls: string } {
   if (t.includes('system-of-record')) return { label: 'record mismatch', cls: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40' };
   if (t.includes('sla breach')) return { label: 'SLA breach', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
   if (t.includes('missing phase')) return { label: 'missing phase', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
-  if (t.includes('missing finding') || t.includes('unexpected finding') || t.includes('wrong level')) return { label: 'finding', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
+  if (t.includes('missing anomaly') || t.includes('unexpected anomaly') || t.includes('wrong level')) return { label: 'anomaly', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
   if (t.includes('overdue') || t.includes('stuck')) return { label: 'stuck', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
   return { label: 'delta', cls: 'bg-red-500/20 text-red-300 border-red-500/40' };
 }
@@ -118,9 +118,9 @@ export function ValidationPanel({
 }) {
   const failures = history.filter((v) => v.result === 'failure').length;
   const issues = history.filter((v) => v.result === 'completed_with_issues').length;
-  // Completed cleanly BUT carried an associated finding below the app's issue
+  // Completed cleanly BUT carried an associated anomaly below the app's issue
   // threshold — recorded, not flagged. Surfaced so the suppression is observable.
-  const suppressed = history.filter((v) => v.result === 'success' && v.qualityFindings.length > 0).length;
+  const suppressed = history.filter((v) => v.result === 'success' && v.qualityAnomalies.length > 0).length;
 
   return (
     <section className="mb-8">
@@ -164,7 +164,7 @@ export function ValidationPanel({
         {suppressed > 0 ? (
           <span
             className="rounded-full bg-slate-500/20 px-2 py-0.5 text-xs text-slate-300"
-            title="Completed cleanly but carried an associated finding below the app's issue threshold — recorded, not flagged as an issue."
+            title="Completed cleanly but carried an associated anomaly below the app's issue threshold — recorded, not flagged as an issue."
           >
             {suppressed} suppressed
           </span>
@@ -182,7 +182,7 @@ export function ValidationPanel({
                 <th className="px-3 py-2">SLA</th>
                 <th className="px-3 py-2">expected</th>
                 <th className="px-3 py-2">actual</th>
-                <th className="px-3 py-2">findings</th>
+                <th className="px-3 py-2">anomalies</th>
                 <th className="px-3 py-2">delta</th>
                 <th className="px-3 py-2">validated</th>
               </tr>
@@ -208,16 +208,16 @@ export function ValidationPanel({
                         : '—'}
                   </td>
                   <td className="px-3 py-1.5 text-slate-400">
-                    {v.expectedFinding ? `finding · ${v.expectedSeverity}` : 'no finding'}
+                    {v.expectedAnomaly ? `anomaly · ${v.expectedSeverity}` : 'no anomaly'}
                   </td>
                   <td className="px-3 py-1.5 text-slate-400">
-                    {v.actualFinding ? `finding · ${v.actualSeverity ?? '—'}` : 'no finding'}
+                    {v.actualAnomaly ? `anomaly · ${v.actualSeverity ?? '—'}` : 'no anomaly'}
                   </td>
                   <td className={`px-3 py-1.5 font-sans ${isElevated(v.maxQualitySeverity) ? 'text-amber-300' : 'text-slate-400'}`}>
-                    {v.qualityFindings.length ? (
-                      <span title={v.qualityFindings.map((q) => `${q.severity}: ${q.title}`).join('\n')}>
-                        {v.maxQualitySeverity}: {v.qualityFindings[0]?.title}
-                        {v.qualityFindings.length > 1 ? ` (+${v.qualityFindings.length - 1})` : ''}
+                    {v.qualityAnomalies.length ? (
+                      <span title={v.qualityAnomalies.map((q) => `${q.severity}: ${q.title}`).join('\n')}>
+                        {v.maxQualitySeverity}: {v.qualityAnomalies[0]?.title}
+                        {v.qualityAnomalies.length > 1 ? ` (+${v.qualityAnomalies.length - 1})` : ''}
                       </span>
                     ) : (
                       '—'

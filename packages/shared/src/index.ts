@@ -1,6 +1,6 @@
 export * from './logs.js';
 export * from './entries.js';
-export * from './findings.js';
+export * from './anomalies.js';
 export * from './agentLifecycle.js';
 export * from './validation.js';
 export * from './transactionProtocol.js';

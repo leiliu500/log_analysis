@@ -1,5 +1,5 @@
 import type {
-  Finding,
+  Anomaly,
   ChatResponse,
   SimulateResult,
   RouteDecision,
@@ -14,7 +14,7 @@ const BASE =
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   // Only advertise a JSON content-type when we actually send a body. Otherwise
-  // Fastify rejects bodyless requests (e.g. DELETE /data, DELETE /findings) with
+  // Fastify rejects bodyless requests (e.g. DELETE /data, DELETE /anomalies) with
   // FST_ERR_CTP_EMPTY_JSON_BODY ("Body cannot be empty ...") → 400.
   const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) };
   if (init?.body != null) headers['Content-Type'] = 'application/json';
@@ -25,26 +25,26 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   /**
-   * Read current findings. By default this does NOT run analysis — findings are
+   * Read current anomalies. By default this does NOT run analysis — anomalies are
    * produced by the scheduled ingestion poller (agentic analysis). Pass
    * `analyze=true` only for an explicit, on-demand "Analyze now".
    */
-  findings: (analyze = false) =>
+  anomalies: (analyze = false) =>
     req<{
-      findings: Finding[];
+      anomalies: Anomaly[];
       analysis?: {
-        bySource: Record<string, { parsed: number; findings: number }>;
-        agents?: { spawned: number; advanced: number; closed: number; findings: number };
+        bySource: Record<string, { parsed: number; anomalies: number }>;
+        agents?: { spawned: number; advanced: number; closed: number; anomalies: number };
         pruned: number;
       };
       // "Analyze now" looks back 60 min (vs the scheduled poller's 5) so it also
       // catches logs simulated a little while ago. limit is high to include history.
-    }>(`/findings?limit=300&analyze=${analyze}&window=60`),
-  clearFindings: () =>
-    req<{ deleted: number; agentsDeleted?: number }>('/findings', { method: 'DELETE' }),
-  /** Full reset: findings + logs + agents + scheduled-run history. */
+    }>(`/anomalies?limit=300&analyze=${analyze}&window=60`),
+  clearAnomalies: () =>
+    req<{ deleted: number; agentsDeleted?: number }>('/anomalies', { method: 'DELETE' }),
+  /** Full reset: anomalies + logs + agents + scheduled-run history. */
   clearAllData: () =>
-    req<{ findingsDeleted: number; logsDeleted: number; scheduleDeleted?: number }>('/data', {
+    req<{ anomaliesDeleted: number; logsDeleted: number; scheduleDeleted?: number }>('/data', {
       method: 'DELETE',
     }),
   /** Stateful agent lifecycle: active agents (cards) + closed agents (history). */

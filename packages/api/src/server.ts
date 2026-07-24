@@ -2,8 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
 import {
-  recentFindings,
-  deleteAllFindings,
+  recentAnomalies,
+  deleteAllAnomalies,
   deleteAllLogs,
   queryLogs,
   ensureSession,
@@ -40,12 +40,12 @@ app.get('/health', async () => ({ ok: true, ts: Date.now() }));
 async function apiRoutes(api: FastifyInstance): Promise<void> {
   api.get('/health', async () => ({ ok: true, ts: Date.now() }));
 
-  // -------- Dashboard: findings, logs --------
+  // -------- Dashboard: anomalies, logs --------
   // Every dashboard load re-runs the analysis: pull the latest logs from all
-  // sources and run the pipeline (Analysis Agent) so the returned findings
+  // sources and run the pipeline (Analysis Agent) so the returned anomalies
   // reflect current logs, not a stale snapshot. `?analyze=false` skips the run
   // (used by internal/polling callers). `?window=<minutes>` sets the log window.
-  api.get('/findings', async (req) => {
+  api.get('/anomalies', async (req) => {
     const q = req.query as { limit?: string; analyze?: string; window?: string };
     const limit = Number(q.limit ?? 50);
     let analysis: Awaited<ReturnType<typeof analyzeAllSources>> | undefined;
@@ -53,10 +53,10 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
       try {
         analysis = await analyzeAllSources({ windowMinutes: Number(q.window ?? 5), trigger: 'manual' });
       } catch (err) {
-        req.log.error(err, 'live findings analysis failed');
+        req.log.error(err, 'live anomalies analysis failed');
       }
     }
-    return { findings: await recentFindings(limit), analysis };
+    return { anomalies: await recentAnomalies(limit), analysis };
   });
 
   // -------- Agents (request/ack/response lifecycle) --------
@@ -85,7 +85,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
 
   // On-demand validation pass (the scheduled validation Lambda runs this
   // autonomously; this is the manual "Validate now" trigger). Isolated from
-  // ingestion — only reads agents+findings and writes validation_agents.
+  // ingestion — only reads agents+anomalies and writes validation_agents.
   api.post('/validate', async (req) => {
     try {
       return await validateAgents(applicationRegistry);
@@ -119,28 +119,28 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
   // Clear the scheduled-ingestion run history (Schedule tab).
   api.delete('/schedule', async () => ({ deleted: await deleteAllPollerRuns() }));
 
-  // Clear the findings table (and cascade alerts), plus the agent lifecycle —
+  // Clear the anomalies table (and cascade alerts), plus the agent lifecycle —
   // the dashboard's "Clear" control resets the whole view.
-  api.delete('/findings', async () => {
+  api.delete('/anomalies', async () => {
     const [deleted, agentsDeleted] = await Promise.all([
-      deleteAllFindings(),
+      deleteAllAnomalies(),
       deleteAllAgents(),
       deleteAllValidationAgents(),
     ]);
     return { deleted, agentsDeleted };
   });
 
-  // Reset stored data: findings + parsed logs. Removes stale/seeded rows so the
+  // Reset stored data: anomalies + parsed logs. Removes stale/seeded rows so the
   // chatbot and dashboard reflect only live logs.
   api.delete('/data', async () => {
-    const [findingsDeleted, logsDeleted, , scheduleDeleted] = await Promise.all([
-      deleteAllFindings(),
+    const [anomaliesDeleted, logsDeleted, , scheduleDeleted] = await Promise.all([
+      deleteAllAnomalies(),
       deleteAllLogs(),
       deleteAllAgents(),
       deleteAllPollerRuns(),
       deleteAllValidationAgents(),
     ]);
-    return { findingsDeleted, logsDeleted, scheduleDeleted };
+    return { anomaliesDeleted, logsDeleted, scheduleDeleted };
   });
 
   const LogsQuery = z.object({

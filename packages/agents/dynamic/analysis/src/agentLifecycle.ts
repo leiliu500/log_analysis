@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { Agent, Finding, LogSourceType, ParsedLog, Severity, ApplicationRegistry } from '@log/shared';
+import type { Agent, Anomaly, LogSourceType, ParsedLog, Severity, ApplicationRegistry } from '@log/shared';
 import {
   getActiveAgents,
   getAgentsByMessageIds,
   upsertAgents,
   pruneClosedAgentsOlderThan,
-  insertFinding,
+  insertAnomaly,
   insertAlert,
   getUnreportedClosedAgents,
 } from '@log/db';
@@ -184,43 +184,43 @@ export interface AdvanceResult {
   spawned: number;
   advanced: number;
   closed: number;
-  /** Findings minted for agents that closed failed/error this cycle. */
-  findings: Finding[];
-  /** Per-application agent counts + minted findings (application id → counts). */
-  byApplication: Record<string, AgentCounts & { findings: number }>;
+  /** Anomalies minted for agents that closed failed/error this cycle. */
+  anomalies: Anomaly[];
+  /** Per-application agent counts + minted anomalies (application id → counts). */
+  byApplication: Record<string, AgentCounts & { anomalies: number }>;
 }
 
 const ALERT_SEVERITIES: Severity[] = ['high', 'critical'];
 
 /**
- * The finding's stable identity. `message_id` is the agents PRIMARY KEY, so there
+ * The anomaly's stable identity. `message_id` is the agents PRIMARY KEY, so there
  * is exactly ONE agent per id and, once terminal, it is immutable — the id alone
- * uniquely identifies the closed transaction, and a second finding for it is always
+ * uniquely identifies the closed transaction, and a second anomaly for it is always
  * a duplicate. (Do NOT fold in closedAt: it does not disambiguate anything here, and
- * it stops this from matching findings written under the same scheme.)
+ * it stops this from matching anomalies written under the same scheme.)
  */
-export const agentFindingFingerprint = (a: Agent): string => `tx:${a.messageId}`;
+export const agentAnomalyFingerprint = (a: Agent): string => `tx:${a.messageId}`;
 
 /**
  * DB-backed driver — the complete per-poll lifecycle step. Loads the relevant
  * agents (all active + any matching this window's ids), advances the state
- * machine against the protocol, persists changes, and reports a Finding for every
+ * machine against the protocol, persists changes, and reports a Anomaly for every
  * agent in history that closed NOT-completed (failed / error) and has none yet.
- * Runs even with no new logs so idle polls still fire timeouts + their Findings.
+ * Runs even with no new logs so idle polls still fire timeouts + their Anomalies.
  */
 export async function advanceAgents(
   parsed: ParsedLog[],
   registry: ApplicationRegistry,
-  opts: { now?: number; timeoutMs?: number; windowMs?: number; findingsTtlMs?: number } = {},
+  opts: { now?: number; timeoutMs?: number; windowMs?: number; anomaliesTtlMs?: number } = {},
 ): Promise<AdvanceResult> {
   const now = opts.now ?? Date.now();
   const windowMs = opts.windowMs ?? 5 * 60_000;
   const timeoutMs =
     opts.timeoutMs ?? Number(process.env.INGEST_AGENT_TIMEOUT_MINUTES ?? 30) * 60_000;
-  // Reconcile only within findings retention, so an agent whose finding was pruned
+  // Reconcile only within anomalies retention, so an agent whose anomaly was pruned
   // isn't recreated (it would churn back every poll). Defaults match the poller.
-  const findingsTtlMs =
-    opts.findingsTtlMs ?? Number(process.env.FINDINGS_HISTORY_TTL_MINUTES ?? 1440) * 60_000;
+  const anomaliesTtlMs =
+    opts.anomaliesTtlMs ?? Number(process.env.FINDINGS_HISTORY_TTL_MINUTES ?? 1440) * 60_000;
 
   const events = agentEvents(parsed, registry);
   const ids = [...new Set(events.map((e) => e.corrId))];
@@ -236,32 +236,32 @@ export async function advanceAgents(
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
   await upsertAgents(toPersist);
 
-  // Report every non-completed closed agent lacking a finding — those that closed
+  // Report every non-completed closed agent lacking a anomaly — those that closed
   // this poll AND any that slipped through earlier (a fingerprint collision on a
   // reused messageId, a restart, a DB blip). Driven off persisted history rather
-  // than only this poll's transitions, so the "not completed ⇒ a finding" property
+  // than only this poll's transitions, so the "not completed ⇒ a anomaly" property
   // is self-healing. The per-occurrence fingerprint makes each mint idempotent.
-  const findings: Finding[] = [];
-  const findingsByApp: Record<string, number> = {};
-  const unreported = await getUnreportedClosedAgents(now - findingsTtlMs);
+  const anomalies: Anomaly[] = [];
+  const anomaliesByApp: Record<string, number> = {};
+  const unreported = await getUnreportedClosedAgents(now - anomaliesTtlMs);
   for (const a of unreported) {
     try {
-      const f = agentFinding(a, now, windowMs);
-      await insertFinding(f);
-      findingsByApp[a.application ?? 'unknown'] = (findingsByApp[a.application ?? 'unknown'] ?? 0) + 1;
+      const f = agentAnomaly(a, now, windowMs);
+      await insertAnomaly(f);
+      anomaliesByApp[a.application ?? 'unknown'] = (anomaliesByApp[a.application ?? 'unknown'] ?? 0) + 1;
       if (ALERT_SEVERITIES.includes(f.severity)) {
         await insertAlert({
           id: randomUUID(),
-          findingId: f.id,
+          anomalyId: f.id,
           severity: f.severity,
           channel: 'dashboard',
           status: 'pending',
           createdAt: now,
         });
       }
-      findings.push(f);
+      anomalies.push(f);
     } catch (err) {
-      console.error('agentLifecycle: failure finding skipped', (err as Error).message);
+      console.error('agentLifecycle: failure anomaly skipped', (err as Error).message);
     }
   }
 
@@ -269,17 +269,17 @@ export async function advanceAgents(
   await pruneClosedAgentsOlderThan(now - historyTtlMin * 60_000);
 
   const byApplication: AdvanceResult['byApplication'] = {};
-  const appIds = new Set([...Object.keys(step.byApp), ...Object.keys(findingsByApp)]);
+  const appIds = new Set([...Object.keys(step.byApp), ...Object.keys(anomaliesByApp)]);
   for (const id of appIds) {
     const c = step.byApp[id] ?? { spawned: 0, advanced: 0, closed: 0 };
-    byApplication[id] = { ...c, findings: findingsByApp[id] ?? 0 };
+    byApplication[id] = { ...c, anomalies: anomaliesByApp[id] ?? 0 };
   }
 
-  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed, findings, byApplication };
+  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed, anomalies, byApplication };
 }
 
-/** A deterministic Finding for a terminally failed/errored (timed-out) agent. */
-function agentFinding(a: Agent, now: number, windowMs: number): Finding {
+/** A deterministic Anomaly for a terminally failed/errored (timed-out) agent. */
+function agentAnomaly(a: Agent, now: number, windowMs: number): Anomaly {
   const failed = a.status === 'failed';
   return {
     id: randomUUID(),
@@ -292,7 +292,7 @@ function agentFinding(a: Agent, now: number, windowMs: number): Finding {
     confidence: 0.9,
     sources: a.source ? [a.source as LogSourceType] : [],
     application: a.application,
-    fingerprint: agentFindingFingerprint(a),
+    fingerprint: agentAnomalyFingerprint(a),
     evidence: [],
     reasoning: [
       a.detail ?? (failed ? 'A phase carried a failure ackCode.' : 'A phase was not received before the timeout.'),

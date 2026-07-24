@@ -2,7 +2,7 @@ import type { ParsedLog } from '@log/shared';
 import { scpMessageMeta } from './transactionProtocol.js';
 
 /**
- * SCP-specific validation rules, layered on top of the generic finding / phase /
+ * SCP-specific validation rules, layered on top of the generic anomaly / phase /
  * SLA / outcome checks the platform engine applies to every app. These encode
  * invariants unique to SCP's REQUEST → ACK → RESPONSE cashMessage protocol — an
  * intermediate ACK phase that apiflc (a two-phase REQUEST → RESPONSE app) does not

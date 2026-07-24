@@ -1,7 +1,7 @@
 /**
  * Bedrock Agent Action-Group Lambda for the scp collaborator agent. It invokes a
  * real downstream application (the /invoke-app tool). The analysis + simulator
- * collaborator agents were removed, so their tools (/findings/search,
+ * collaborator agents were removed, so their tools (/anomalies/search,
  * /logs/analyze, /simulate) are gone; the live app uses in-process equivalents.
  */
 import { InvokeAppRequest } from '@log/shared';

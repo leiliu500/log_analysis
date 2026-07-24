@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Finding } from './findings.js';
+import { Anomaly } from './anomalies.js';
 import { ParsedLog } from './logs.js';
 import { RouteDecision } from './agents.js';
 
@@ -20,8 +20,8 @@ export const ChatRequest = z.object({
   sessionId: z.string().uuid(),
   message: z.string().min(1),
   /**
-   * When true the answer is scoped to logs/findings relevant to this session
-   * and query only (NOT global findings) — per requirement (7).
+   * When true the answer is scoped to logs/anomalies relevant to this session
+   * and query only (NOT global anomalies) — per requirement (7).
    */
   scoped: z.boolean().default(true),
 });
@@ -29,7 +29,7 @@ export type ChatRequest = z.infer<typeof ChatRequest>;
 
 /** Retrieval context assembled for a scoped chat answer. */
 export const ChatContext = z.object({
-  findings: z.array(Finding),
+  anomalies: z.array(Anomaly),
   logs: z.array(ParsedLog),
   route: RouteDecision.optional(),
 });

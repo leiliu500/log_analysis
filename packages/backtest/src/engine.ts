@@ -9,8 +9,8 @@ import type { CaseResult, GoldCase } from './types.js';
  *   1. resolve the app's context from the real registry (phases + SLA config);
  *   2. resolve the transaction's related logs via the app's real join;
  *   3. re-derive the terminal outcome straight from those logs (app hook or generic);
- *   4. run `validateAgent` (finding invariant, phase completeness, SLA, evidence,
- *      status-vs-reality, quality findings);
+ *   4. run `validateAgent` (anomaly invariant, phase completeness, SLA, evidence,
+ *      status-vs-reality, quality anomalies);
  *   5. apply the app's own extra checks (SCP ordering/duplicate) and any
  *      system-of-record reconciliation.
  * Nothing here is re-implemented — it calls the shipped functions, so a regression in
@@ -28,10 +28,10 @@ export function runCase(gc: GoldCase): CaseResult {
 
   const v: ValidationAgent = validateAgent(
     gc.agent,
-    gc.findingSeverity,
+    gc.anomalySeverity,
     gc.now,
     ctx,
-    gc.qualityFindings ?? [],
+    gc.qualityAnomalies ?? [],
     derived,
   );
 

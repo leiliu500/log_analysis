@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog, RawLogRecord, Severity, ApplicationRegistry } from '@log/shared';
-import { insertParsedLogs, insertFinding, insertAlert, findingExistsByFingerprint } from '@log/db';
+import type { Anomaly, ParsedLog, RawLogRecord, Severity, ApplicationRegistry } from '@log/shared';
+import { insertParsedLogs, insertAnomaly, insertAlert, anomalyExistsByFingerprint } from '@log/db';
 import { parseBatch } from './parser.js';
 import { scoreAndLearn } from './learn.js';
 import { correlate, type Cluster } from './correlate.js';
@@ -12,7 +12,7 @@ import { detectLogAnomalies } from './anomalies.js';
  * Agentic ingestion. Two concerns per poll cycle:
  *
  * Handles the NON-transaction anomalies: one ephemeral agent per error signature
- * and per cross-source correlation reasons about it (LLM) and persists a Finding.
+ * and per cross-source correlation reasons about it (LLM) and persists a Anomaly.
  * It also parses + persists the window and returns the parsed logs so the caller
  * can drive the request/ack/response agent lifecycle once per poll (advanceAgents).
  */
@@ -21,25 +21,25 @@ export interface AgenticOptions {
   windowMs?: number;
   /** Embed each parsed log for semantic search (costly at high volume). */
   embedLogs?: boolean;
-  /** Max concurrent finding-agents — bounds concurrent Bedrock calls. */
+  /** Max concurrent anomaly-agents — bounds concurrent Bedrock calls. */
   concurrency?: number;
-  /** Hard cap on finding-agents per run (backstop against a flood). */
+  /** Hard cap on anomaly-agents per run (backstop against a flood). */
   maxAgents?: number;
-  /** Application registry; transaction messages are excluded from the finding path. */
+  /** Application registry; transaction messages are excluded from the anomaly path. */
   registry?: ApplicationRegistry;
 }
 
 export type AgentUnitKind = 'error' | 'correlation';
-export type AgentStatus = 'finding' | 'duplicate' | 'error';
+export type AgentStatus = 'anomaly' | 'duplicate' | 'error';
 
-/** What one ephemeral finding-agent did with its cluster. */
+/** What one ephemeral anomaly-agent did with its cluster. */
 export interface AgentOutcome {
   kind: AgentUnitKind;
   key: string;
   label: string;
   status: AgentStatus;
   severity?: Severity;
-  findingId?: string;
+  anomalyId?: string;
   error?: string;
 }
 
@@ -47,7 +47,7 @@ export interface AgenticResult {
   /** Parsed logs from this source's window (caller drives the lifecycle). */
   parsed: ParsedLog[];
   outcomes: AgentOutcome[];
-  findings: Finding[];
+  anomalies: Anomaly[];
 }
 
 /** Alertable severities mirror the bulk pipeline. */
@@ -62,7 +62,7 @@ export type AgentUnit = { kind: AgentUnitKind; cluster: Cluster };
  * Non-transaction anomaly units (pure — no DB / model calls, so it is
  * unit-testable): one per error signature and per multi-source correlation.
  * Transactions are NOT here — they flow through the request/ack/response
- * lifecycle (advanceAgents), not the ephemeral finding path.
+ * lifecycle (advanceAgents), not the ephemeral anomaly path.
  */
 export function planAgentUnits(
   parsed: ParsedLog[],
@@ -81,7 +81,7 @@ interface AgentCtx {
   dedupSince: number;
   /** Fingerprints claimed this run (in-memory guard against concurrent dup work). */
   claimed: Set<string>;
-  alert: (f: Finding) => Promise<void>;
+  alert: (f: Anomaly) => Promise<void>;
   registry?: ApplicationRegistry;
 }
 
@@ -90,24 +90,24 @@ function unitKey(unit: AgentUnit): { key: string; label: string } {
   return { key: c.logs[0]?.fingerprint ?? c.key, label: `${unit.kind} ${c.key}` };
 }
 
-/** One ephemeral finding-agent: claim → dedup → reason → persist. Never throws. */
-async function runAgent(unit: AgentUnit, ctx: AgentCtx): Promise<{ outcome: AgentOutcome; finding?: Finding }> {
+/** One ephemeral anomaly-agent: claim → dedup → reason → persist. Never throws. */
+async function runAgent(unit: AgentUnit, ctx: AgentCtx): Promise<{ outcome: AgentOutcome; anomaly?: Anomaly }> {
   const { key, label } = unitKey(unit);
   if (ctx.claimed.has(key)) {
     return { outcome: { kind: unit.kind, key, label, status: 'duplicate' } };
   }
   ctx.claimed.add(key);
   try {
-    if (await findingExistsByFingerprint(key, ctx.dedupSince)) {
+    if (await anomalyExistsByFingerprint(key, ctx.dedupSince)) {
       return { outcome: { kind: unit.kind, key, label, status: 'duplicate' } };
     }
-    const finding = await reasonAboutCluster(unit.cluster);
-    finding.application = ctx.registry?.forLog(unit.cluster.logs[0]!)?.id;
-    await insertFinding(finding);
-    await ctx.alert(finding);
+    const anomaly = await reasonAboutCluster(unit.cluster);
+    anomaly.application = ctx.registry?.forLog(unit.cluster.logs[0]!)?.id;
+    await insertAnomaly(anomaly);
+    await ctx.alert(anomaly);
     return {
-      outcome: { kind: unit.kind, key, label, status: 'finding', severity: finding.severity, findingId: finding.id },
-      finding,
+      outcome: { kind: unit.kind, key, label, status: 'anomaly', severity: anomaly.severity, anomalyId: anomaly.id },
+      anomaly,
     };
   } catch (err) {
     return { outcome: { kind: unit.kind, key, label, status: 'error', error: (err as Error).message } };
@@ -130,7 +130,7 @@ async function runPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
 }
 
 /**
- * Parse + persist a source's window and fan out finding-agents over its
+ * Parse + persist a source's window and fan out anomaly-agents over its
  * non-transaction anomalies. Returns the parsed logs so the caller can drive the
  * request/ack/response agent lifecycle exactly once per poll.
  */
@@ -163,7 +163,7 @@ export async function dispatchAgentic(records: RawLogRecord[], opts: AgenticOpti
       if (ALERT_SEVERITIES.includes(f.severity)) {
         await insertAlert({
           id: randomUUID(),
-          findingId: f.id,
+          anomalyId: f.id,
           severity: f.severity,
           channel: 'dashboard',
           status: 'pending',
@@ -174,11 +174,11 @@ export async function dispatchAgentic(records: RawLogRecord[], opts: AgenticOpti
     registry: opts.registry,
   };
 
-  // Non-transaction anomalies → one finding-agent each, bounded fan-out.
+  // Non-transaction anomalies → one anomaly-agent each, bounded fan-out.
   const units = planAgentUnits(parsed, { windowMs, registry: opts.registry }).slice(0, maxAgents);
   const settled = await runPool(units, concurrency, (u) => runAgent(u, ctx));
   const outcomes = settled.map((s) => s.outcome);
-  const findings = settled.map((s) => s.finding).filter((f): f is Finding => !!f);
+  const anomalies = settled.map((s) => s.anomaly).filter((f): f is Anomaly => !!f);
 
-  return { parsed, outcomes, findings };
+  return { parsed, outcomes, anomalies };
 }

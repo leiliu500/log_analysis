@@ -35,7 +35,7 @@ const registry = new ApplicationRegistry().register({ id: 'test', displayName: '
 
 // planAgentUnits now covers ONLY non-transaction anomalies (errors + correlations);
 // transactions flow through the request/ack/response lifecycle instead.
-test('planAgentUnits: error logs get a finding-agent, transactions do not', () => {
+test('planAgentUnits: error logs get a anomaly-agent, transactions do not', () => {
   const records: RawLogRecord[] = [
     rec('{"level":"error","message":"payment gateway returned 500 Internal Server Error"}', NOW - 2 * MIN),
     rec('{"level":"error","message":"payment gateway returned 500 Internal Server Error"}', NOW - 1 * MIN),

@@ -3,19 +3,19 @@ import type {
   ApplicationDef,
   ApplicationRegistry,
   DerivedOutcome,
-  Finding,
+  Anomaly,
   ParsedLog,
-  QualityFinding,
+  QualityAnomaly,
   ReconciliationResult,
   Severity,
   ValidationAgent,
 } from '@log/shared';
-import { expectedFindingFor } from '@log/shared';
+import { expectedAnomalyFor } from '@log/shared';
 import {
   getActiveAgents,
   getAgentHistory,
-  getAgentFindingSeverities,
-  getNonTransactionFindingsSince,
+  getAgentAnomalySeverities,
+  getNonTransactionAnomaliesSince,
   queryLogs,
   upsertValidationAgents,
   pruneClosedValidationAgentsOlderThan,
@@ -26,13 +26,13 @@ import {
  * independently proves, per application and with no human interaction, that each
  * regular agent's transaction is consistent. Per the application's own
  * `validation.md` spec it checks:
- *   1. the finding/level invariant — a NON-completed closed agent must have one
- *      finding `tx:<messageId>` at the implied level (failed⇒high, timeout⇒medium),
+ *   1. the anomaly/level invariant — a NON-completed closed agent must have one
+ *      anomaly `tx:<messageId>` at the implied level (failed⇒high, timeout⇒medium),
  *      a completed agent none;
  *   2. phase completeness — a completed transaction received every protocol phase;
  *   3. the app response SLA — the completing RESPONSE within the app's budget;
- *   4. associated quality findings — a COMPLETED transaction can still have
- *      analysis findings (anomaly/correlation, e.g. a high-latency anomaly on a 200
+ *   4. associated quality anomalies — a COMPLETED transaction can still have
+ *      analysis anomalies (anomaly/correlation, e.g. a high-latency anomaly on a 200
  *      response). Those are linked to the transaction by shared log identity and
  *      surfaced: a high/critical one yields `completed_with_issues` (distinct from a
  *      lifecycle failure); otherwise the transaction is a clean `success`.
@@ -52,7 +52,7 @@ import {
  *      protocol has that the generic engine can't express (e.g. SCP's REQUEST→ACK→
  *      RESPONSE ordering + duplicate-phase integrity; apiflc, with no ACK, has none).
  *
- * It is isolated from the ingest path: it only READS `agents` / `findings` /
+ * It is isolated from the ingest path: it only READS `agents` / `anomalies` /
  * `parsed_logs` and WRITES `validation_agents`, so it can never mutate or block
  * regular ingestion. Like `getUnreportedClosedAgents`, it is self-healing.
  */
@@ -60,12 +60,12 @@ import {
 export interface ValidationCounts {
   checked: number;
   passed: number;
-  /** Completed transactions with a high/critical associated analysis finding. */
+  /** Completed transactions with a high/critical associated analysis anomaly. */
   issues: number;
   failed: number;
   pending: number;
   /**
-   * Completed transactions that carried an associated analysis finding BELOW the
+   * Completed transactions that carried an associated analysis anomaly BELOW the
    * app's `qualityIssueSeverity` threshold — recorded but not surfaced as `issues`.
    * Counted so the by-design suppression is observable per app, never invisible.
    */
@@ -88,31 +88,31 @@ export interface AppValidationContext {
   /** The phase the SLA clock starts from (scp: 'ACK', apiflc: 'REQUEST'). */
   responseTimeoutFrom?: string;
   /**
-   * Minimum associated-finding severity that makes a completed transaction
+   * Minimum associated-anomaly severity that makes a completed transaction
    * 'completed_with_issues' (the app owns this knob; defaults to 'high').
    */
   qualityIssueSeverity?: Severity;
 }
 
-/** Severity ordering — used to pick the worst associated finding and to gate 'issues'. */
+/** Severity ordering — used to pick the worst associated anomaly and to gate 'issues'. */
 const SEVERITY_RANK: Record<string, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 const rank = (s?: string): number => (s ? SEVERITY_RANK[s] ?? 0 : 0);
-const worstSeverity = (fs: QualityFinding[]): Severity | undefined =>
+const worstSeverity = (fs: QualityAnomaly[]): Severity | undefined =>
   fs.length ? (fs.reduce((a, b) => (rank(b.severity) > rank(a.severity) ? b : a)).severity as Severity) : undefined;
 /** Does `sev` meet the app's "issues" threshold (default 'high')? */
 const meetsThreshold = (sev: Severity | undefined, threshold: Severity = 'high'): boolean =>
   sev != null && rank(sev) >= rank(threshold);
 
-/** Compare one regular agent against the findings + its app rules → a validation agent. */
+/** Compare one regular agent against the anomalies + its app rules → a validation agent. */
 export function validateAgent(
   agent: Pick<
     Agent,
     'messageId' | 'application' | 'status' | 'active' | 'waitingFor' | 'phases' | 'phaseTs' | 'spawnedAt' | 'closedAt'
   >,
-  findingSeverity: string | undefined,
+  anomalySeverity: string | undefined,
   now: number,
   ctx: AppValidationContext = { allPhases: [] },
-  qualityFindings: QualityFinding[] = [],
+  qualityAnomalies: QualityAnomaly[] = [],
   derived?: DerivedOutcome,
 ): ValidationAgent {
   const phaseTs = agent.phaseTs ?? {};
@@ -150,7 +150,7 @@ export function validateAgent(
     updatedAt: now,
   };
 
-  // Still active — no finding is expected yet; validation is pending. But an agent
+  // Still active — no anomaly is expected yet; validation is pending. But an agent
   // must not sit pending FOREVER: flag it as needs-attention when it is overdue.
   if (agent.active) {
     // The SLA clock (anchored on `fromPhase`) only runs once that phase arrives —
@@ -169,11 +169,11 @@ export function validateAgent(
       active: true,
       slaBreached: slaBreached || stale,
       result: 'pending',
-      expectedFinding: false,
-      actualFinding: false,
+      expectedAnomaly: false,
+      actualAnomaly: false,
       delta: overdue ? [overdue] : [],
       missingPhases: [],
-      qualityFindings: [],
+      qualityAnomalies: [],
       detail: overdue
         ? `NEEDS ATTENTION: ${overdue}`
         : agent.waitingFor
@@ -182,17 +182,17 @@ export function validateAgent(
     };
   }
 
-  const { expected, severity: expectedSeverity } = expectedFindingFor(agent);
-  const actualFinding = findingSeverity !== undefined;
-  const actualSeverity = findingSeverity;
+  const { expected, severity: expectedSeverity } = expectedAnomalyFor(agent);
+  const actualAnomaly = anomalySeverity !== undefined;
+  const actualSeverity = anomalySeverity;
   const delta: string[] = [];
 
-  // (1) Finding / level invariant.
-  if (expected && !actualFinding) {
-    delta.push(`missing finding: expected a ${expectedSeverity} finding for ${agent.status} agent, none found`);
-  } else if (!expected && actualFinding) {
-    delta.push(`unexpected finding: ${agent.status} agent should have no finding, found one (${actualSeverity})`);
-  } else if (expected && actualFinding && actualSeverity !== expectedSeverity) {
+  // (1) Anomaly / level invariant.
+  if (expected && !actualAnomaly) {
+    delta.push(`missing anomaly: expected a ${expectedSeverity} anomaly for ${agent.status} agent, none found`);
+  } else if (!expected && actualAnomaly) {
+    delta.push(`unexpected anomaly: ${agent.status} agent should have no anomaly, found one (${actualSeverity})`);
+  } else if (expected && actualAnomaly && actualSeverity !== expectedSeverity) {
     delta.push(`wrong level: expected ${expectedSeverity}, found ${actualSeverity}`);
   }
 
@@ -255,14 +255,14 @@ export function validateAgent(
     }
   }
 
-  // (4) Associated quality findings — only meaningful for a completed transaction.
-  const quality = agent.status === 'completed' ? qualityFindings : [];
+  // (4) Associated quality anomalies — only meaningful for a completed transaction.
+  const quality = agent.status === 'completed' ? qualityAnomalies : [];
   const maxQualitySeverity = worstSeverity(quality);
 
   // Result: a lifecycle delta is a hard failure and takes precedence. Otherwise a
-  // completed transaction with a high/critical associated finding is surfaced as
+  // completed transaction with a high/critical associated anomaly is surfaced as
   // 'completed_with_issues' (NOT a failure — the agent behaved correctly). A clean
-  // completion, or one with only info/low findings, is a success.
+  // completion, or one with only info/low anomalies, is a success.
   let result: ValidationAgent['result'];
   let detail: string;
   if (delta.length > 0) {
@@ -270,27 +270,27 @@ export function validateAgent(
     detail = delta.join('; ');
   } else if (agent.status === 'completed' && meetsThreshold(maxQualitySeverity, ctx.qualityIssueSeverity)) {
     result = 'completed_with_issues';
-    detail = `completed, but ${quality.length} associated finding(s) — highest ${maxQualitySeverity}`;
+    detail = `completed, but ${quality.length} associated anomaly(s) — highest ${maxQualitySeverity}`;
   } else {
     result = 'success';
     detail = expected
-      ? `finding present at ${expectedSeverity}`
+      ? `anomaly present at ${expectedSeverity}`
       : quality.length
-        ? `completed cleanly; ${quality.length} low/info finding(s)`
-        : 'phases complete within SLA; no finding expected';
+        ? `completed cleanly; ${quality.length} low/info anomaly(s)`
+        : 'phases complete within SLA; no anomaly expected';
   }
 
   return {
     ...base,
     active: false,
     result,
-    expectedFinding: expected,
+    expectedAnomaly: expected,
     expectedSeverity,
-    actualFinding,
+    actualAnomaly,
     actualSeverity,
     delta,
     missingPhases,
-    qualityFindings: quality,
+    qualityAnomalies: quality,
     maxQualitySeverity,
     detail,
     closedAt: agent.closedAt ?? now,
@@ -374,9 +374,9 @@ export function reconcileDelta(agentStatus: string, recon: ReconciliationResult)
 
 /**
  * DB-backed driver — the complete per-poll validation step. Loads all regular
- * agents, the agent-lifecycle finding severities, and (for recently-completed
- * transactions) the window's parsed logs + analysis findings so it can associate
- * quality findings by shared log identity. Evaluates each agent against its
+ * agents, the agent-lifecycle anomaly severities, and (for recently-completed
+ * transactions) the window's parsed logs + analysis anomalies so it can associate
+ * quality anomalies by shared log identity. Evaluates each agent against its
  * application's rules and upserts the shadow validation agents. Best-effort
  * throughout; nothing here can affect the ingest path.
  */
@@ -387,33 +387,33 @@ export async function validateAgents(
   const now = opts.now ?? Date.now();
   const historyTtlMin = Number(process.env.INGEST_AGENT_HISTORY_TTL_MINUTES ?? 1440);
   const historyTtlMs = opts.historyTtlMs ?? historyTtlMin * 60_000;
-  // How far back to associate quality findings. Bounds the parsed_logs read; older
+  // How far back to associate quality anomalies. Bounds the parsed_logs read; older
   // completed transactions keep the association computed while they were recent.
   const qualityWindowMs =
     opts.qualityWindowMs ?? Number(process.env.VALIDATION_QUALITY_WINDOW_MINUTES ?? 60) * 60_000;
 
   const [active, history] = await Promise.all([getActiveAgents(2000), getAgentHistory(2000)]);
   const closedIds = history.map((a) => a.messageId);
-  const severities = await getAgentFindingSeverities(closedIds);
+  const severities = await getAgentAnomalySeverities(closedIds);
 
   // One log-backed pass over recently-CLOSED transactions (bounded work): re-derive
-  // each outcome straight from the raw logs, associate quality findings by shared
+  // each outcome straight from the raw logs, associate quality anomalies by shared
   // log identity, and sanity-check the join. Older closed agents keep whatever was
   // computed while they were recent.
   const qualitySince = now - qualityWindowMs;
   const recentClosed = history.filter((a) => (a.closedAt ?? 0) >= qualitySince);
-  const qualityByMsg = new Map<string, QualityFinding[]>();
+  const qualityByMsg = new Map<string, QualityAnomaly[]>();
   const derivedByMsg = new Map<string, DerivedOutcome>();
   const relatedByMsg = new Map<string, ParsedLog[]>();
   if (recentClosed.length && registry) {
     try {
-      const [windowLogs, analysisFindings] = await Promise.all([
+      const [windowLogs, analysisAnomalies] = await Promise.all([
         queryLogs({ from: qualitySince, limit: 20_000 }),
-        getNonTransactionFindingsSince(qualitySince, 2000),
+        getNonTransactionAnomaliesSince(qualitySince, 2000),
       ]);
-      // Index findings by each evidence logId (app-scoped so ids never cross apps).
-      const byLogId = new Map<string, Finding[]>();
-      for (const f of analysisFindings) {
+      // Index anomalies by each evidence logId (app-scoped so ids never cross apps).
+      const byLogId = new Map<string, Anomaly[]>();
+      for (const f of analysisAnomalies) {
         for (const e of f.evidence ?? []) {
           const arr = byLogId.get(e.logId) ?? [];
           arr.push(f);
@@ -443,10 +443,10 @@ export async function validateAgents(
           else owningMsgByLogId.set(l.id, a.messageId);
         }
 
-        // (4) Associate quality findings — only meaningful for a completed transaction.
+        // (4) Associate quality anomalies — only meaningful for a completed transaction.
         if (a.status === 'completed') {
           const seen = new Set<string>();
-          const qfs: QualityFinding[] = [];
+          const qfs: QualityAnomaly[] = [];
           for (const l of related) {
             for (const f of byLogId.get(l.id) ?? []) {
               if (f.application && a.application && f.application !== a.application) continue;
@@ -543,10 +543,10 @@ export async function validateAgents(
     else if (v.result === 'completed_with_issues') bump('issues');
     else if (v.result === 'failure') bump('failed');
     else bump('pending');
-    // (5-surfacing) A clean success that still carried an associated finding means
-    // the finding was below the app's threshold and suppressed — count it so the
+    // (5-surfacing) A clean success that still carried an associated anomaly means
+    // the anomaly was below the app's threshold and suppressed — count it so the
     // by-design suppression is observable per app rather than silently invisible.
-    if (v.result === 'success' && v.qualityFindings.length > 0) bump('suppressed');
+    if (v.result === 'success' && v.qualityAnomalies.length > 0) bump('suppressed');
   }
 
   return { ...total, byApplication };

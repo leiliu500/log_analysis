@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import type {
-  Finding,
+  Anomaly,
   ParsedLog,
   ChatMessage,
   LogSourceType,
@@ -11,7 +11,7 @@ import type {
 import { getDb, getSql, type Sql } from './client.js';
 import {
   parsedLogs,
-  findings,
+  anomalies,
   alerts,
   chatSessions,
   chatMessages,
@@ -102,11 +102,11 @@ export async function searchLogsByEmbedding(
 }
 
 // ---------------------------------------------------------------------------
-// Findings & alerts
+// Anomalies & alerts
 // ---------------------------------------------------------------------------
-export async function insertFinding(f: Finding): Promise<void> {
+export async function insertAnomaly(f: Anomaly): Promise<void> {
   const sqlc = getSql();
-  await sqlc`INSERT INTO findings
+  await sqlc`INSERT INTO anomalies
     (id, kind, severity, title, summary, confidence, sources, application, fingerprint,
      evidence, reasoning, recommendations, metadata, window_start, window_end, created_at, embedding)
     VALUES (${f.id}, ${f.kind}, ${f.severity}, ${f.title}, ${f.summary}, ${f.confidence},
@@ -117,20 +117,20 @@ export async function insertFinding(f: Finding): Promise<void> {
 }
 
 /**
- * Delete findings (and their alerts, via cascade) created before `cutoff` (ms).
- * Keeps the Findings & Anomalies dashboard reflecting only recent analysis so it
+ * Delete anomalies (and their alerts, via cascade) created before `cutoff` (ms).
+ * Keeps the Anomalies dashboard reflecting only recent analysis so it
  * doesn't show anomalies whose logs have aged out. Returns the count removed.
  */
-export async function pruneFindingsOlderThan(cutoff: number): Promise<number> {
+export async function pruneAnomaliesOlderThan(cutoff: number): Promise<number> {
   const sqlc = getSql();
-  const rows = await sqlc`DELETE FROM findings WHERE created_at < ${cutoff} RETURNING id`;
+  const rows = await sqlc`DELETE FROM anomalies WHERE created_at < ${cutoff} RETURNING id`;
   return rows.length;
 }
 
-/** Delete every finding (and cascade their alerts). Returns the count removed. */
-export async function deleteAllFindings(): Promise<number> {
+/** Delete every anomaly (and cascade their alerts). Returns the count removed. */
+export async function deleteAllAnomalies(): Promise<number> {
   const sqlc = getSql();
-  const rows = await sqlc`DELETE FROM findings RETURNING id`;
+  const rows = await sqlc`DELETE FROM anomalies RETURNING id`;
   return rows.length;
 }
 
@@ -141,43 +141,43 @@ export async function deleteAllLogs(): Promise<number> {
   return rows.length;
 }
 
-/** True if a finding with this fingerprint was created at/after `since` (ms). */
-export async function findingExistsByFingerprint(
+/** True if a anomaly with this fingerprint was created at/after `since` (ms). */
+export async function anomalyExistsByFingerprint(
   fingerprint: string,
   since: number,
 ): Promise<boolean> {
   const sqlc = getSql();
-  const rows = await sqlc`SELECT 1 FROM findings
+  const rows = await sqlc`SELECT 1 FROM anomalies
     WHERE fingerprint = ${fingerprint} AND created_at >= ${since} LIMIT 1`;
   return rows.length > 0;
 }
 
-export async function recentFindings(limit = 50): Promise<Finding[]> {
+export async function recentAnomalies(limit = 50): Promise<Anomaly[]> {
   const db = getDb();
   const rows = await db
     .select()
-    .from(findings)
-    .orderBy(desc(findings.createdAt))
+    .from(anomalies)
+    .orderBy(desc(anomalies.createdAt))
     .limit(limit);
-  return rows.map(rowToFinding);
+  return rows.map(rowToAnomaly);
 }
 
-/** Semantic search over findings — the core of the scoped chatbot. */
-export async function searchFindingsByEmbedding(
+/** Semantic search over anomalies — the core of the scoped chatbot. */
+export async function searchAnomaliesByEmbedding(
   embedding: number[],
   limit = 10,
-): Promise<Finding[]> {
+): Promise<Anomaly[]> {
   const sqlc = getSql();
   const vec = toVector(embedding);
   if (!vec) return [];
-  const rows = await sqlc`SELECT * FROM findings
+  const rows = await sqlc`SELECT * FROM anomalies
     ORDER BY embedding <=> ${vec}::vector LIMIT ${limit}`;
-  return rows.map(rawRowToFinding);
+  return rows.map(rawRowToAnomaly);
 }
 
 export async function insertAlert(a: {
   id: string;
-  findingId: string;
+  anomalyId: string;
   severity: string;
   channel: string;
   status: string;
@@ -238,11 +238,11 @@ export async function getAgentHistory(limit = 200): Promise<Agent[]> {
 
 /**
  * Closed non-completed agents (failed / errored) that closed on/after `since` and
- * have NO finding yet — the backlog the lifecycle must report on. This is what makes
- * "every non-completed agent in history is a finding" self-healing: an agent whose
- * finding was missed at close time (a restart, a DB blip) is picked up here on a
- * later poll. The finding identity is `tx:<messageId>` — one agent per id (message_id
- * is the PK), so this NOT EXISTS is exactly "no finding for this agent yet" and never
+ * have NO anomaly yet — the backlog the lifecycle must report on. This is what makes
+ * "every non-completed agent in history is a anomaly" self-healing: an agent whose
+ * anomaly was missed at close time (a restart, a DB blip) is picked up here on a
+ * later poll. The anomaly identity is `tx:<messageId>` — one agent per id (message_id
+ * is the PK), so this NOT EXISTS is exactly "no anomaly for this agent yet" and never
  * mints a duplicate for one already reported.
  */
 export async function getUnreportedClosedAgents(since: number, limit = 500): Promise<Agent[]> {
@@ -252,7 +252,7 @@ export async function getUnreportedClosedAgents(since: number, limit = 500): Pro
       AND a.status IN ('failed', 'error')
       AND a.closed_at >= ${since}
       AND NOT EXISTS (
-        SELECT 1 FROM findings f
+        SELECT 1 FROM anomalies f
         WHERE f.fingerprint = 'tx:' || a.message_id
       )
     ORDER BY a.closed_at DESC
@@ -298,18 +298,18 @@ function rawRowToAgent(r: Record<string, unknown>): Agent {
 // ---------------------------------------------------------------------------
 
 /**
- * The severity of the agent-lifecycle finding for each messageId, keyed by the
- * finding fingerprint scheme `tx:<messageId>`. The validation engine's only read
- * against `findings`: it returns messageId → severity for every id that has a
- * `tx:` finding, so a missing key means "no finding exists for that agent".
+ * The severity of the agent-lifecycle anomaly for each messageId, keyed by the
+ * anomaly fingerprint scheme `tx:<messageId>`. The validation engine's only read
+ * against `anomalies`: it returns messageId → severity for every id that has a
+ * `tx:` anomaly, so a missing key means "no anomaly exists for that agent".
  */
-export async function getAgentFindingSeverities(messageIds: string[]): Promise<Map<string, string>> {
+export async function getAgentAnomalySeverities(messageIds: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (!messageIds.length) return out;
   const sqlc = getSql();
   const fps = messageIds.map((id) => `tx:${id}`);
   const rows = await sqlc<{ fingerprint: string; severity: string }[]>`
-    SELECT fingerprint, severity FROM findings WHERE fingerprint = ANY(${sqlc.array(fps)})`;
+    SELECT fingerprint, severity FROM anomalies WHERE fingerprint = ANY(${sqlc.array(fps)})`;
   for (const r of rows) {
     if (typeof r.fingerprint === 'string' && r.fingerprint.startsWith('tx:')) {
       out.set(r.fingerprint.slice(3), r.severity);
@@ -319,17 +319,17 @@ export async function getAgentFindingSeverities(messageIds: string[]): Promise<M
 }
 
 /**
- * Analysis findings (anomaly / correlation / …) created at/after `since` — i.e.
- * every finding EXCEPT the `tx:<messageId>` lifecycle findings. These are the
- * findings the validator associates with completed transactions (by shared log
+ * Analysis anomalies (anomaly / correlation / …) created at/after `since` — i.e.
+ * every anomaly EXCEPT the `tx:<messageId>` lifecycle anomalies. These are the
+ * anomalies the validator associates with completed transactions (by shared log
  * identity) to distinguish a clean completion from one with quality issues.
  */
-export async function getNonTransactionFindingsSince(since: number, limit = 2000): Promise<Finding[]> {
+export async function getNonTransactionAnomaliesSince(since: number, limit = 2000): Promise<Anomaly[]> {
   const sqlc = getSql();
-  const rows = await sqlc`SELECT * FROM findings
+  const rows = await sqlc`SELECT * FROM anomalies
     WHERE created_at >= ${since} AND fingerprint NOT LIKE 'tx:%'
     ORDER BY created_at DESC LIMIT ${limit}`;
-  return rows.map(rawRowToFinding);
+  return rows.map(rawRowToAnomaly);
 }
 
 export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<void> {
@@ -338,26 +338,26 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
   await sqlc.begin(async (tx) => {
     for (const v of vas) {
       await tx`INSERT INTO validation_agents
-        (message_id, application, agent_status, active, result, expected_finding, expected_severity,
-         actual_finding, actual_severity, delta, missing_phases, sla_breached, sla_budget_minutes,
-         sla_from_phase, response_latency_ms, quality_findings, max_quality_severity,
+        (message_id, application, agent_status, active, result, expected_anomaly, expected_severity,
+         actual_anomaly, actual_severity, delta, missing_phases, sla_breached, sla_budget_minutes,
+         sla_from_phase, response_latency_ms, quality_anomalies, max_quality_severity,
          phases, phase_ts, detail, spawned_at, updated_at, closed_at)
         VALUES (${v.messageId}, ${v.application ?? null}, ${v.agentStatus}, ${v.active}, ${v.result},
-                ${v.expectedFinding}, ${v.expectedSeverity ?? null}, ${v.actualFinding}, ${v.actualSeverity ?? null},
+                ${v.expectedAnomaly}, ${v.expectedSeverity ?? null}, ${v.actualAnomaly}, ${v.actualSeverity ?? null},
                 ${JSON.stringify(v.delta)}::jsonb, ${JSON.stringify(v.missingPhases)}::jsonb, ${v.slaBreached},
                 ${v.slaBudgetMinutes ?? null}, ${v.slaFromPhase ?? null}, ${v.responseLatencyMs ?? null},
-                ${JSON.stringify(v.qualityFindings)}::jsonb, ${v.maxQualitySeverity ?? null},
+                ${JSON.stringify(v.qualityAnomalies)}::jsonb, ${v.maxQualitySeverity ?? null},
                 ${JSON.stringify(v.phases)}::jsonb, ${JSON.stringify(v.phaseTs)}::jsonb,
                 ${v.detail ?? null}, ${v.spawnedAt}, ${v.updatedAt}, ${v.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
           application = COALESCE(validation_agents.application, EXCLUDED.application),
           agent_status = EXCLUDED.agent_status, active = EXCLUDED.active, result = EXCLUDED.result,
-          expected_finding = EXCLUDED.expected_finding, expected_severity = EXCLUDED.expected_severity,
-          actual_finding = EXCLUDED.actual_finding, actual_severity = EXCLUDED.actual_severity,
+          expected_anomaly = EXCLUDED.expected_anomaly, expected_severity = EXCLUDED.expected_severity,
+          actual_anomaly = EXCLUDED.actual_anomaly, actual_severity = EXCLUDED.actual_severity,
           delta = EXCLUDED.delta, missing_phases = EXCLUDED.missing_phases, sla_breached = EXCLUDED.sla_breached,
           sla_budget_minutes = EXCLUDED.sla_budget_minutes, sla_from_phase = EXCLUDED.sla_from_phase,
           response_latency_ms = EXCLUDED.response_latency_ms,
-          quality_findings = EXCLUDED.quality_findings, max_quality_severity = EXCLUDED.max_quality_severity,
+          quality_anomalies = EXCLUDED.quality_anomalies, max_quality_severity = EXCLUDED.max_quality_severity,
           phases = EXCLUDED.phases, phase_ts = EXCLUDED.phase_ts,
           detail = EXCLUDED.detail, updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
     }
@@ -398,9 +398,9 @@ function rawRowToValidationAgent(r: Record<string, unknown>): ValidationAgent {
     agentStatus: r.agent_status as ValidationAgent['agentStatus'],
     active: r.active as boolean,
     result: r.result as ValidationAgent['result'],
-    expectedFinding: r.expected_finding as boolean,
+    expectedAnomaly: r.expected_anomaly as boolean,
     expectedSeverity: (r.expected_severity ?? undefined) as ValidationAgent['expectedSeverity'],
-    actualFinding: r.actual_finding as boolean,
+    actualAnomaly: r.actual_anomaly as boolean,
     actualSeverity: (r.actual_severity ?? undefined) as string | undefined,
     delta: jsonbField<string[]>(r.delta, []),
     missingPhases: jsonbField<string[]>(r.missing_phases, []),
@@ -408,7 +408,7 @@ function rawRowToValidationAgent(r: Record<string, unknown>): ValidationAgent {
     slaBudgetMinutes: num(r.sla_budget_minutes),
     slaFromPhase: (r.sla_from_phase ?? undefined) as string | undefined,
     responseLatencyMs: num(r.response_latency_ms),
-    qualityFindings: jsonbField<ValidationAgent['qualityFindings']>(r.quality_findings, []),
+    qualityAnomalies: jsonbField<ValidationAgent['qualityAnomalies']>(r.quality_anomalies, []),
     maxQualitySeverity: (r.max_quality_severity ?? undefined) as ValidationAgent['maxQualitySeverity'],
     phases: jsonbField<string[]>(r.phases, []),
     phaseTs: jsonbField<Record<string, number>>(r.phase_ts, {}),
@@ -429,9 +429,9 @@ const POLLER_RUNS_KEEP = 500;
 export async function insertPollerRun(run: PollerRun): Promise<void> {
   const sqlc = getSql();
   await sqlc`INSERT INTO poller_runs
-    (id, ran_at, trigger, window_minutes, duration_ms, by_source, agents, findings, pruned, by_application)
+    (id, ran_at, trigger, window_minutes, duration_ms, by_source, agents, anomalies, pruned, by_application)
     VALUES (${run.id}, ${run.ranAt}, ${run.trigger}, ${run.windowMinutes}, ${run.durationMs},
-            ${JSON.stringify(run.bySource)}::jsonb, ${JSON.stringify(run.agents)}::jsonb, ${run.findings}, ${run.pruned},
+            ${JSON.stringify(run.bySource)}::jsonb, ${JSON.stringify(run.agents)}::jsonb, ${run.anomalies}, ${run.pruned},
             ${JSON.stringify(run.byApplication ?? {})}::jsonb)
     ON CONFLICT (id) DO NOTHING`;
   // Bound growth (a run lands every ~5 min) — drop everything past the newest N.
@@ -450,8 +450,8 @@ export async function recentPollerRuns(limit = 50): Promise<PollerRun[]> {
     windowMinutes: Number(r.window_minutes),
     durationMs: Number(r.duration_ms),
     bySource: jsonbField<PollerRun['bySource']>(r.by_source, {}),
-    agents: jsonbField<PollerRun['agents']>(r.agents, { spawned: 0, advanced: 0, closed: 0, findings: 0 }),
-    findings: Number(r.findings),
+    agents: jsonbField<PollerRun['agents']>(r.agents, { spawned: 0, advanced: 0, closed: 0, anomalies: 0 }),
+    anomalies: Number(r.anomalies),
     pruned: Number(r.pruned),
     byApplication: jsonbField<NonNullable<PollerRun['byApplication']>>(r.by_application, {}),
   }));
@@ -580,18 +580,18 @@ function rawRowToParsedLog(r: Record<string, unknown>): ParsedLog {
   };
 }
 
-function rowToFinding(r: typeof findings.$inferSelect): Finding {
+function rowToAnomaly(r: typeof anomalies.$inferSelect): Anomaly {
   return {
     id: r.id,
-    kind: r.kind as Finding['kind'],
-    severity: r.severity as Finding['severity'],
+    kind: r.kind as Anomaly['kind'],
+    severity: r.severity as Anomaly['severity'],
     title: r.title,
     summary: r.summary,
     confidence: r.confidence,
     sources: r.sources as LogSourceType[],
     application: (r.application ?? undefined) as string | undefined,
     fingerprint: r.fingerprint,
-    evidence: (r.evidence ?? []) as Finding['evidence'],
+    evidence: (r.evidence ?? []) as Anomaly['evidence'],
     reasoning: (r.reasoning ?? []) as string[],
     recommendations: (r.recommendations ?? []) as string[],
     metadata: (r.metadata ?? {}) as Record<string, unknown>,
@@ -601,18 +601,18 @@ function rowToFinding(r: typeof findings.$inferSelect): Finding {
   };
 }
 
-function rawRowToFinding(r: Record<string, unknown>): Finding {
+function rawRowToAnomaly(r: Record<string, unknown>): Anomaly {
   return {
     id: r.id as string,
-    kind: r.kind as Finding['kind'],
-    severity: r.severity as Finding['severity'],
+    kind: r.kind as Anomaly['kind'],
+    severity: r.severity as Anomaly['severity'],
     title: r.title as string,
     summary: r.summary as string,
     confidence: Number(r.confidence),
     sources: (r.sources ?? []) as LogSourceType[],
     application: (r.application ?? undefined) as string | undefined,
     fingerprint: r.fingerprint as string,
-    evidence: (r.evidence ?? []) as Finding['evidence'],
+    evidence: (r.evidence ?? []) as Anomaly['evidence'],
     reasoning: (r.reasoning ?? []) as string[],
     recommendations: (r.recommendations ?? []) as string[],
     metadata: (r.metadata ?? {}) as Record<string, unknown>,

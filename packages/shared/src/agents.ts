@@ -16,7 +16,7 @@ export type CollaboratorAgent = z.infer<typeof CollaboratorAgent>;
 /** Supervisor's routing decision for an inbound user request. */
 export const RouteDecision = z.object({
   intent: z.enum([
-    'query_findings', // answer questions from stored logs/findings
+    'query_anomalies', // answer questions from stored logs/anomalies
     'analyze_logs', // run analysis over a source/window
     'simulate_logs', // trigger simulator agent
     'invoke_application', // hit a real app endpoint (e.g. scp)

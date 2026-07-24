@@ -1,6 +1,6 @@
 'use client';
 
-import type { Finding } from '@log/shared';
+import type { Anomaly } from '@log/shared';
 
 function clock(ts?: number): string {
   if (!ts) return '—';
@@ -26,8 +26,8 @@ const SEV: Record<string, string> = {
   info: 'bg-slate-500/20 text-slate-300',
 };
 
-/** Findings & anomaly history, rendered as a compact table (vs the recent cards). */
-export function FindingsHistoryTable({ findings }: { findings: Finding[] }) {
+/** Anomalies & anomaly history, rendered as a compact table (vs the recent cards). */
+export function AnomaliesHistoryTable({ anomalies }: { anomalies: Anomaly[] }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-edge bg-panel">
       <table className="w-full text-left text-xs">
@@ -43,7 +43,7 @@ export function FindingsHistoryTable({ findings }: { findings: Finding[] }) {
           </tr>
         </thead>
         <tbody className="text-slate-300">
-          {findings.slice(0, 200).map((f) => (
+          {anomalies.slice(0, 200).map((f) => (
             <tr key={f.id} className="border-b border-edge/50 align-top">
               <td className="whitespace-nowrap px-3 py-1.5 font-mono">
                 {clock(f.createdAt)} <span className="text-slate-600">· {ago(f.createdAt)}</span>
@@ -65,8 +65,8 @@ export function FindingsHistoryTable({ findings }: { findings: Finding[] }) {
           ))}
         </tbody>
       </table>
-      {findings.length > 200 && (
-        <div className="px-3 py-2 text-xs text-slate-500">…and {findings.length - 200} more</div>
+      {anomalies.length > 200 && (
+        <div className="px-3 py-2 text-xs text-slate-500">…and {anomalies.length - 200} more</div>
       )}
     </div>
   );

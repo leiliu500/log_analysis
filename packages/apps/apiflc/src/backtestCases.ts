@@ -1,11 +1,11 @@
-import type { Agent, GoldCase, QualityFinding, Severity } from '@log/shared';
+import type { Agent, GoldCase, QualityAnomaly, Severity } from '@log/shared';
 import { MIN, apiflcRequest, apiflcTransaction } from './backtestFixtures.js';
 
 /**
  * apiflc's hand-labelled validation gold set. Exercises the apiflc-specific paths the
  * generic engine cannot: the HTTP status re-derivation (`deriveOutcome`) resolved
  * across the handler + gateway groups, the 2-minute REQUEST→RESPONSE SLA, and quality
- * findings on a 200 response. Owned by the apiflc package.
+ * anomalies on a 200 response. Owned by the apiflc package.
  */
 
 const NOW = 10 * MIN;
@@ -25,7 +25,7 @@ const mkAgent = (
   closedAt: o.closedAt ?? (o.status === 'awaiting' ? undefined : 100),
 });
 
-const qf = (severity: Severity, title = 'Integration latency 5639ms'): QualityFinding[] => [{ id: `q-${severity}`, severity, kind: 'anomaly', title }];
+const qf = (severity: Severity, title = 'Integration latency 5639ms'): QualityAnomaly[] => [{ id: `q-${severity}`, severity, kind: 'anomaly', title }];
 
 export const apiflcGoldCases: GoldCase[] = [
   {
@@ -67,22 +67,22 @@ export const apiflcGoldCases: GoldCase[] = [
     expectDelta: /SLA breach/,
   },
   {
-    name: 'apiflc: completed 200 + HIGH latency finding → completed_with_issues',
+    name: 'apiflc: completed 200 + HIGH latency anomaly → completed_with_issues',
     mode: 'false-negative',
     app: 'apiflc',
     agent: mkAgent({ messageId: 'A112', status: 'completed', phaseTs: { REQUEST: 0, RESPONSE: 1 * MIN } }),
     logs: apiflcTransaction(0, 'A112', 200),
-    qualityFindings: qf('high'),
+    qualityAnomalies: qf('high'),
     now: NOW,
     expected: 'completed_with_issues',
   },
   {
-    name: 'apiflc: completed 200 + only INFO finding → success (below threshold, suppressed)',
+    name: 'apiflc: completed 200 + only INFO anomaly → success (below threshold, suppressed)',
     mode: 'false-positive',
     app: 'apiflc',
     agent: mkAgent({ messageId: 'A113', status: 'completed', phaseTs: { REQUEST: 0, RESPONSE: 1 * MIN } }),
     logs: apiflcTransaction(0, 'A113', 200),
-    qualityFindings: qf('info', 'authorized without API key'),
+    qualityAnomalies: qf('info', 'authorized without API key'),
     now: NOW,
     expected: 'success',
   },
