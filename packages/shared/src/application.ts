@@ -49,6 +49,19 @@ export interface ApplicationDef {
    * not implement it.
    */
   relatedLogs?(id: string, logs: readonly ParsedLog[]): ParsedLog[];
+  /**
+   * Re-derive a transaction's terminal outcome straight from its raw logs,
+   * INDEPENDENT of the ingestion agent's recorded status. The validation engine
+   * uses it to catch an agent that mis-recorded its own outcome — a 500 logged as
+   * `completed` (false positive) or a real completion recorded as `failed` (false
+   * negative). Apps whose decisive outcome code is NOT carried on a protocol event
+   * supply their own (apiflc's HTTP status lives only in the gateway execution
+   * log); apps whose ackCode is on the event can rely on the engine's generic
+   * protocol-based derivation and leave this unset. It MUST return
+   * `status: 'unknown'` whenever the logs don't PROVE an outcome — absence of
+   * evidence is never treated as a mismatch.
+   */
+  deriveOutcome?(id: string, relatedLogs: readonly ParsedLog[]): DerivedOutcome;
   /** Sample log content the simulator writes when the user pastes none. */
   defaultSamples?: string;
   /**
@@ -101,6 +114,42 @@ export interface ApplicationDef {
   validation?: ApplicationValidation;
 }
 
+/**
+ * A transaction's terminal outcome re-derived directly from its raw logs, wholly
+ * independent of the agent's recorded status. `unknown` means the logs don't carry
+ * enough evidence to assert an outcome — it is NEVER counted as a mismatch, so the
+ * validator only ever speaks from positive evidence (it never fabricates a verdict
+ * from missing logs).
+ */
+export interface DerivedOutcome {
+  status: 'completed' | 'failed' | 'error' | 'unknown';
+  /** parsed_logs ids that evidenced this outcome (audit trail for the delta). */
+  evidenceLogIds: string[];
+  /** Phases actually observed in the logs, ordered by the protocol. */
+  phasesSeen: string[];
+  /**
+   * True when the loaded log window fully covers this transaction's lifetime (its
+   * spawn is inside the window), so the ABSENCE of a phase is genuinely missing
+   * rather than merely rolled off the window. Absence-based checks (unverified
+   * completion, evidence gaps) are only asserted when this holds — set by the
+   * validation driver, not the derivation itself.
+   */
+  windowComplete?: boolean;
+  /** Short human note on how the outcome was derived (e.g. 'gateway HTTP 500'). */
+  detail?: string;
+}
+
+/**
+ * What an application's system of record (the actual downstream truth — did the
+ * payment settle?) reports for a transaction. `unknown` = the record has nothing
+ * to say (never a mismatch). This is the only cross-check that can catch a false
+ * negative the logs themselves don't reveal.
+ */
+export interface ReconciliationResult {
+  outcome: 'completed' | 'failed' | 'unknown';
+  detail?: string;
+}
+
 /** An application's validation rules — its own `validation.md` spec, made executable. */
 export interface ApplicationValidation {
   /**
@@ -131,6 +180,32 @@ export interface ApplicationValidation {
    * deterministic engine code.
    */
   qualityIssueSeverity?: Severity;
+  /**
+   * Optional cross-check against the app's SYSTEM OF RECORD — the actual downstream
+   * truth, not the logs. The validator calls it for closed transactions and records
+   * a delta when the record contradicts the agent's outcome (a transaction the logs
+   * call `completed` that never settled). This is the only check that catches a
+   * false negative the shared log evidence cannot show. Absent ⇒ log-only
+   * validation (no external reconciliation). Best-effort: a throw is swallowed and
+   * the transaction is left log-validated, never blocked.
+   */
+  reconcile?(input: {
+    messageId: string;
+    agentStatus: string;
+    relatedLogs: readonly ParsedLog[];
+  }): Promise<ReconciliationResult> | ReconciliationResult;
+  /**
+   * App-specific extra validation rules, beyond the generic finding / phase / SLA /
+   * outcome checks the platform applies to EVERY app. Given a closed transaction's
+   * related logs, it returns a human-readable delta for each violation (empty =
+   * clean); each delta is a validation failure like any other. This is where an app
+   * encodes invariants unique to its protocol that the generic engine cannot express
+   * — e.g. SCP's REQUEST → ACK → RESPONSE ordering and duplicate-phase integrity,
+   * which stem from its intermediate ACK phase. A two-phase app like apiflc has no
+   * such ACK and supplies no `checks`. Runs only for closed transactions; best-effort
+   * (a throw is swallowed).
+   */
+  checks?(input: { messageId: string; agentStatus: string; relatedLogs: readonly ParsedLog[] }): string[];
 }
 
 /** What the Log Assistant reads from one log for an application. */

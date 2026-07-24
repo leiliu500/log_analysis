@@ -1,6 +1,7 @@
 import type { ApplicationDef } from '@log/shared';
 import { APPLICATION_LOG_GROUPS, parseLogGroup } from './logGroups.js';
 import { scpTransactionProtocol, scpMessageMeta } from './transactionProtocol.js';
+import { scpValidationChecks } from './validationChecks.js';
 import { DEFAULT_CASHMESSAGE_SAMPLES } from './samples.js';
 
 /** The SCP application: its CloudWatch log groups + REQUEST→ACK→RESPONSE protocol. */
@@ -38,5 +39,9 @@ export const scpApplication: ApplicationDef = {
     // A completed transaction with an associated high/critical finding is
     // "completed with issues" (surfaced, not a failure).
     qualityIssueSeverity: 'high',
+    // SCP-specific: REQUEST→ACK→RESPONSE phase ordering + duplicate-phase integrity.
+    // Rooted in SCP's intermediate ACK phase; apiflc (REQUEST→RESPONSE) has no ACK
+    // and declares no `checks`.
+    checks: scpValidationChecks,
   },
 };

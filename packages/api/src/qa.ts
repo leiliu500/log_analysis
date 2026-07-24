@@ -225,6 +225,34 @@ export function mentionsId(text: string, id: string): boolean {
   return new RegExp(`(^|[^A-Za-z0-9._-])${esc}([^A-Za-z0-9._-]|$)`).test(text);
 }
 
+/**
+ * The ids an answer CITES — tokens the model presents as real transaction ids,
+ * following a `messageId=` / `correlationID=` / `id:` style label. Used to verify
+ * the model didn't fabricate an id that never appears in the retrieved logs.
+ */
+const CITED_ID =
+  /(?:message[_\s-]?id|correlation[_\s-]?id|init[_\s-]?message[_\s-]?id|\bid)\s*[=:]\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/gi;
+
+export function citedIds(answer: string): string[] {
+  const out = new Set<string>();
+  for (const m of answer.matchAll(CITED_ID)) out.add(m[1]!);
+  return [...out];
+}
+
+/**
+ * Citation grounding — the one place the assistant still emits free-form LLM text,
+ * so the one place it can hallucinate. Every id the answer cites must actually
+ * appear (as a whole token) in the retrieved logs for this window; any that does
+ * not is flagged inline rather than silently trusted. We check against the real log
+ * text, so a genuinely-present id is never falsely flagged — only invented ones are.
+ */
+export function groundAnswer(answer: string, parsed: ParsedLog[]): { answer: string; ungrounded: string[] } {
+  const ungrounded = citedIds(answer).filter((id) => !parsed.some((l) => mentionsId(l.raw, id)));
+  if (!ungrounded.length) return { answer, ungrounded };
+  const caveat = `\n\n⚠️ Unverified: id(s) cited above but not found in the retrieved logs for this window — treat as possibly inaccurate: ${ungrounded.join(', ')}.`;
+  return { answer: answer + caveat, ungrounded };
+}
+
 /** The transaction id the question names, if any (explicit `<label> id=X`, else a known id). */
 export function mentionedId(message: string, enriched: Enriched[]): string | undefined {
   const mentions = (id: string | undefined): id is string => !!id && mentionsId(message, id);
@@ -415,11 +443,14 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
   const related = new Set<ParsedLog>(focusId ? (app.relatedLogs?.(focusId, parsed) ?? []) : []);
   const rawBlock = focusId ? rawMessagesFor(focusId, enriched, related) : '';
 
-  const answer = await converse(
+  const raw = await converse(
     `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}${rawBlock ? `\n\n${rawBlock}` : ''}`,
     // A response body can be several KB; 2500 tokens would truncate it mid-JSON.
     { system, temperature: 0, maxTokens: rawBlock ? 8000 : 2500 },
   );
+  // Guard the one free-form LLM output: flag any transaction id it cited that does
+  // not actually appear in the retrieved logs, so a fabricated id is never trusted.
+  const { answer } = groundAnswer(raw, parsed);
 
   return { answer, logs: parsed.slice(0, 50), meta: answerMeta };
 }

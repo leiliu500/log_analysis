@@ -90,7 +90,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
       return await validateAgents(applicationRegistry);
     } catch (err) {
       req.log.error(err, 'validation pass failed');
-      return { checked: 0, passed: 0, issues: 0, failed: 0, pending: 0, byApplication: {} };
+      return { checked: 0, passed: 0, issues: 0, failed: 0, pending: 0, suppressed: 0, byApplication: {} };
     }
   });
 
