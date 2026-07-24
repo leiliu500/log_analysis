@@ -13,12 +13,12 @@ export interface PollerRun {
   trigger: PollerTrigger;
   windowMinutes: number;
   durationMs: number;
-  /** Per source: logs parsed and findings produced. */
-  bySource: Record<string, { parsed: number; findings: number }>;
+  /** Per source: logs parsed and anomalies produced. */
+  bySource: Record<string, { parsed: number; anomalies: number }>;
   /** Request/ack/response agent-lifecycle activity for this run. */
-  agents: { spawned: number; advanced: number; closed: number; findings: number };
-  /** Total findings produced this run (log/correlation + agent lifecycle). */
-  findings: number;
+  agents: { spawned: number; advanced: number; closed: number; anomalies: number };
+  /** Total anomalies produced this run (log/correlation + agent lifecycle). */
+  anomalies: number;
   /** Stale rows pruned this run. */
   pruned: number;
   /**
@@ -27,6 +27,6 @@ export interface PollerRun {
    */
   byApplication?: Record<
     string,
-    { parsed: number; findings: number; spawned: number; advanced: number; closed: number }
+    { parsed: number; anomalies: number; spawned: number; advanced: number; closed: number }
   >;
 }

@@ -16,7 +16,7 @@ const CORRELATION_ENTITIES = ['requestId', 'uuid', 'ip', 'host', 'service'];
 /**
  * Correlate logs into clusters by shared entities within a sliding time
  * window. Produces cross-source clusters that the reasoning agent turns into
- * findings.
+ * anomalies.
  */
 export function correlate(logs: ParsedLog[], windowMs = 5 * 60_000): Cluster[] {
   const byKey = new Map<string, ParsedLog[]>();

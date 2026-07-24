@@ -49,7 +49,7 @@ export default function ChatPage() {
     <div className="mx-auto flex h-screen max-w-3xl flex-col p-6">
       <h1 className="mb-1 text-xl font-semibold text-white">Log Assistant</h1>
       <p className="mb-4 text-xs text-slate-400">
-        Answers are scoped to logs & findings related to your question — not global stats.
+        Answers are scoped to logs & anomalies related to your question — not global stats.
         Try: “simulate 50 checkout logs with anomalies to cloudwatch” or “why did checkout 5xx spike?”
       </p>
 
@@ -66,10 +66,10 @@ export default function ChatPage() {
             >
               {m.content}
             </div>
-            {m.context && (m.context.findings.length > 0 || m.context.logs.length > 0) && (
+            {m.context && (m.context.anomalies.length > 0 || m.context.logs.length > 0) && (
               <div className="mt-2 text-left text-xs text-slate-400">
                 <span className="text-slate-500">Grounded in </span>
-                {m.context.findings.length} findings · {m.context.logs.length} logs
+                {m.context.anomalies.length} anomalies · {m.context.logs.length} logs
                 {m.context.route && <> · intent: {m.context.route.intent}</>}
               </div>
             )}
@@ -83,7 +83,7 @@ export default function ChatPage() {
         <textarea
           rows={2}
           className="flex-1 resize-y rounded-xl border border-edge bg-panel px-4 py-3 text-sm outline-none focus:border-sky-500"
-          placeholder="Ask about your logs and findings… (Shift+Enter for a new line)"
+          placeholder="Ask about your logs and anomalies… (Shift+Enter for a new line)"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {

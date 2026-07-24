@@ -26,7 +26,7 @@ export const parsedLogs = pgTable('parsed_logs', {
   ingestedAt: bigint('ingested_at', { mode: 'number' }).notNull(),
 });
 
-export const findings = pgTable('findings', {
+export const anomalies = pgTable('anomalies', {
   id: uuid('id').primaryKey().defaultRandom(),
   kind: text('kind').notNull(),
   severity: text('severity').notNull(),
@@ -47,7 +47,7 @@ export const findings = pgTable('findings', {
 
 export const alerts = pgTable('alerts', {
   id: uuid('id').primaryKey().defaultRandom(),
-  findingId: uuid('finding_id').notNull(),
+  anomalyId: uuid('anomaly_id').notNull(),
   severity: text('severity').notNull(),
   channel: text('channel').notNull(),
   status: text('status').notNull().default('pending'),

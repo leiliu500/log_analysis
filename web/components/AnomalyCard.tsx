@@ -1,4 +1,4 @@
-import type { Finding } from '@log/shared';
+import type { Anomaly } from '@log/shared';
 
 const SEV: Record<string, string> = {
   critical: 'bg-red-500/20 text-red-300 border-red-500/40',
@@ -8,7 +8,7 @@ const SEV: Record<string, string> = {
   info: 'bg-slate-500/20 text-slate-300 border-slate-500/40',
 };
 
-export function FindingCard({ f }: { f: Finding }) {
+export function AnomalyCard({ f }: { f: Anomaly }) {
   return (
     <div className="card">
       <div className="mb-2 flex items-center justify-between gap-3">
@@ -23,11 +23,11 @@ export function FindingCard({ f }: { f: Finding }) {
       <h3 className="font-semibold text-white">{f.title}</h3>
       <p className="mt-1 text-sm text-slate-300">{f.summary}</p>
 
-      {/* Source logs — the exact log lines this finding is based on. */}
+      {/* Source logs — the exact log lines this anomaly is based on. */}
       {f.evidence.length > 0 && (
         <details className="mt-3 text-sm" open>
           <summary className="cursor-pointer text-slate-400">
-            Source logs ({f.evidence.length}) — this finding is derived only from these
+            Source logs ({f.evidence.length}) — this anomaly is derived only from these
           </summary>
           <div className="mt-2 space-y-2">
             {f.evidence.map((e, i) => (

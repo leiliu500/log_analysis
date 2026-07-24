@@ -39,7 +39,7 @@ export const apiflcApplication: ApplicationDef = {
     promptPath: 'apps/apiflc/validation.md',
     responseTimeoutMinutes: 2,
     responseTimeoutFrom: 'REQUEST',
-    // A completed transaction with an associated high/critical finding (e.g. a
+    // A completed transaction with an associated high/critical anomaly (e.g. a
     // high integration-latency anomaly on a 200) is "completed with issues".
     qualityIssueSeverity: 'high',
   },

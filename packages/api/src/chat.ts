@@ -11,9 +11,9 @@ import { converse, embed } from '@log/analysis';
 import {
   ensureSession,
   appendMessage,
-  searchFindingsByEmbedding,
+  searchAnomaliesByEmbedding,
   searchLogsByEmbedding,
-  recentFindings,
+  recentAnomalies,
 } from '@log/db';
 import { routeRequest } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
@@ -23,7 +23,7 @@ import { answerLogQuestion } from './qa.js';
 const ANSWER_SYSTEM = loadPrompt('api/chat.md');
 
 function renderContext(ctx: ChatContext): string {
-  const findings = ctx.findings
+  const anomalies = ctx.anomalies
     .map(
       (f, i) =>
         `#${i + 1} [${f.severity}] ${f.title}\n  ${f.summary}\n  reasoning: ${f.reasoning.join(' | ')}`,
@@ -36,12 +36,12 @@ function renderContext(ctx: ChatContext): string {
         `[${new Date(l.timestamp).toISOString()}] (${l.source}) ${l.level} ${l.message}`,
     )
     .join('\n');
-  return `FINDINGS:\n${findings || '(none)'}\n\nRELATED LOGS:\n${logs || '(none)'}`;
+  return `ANOMALIES:\n${anomalies || '(none)'}\n\nRELATED LOGS:\n${logs || '(none)'}`;
 }
 
 /**
  * Scoped conversational answer (requirement 7): route the request, retrieve
- * ONLY the findings/logs relevant to this question, and answer grounded in them.
+ * ONLY the anomalies/logs relevant to this question, and answer grounded in them.
  * Also handles simulate/invoke-app/analyze intents (requirements 9-11).
  */
 export async function handleChat(input: unknown): Promise<ChatResponse> {
@@ -91,7 +91,7 @@ async function dispatch(
         .join('\n');
       return {
         answer: `${resp.note}${detail ? `\n\n${detail}` : ''}`,
-        context: { findings: [], logs: [], route },
+        context: { anomalies: [], logs: [], route },
       };
     }
 
@@ -103,17 +103,17 @@ async function dispatch(
       const result = await invokeApplication(req);
       return {
         answer: `Invoked "${req.application}" → HTTP ${result.status} in ${result.latencyMs}ms.\n\n\`\`\`json\n${JSON.stringify(result.response, null, 2).slice(0, 2000)}\n\`\`\``,
-        context: { findings: [], logs: [], route },
+        context: { anomalies: [], logs: [], route },
       };
     }
 
     case 'analyze_logs': {
       // Application-aware Log Assistant (per-app qa prompt + protocol).
       const { answer, logs } = await answerLogQuestion(message, route);
-      return { answer, context: { findings: [], logs, route } };
+      return { answer, context: { anomalies: [], logs, route } };
     }
 
-    case 'query_findings':
+    case 'query_anomalies':
     default: {
       const context = await retrieveScoped(message);
       const answer = await converse(
@@ -125,7 +125,7 @@ async function dispatch(
   }
 }
 
-/** Retrieve findings + logs semantically scoped to the question. */
+/** Retrieve anomalies + logs semantically scoped to the question. */
 async function retrieveScoped(message: string): Promise<ChatContext> {
   let embedding: number[] = [];
   try {
@@ -133,9 +133,9 @@ async function retrieveScoped(message: string): Promise<ChatContext> {
   } catch {
     /* embeddings unavailable — fall back to recency below */
   }
-  const findings = embedding.length
-    ? await searchFindingsByEmbedding(embedding, 8)
-    : await recentFindings(8);
+  const anomalies = embedding.length
+    ? await searchAnomaliesByEmbedding(embedding, 8)
+    : await recentAnomalies(8);
   const logs = embedding.length ? await searchLogsByEmbedding(embedding, 20) : [];
-  return { findings, logs };
+  return { anomalies, logs };
 }

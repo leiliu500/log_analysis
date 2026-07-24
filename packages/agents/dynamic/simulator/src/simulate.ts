@@ -370,7 +370,7 @@ function isSimulateRequest(prompt: string, route: RouteDecision): boolean {
  * endpoint structurally cannot invoke the analysis or scp agents. It writes
  * simulated logs to the target CloudWatch log group and returns; it never runs
  * analysis. The scheduled poller ingests + analyzes at the next interval and the
- * Dashboard reflects the resulting findings.
+ * Dashboard reflects the resulting anomalies.
  */
 export async function handleSimulatePrompt(
   input: unknown,

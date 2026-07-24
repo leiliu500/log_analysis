@@ -1,15 +1,15 @@
 /**
- * Seeds a demo session + a couple of findings so the dashboard has content
+ * Seeds a demo session + a couple of anomalies so the dashboard has content
  * before any real ingestion runs. Run with: npm run db:seed
  */
 import { randomUUID } from 'node:crypto';
 import { closeDb } from './client.js';
-import { ensureSession, insertFinding, insertAlert } from './queries.js';
-import type { Finding } from '@log/shared';
+import { ensureSession, insertAnomaly, insertAlert } from './queries.js';
+import type { Anomaly } from '@log/shared';
 
 async function main(): Promise<void> {
   const now = Date.now();
-  const demo: Finding = {
+  const demo: Anomaly = {
     id: randomUUID(),
     kind: 'anomaly',
     severity: 'high',
@@ -34,17 +34,17 @@ async function main(): Promise<void> {
     windowEnd: now,
     createdAt: now,
   };
-  await insertFinding(demo);
+  await insertAnomaly(demo);
   await insertAlert({
     id: randomUUID(),
-    findingId: demo.id,
+    anomalyId: demo.id,
     severity: demo.severity,
     channel: 'dashboard',
     status: 'sent',
     createdAt: now,
   });
   await ensureSession('00000000-0000-0000-0000-000000000001');
-  console.log('seeded demo finding + alert');
+  console.log('seeded demo anomaly + alert');
   await closeDb();
 }
 

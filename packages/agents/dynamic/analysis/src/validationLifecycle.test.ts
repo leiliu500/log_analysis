@@ -50,7 +50,7 @@ test('active scp agent past 30m after ACK → pending but SLA-overdue', () => {
   assert.match(v.detail ?? '', /overdue/);
 });
 
-test('completed scp agent, all phases, within SLA, no finding → success', () => {
+test('completed scp agent, all phases, within SLA, no anomaly → success', () => {
   const v = validateAgent(
     { ...base, messageId: 'm3', status: 'completed', active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN, RESPONSE: 10 * MIN } },
     undefined,
@@ -98,7 +98,7 @@ test('completed apiflc agent whose RESPONSE arrived after 2m → failure (SLA br
   assert.match(v.delta.join(), /SLA breach/);
 });
 
-test('failed agent with high finding → success (missing phases are expected)', () => {
+test('failed agent with high anomaly → success (missing phases are expected)', () => {
   const v = validateAgent(
     { ...base, messageId: 'm7', status: 'failed', active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN } },
     'high',
@@ -109,7 +109,7 @@ test('failed agent with high finding → success (missing phases are expected)',
   assert.deepEqual(v.missingPhases, []); // not faulted for a failed agent
 });
 
-test('error agent with wrong finding level → failure (wrong level)', () => {
+test('error agent with wrong anomaly level → failure (wrong level)', () => {
   const v = validateAgent(
     { ...base, messageId: 'm8', status: 'error', active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN } },
     'high',
@@ -121,7 +121,7 @@ test('error agent with wrong finding level → failure (wrong level)', () => {
   assert.match(v.delta.join(), /wrong level/);
 });
 
-test('completed agent WITH an unexpected finding → failure', () => {
+test('completed agent WITH an unexpected anomaly → failure', () => {
   const v = validateAgent(
     { ...base, messageId: 'm9', status: 'completed', active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN, RESPONSE: 2 * MIN } },
     'high',
@@ -129,7 +129,7 @@ test('completed agent WITH an unexpected finding → failure', () => {
     SCP,
   );
   assert.equal(v.result, 'failure');
-  assert.match(v.delta.join(), /unexpected finding/);
+  assert.match(v.delta.join(), /unexpected anomaly/);
 });
 
 const completedClean = {
@@ -141,22 +141,22 @@ const completedClean = {
 };
 const qf = (severity: string) => [{ id: 'f1', severity: severity as never, kind: 'anomaly', title: 'High integration latency' }];
 
-test('completed + HIGH associated finding → completed_with_issues (not a failure)', () => {
+test('completed + HIGH associated anomaly → completed_with_issues (not a failure)', () => {
   const v = validateAgent(completedClean, undefined, 50 * MIN, SCP, qf('high'));
   assert.equal(v.result, 'completed_with_issues');
   assert.equal(v.maxQualitySeverity, 'high');
-  assert.equal(v.qualityFindings.length, 1);
-  assert.deepEqual(v.delta, []); // lifecycle is clean — the finding is not a delta
+  assert.equal(v.qualityAnomalies.length, 1);
+  assert.deepEqual(v.delta, []); // lifecycle is clean — the anomaly is not a delta
 });
 
-test('completed + only INFO associated finding → success (findings still recorded)', () => {
+test('completed + only INFO associated anomaly → success (anomalies still recorded)', () => {
   const v = validateAgent(completedClean, undefined, 50 * MIN, SCP, qf('info'));
   assert.equal(v.result, 'success');
   assert.equal(v.maxQualitySeverity, 'info');
-  assert.equal(v.qualityFindings.length, 1);
+  assert.equal(v.qualityAnomalies.length, 1);
 });
 
-test('completed + HIGH associated finding BUT missing phase → failure (delta wins)', () => {
+test('completed + HIGH associated anomaly BUT missing phase → failure (delta wins)', () => {
   const v = validateAgent(
     { ...completedClean, phaseTs: { REQUEST: 0, ACK: 1 * MIN } }, // missing RESPONSE
     undefined,
@@ -168,16 +168,16 @@ test('completed + HIGH associated finding BUT missing phase → failure (delta w
   assert.match(v.delta.join(), /missing phase/);
 });
 
-test('per-app threshold: medium finding → issues when app sets qualityIssueSeverity=medium', () => {
+test('per-app threshold: medium anomaly → issues when app sets qualityIssueSeverity=medium', () => {
   const ctx = { ...SCP, qualityIssueSeverity: 'medium' as const };
   const withMedium = validateAgent(completedClean, undefined, 50 * MIN, ctx, qf('medium'));
   assert.equal(withMedium.result, 'completed_with_issues');
-  // default (high) threshold would keep a medium finding as success
+  // default (high) threshold would keep a medium anomaly as success
   const defaultThreshold = validateAgent(completedClean, undefined, 50 * MIN, SCP, qf('medium'));
   assert.equal(defaultThreshold.result, 'success');
 });
 
-test('failed agent ignores quality findings (result unaffected)', () => {
+test('failed agent ignores quality anomalies (result unaffected)', () => {
   const v = validateAgent(
     { ...base, messageId: 'q2', status: 'failed', active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN } },
     'high',
@@ -185,6 +185,6 @@ test('failed agent ignores quality findings (result unaffected)', () => {
     SCP,
     qf('critical'),
   );
-  assert.equal(v.result, 'success'); // failed+high finding = correct; quality not applied
-  assert.deepEqual(v.qualityFindings, []);
+  assert.equal(v.result, 'success'); // failed+high anomaly = correct; quality not applied
+  assert.deepEqual(v.qualityAnomalies, []);
 });

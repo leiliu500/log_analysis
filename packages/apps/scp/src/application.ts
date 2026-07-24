@@ -36,7 +36,7 @@ export const scpApplication: ApplicationDef = {
     promptPath: 'apps/scp/validation.md',
     responseTimeoutMinutes: 30,
     responseTimeoutFrom: 'ACK',
-    // A completed transaction with an associated high/critical finding is
+    // A completed transaction with an associated high/critical anomaly is
     // "completed with issues" (surfaced, not a failure).
     qualityIssueSeverity: 'high',
     // SCP-specific: REQUEST→ACK→RESPONSE phase ordering + duplicate-phase integrity.

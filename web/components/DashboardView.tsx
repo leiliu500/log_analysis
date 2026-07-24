@@ -1,22 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Finding, Agent, PollerRun } from '@log/shared';
+import type { Anomaly, Agent, PollerRun } from '@log/shared';
 import { api } from '@/lib/api';
-import { FindingCard } from '@/components/FindingCard';
-import { FindingsHistoryTable } from '@/components/FindingsHistoryTable';
+import { AnomalyCard } from '@/components/AnomalyCard';
+import { AnomaliesHistoryTable } from '@/components/AnomaliesHistoryTable';
 import { AgentsPanel } from '@/components/AgentsPanel';
 import { ScheduleTab } from '@/components/ScheduleTab';
 
 const ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
 type Analysis = {
-  bySource: Record<string, { parsed: number; findings: number }>;
-  agents?: { spawned: number; advanced: number; closed: number; findings: number };
+  bySource: Record<string, { parsed: number; anomalies: number }>;
+  agents?: { spawned: number; advanced: number; closed: number; anomalies: number };
   pruned: number;
 };
 
-type TabKey = 'agents' | 'findings' | 'schedule';
+type TabKey = 'agents' | 'anomalies' | 'schedule';
 
 const REFRESH_MS = 30_000;
 
@@ -27,13 +27,13 @@ const KNOWN_APPS = ['scp', 'apiflc'] as const;
  *  Agent History id column header). SCP: messageId; apiflc: correlationID. */
 const CORRELATION_LABELS: Record<string, string> = { scp: 'messageId', apiflc: 'correlationID' };
 
-/** Findings newer than this are "recent (in window)"; older are history. */
-const RECENT_FINDING_MIN = 30;
+/** Anomalies newer than this are "recent (in window)"; older are history. */
+const RECENT_ANOMALY_MIN = 30;
 
 export function DashboardView() {
   const [tab, setTab] = useState<TabKey>('agents');
   const [appFilter, setAppFilter] = useState<string>('all');
-  const [findings, setFindings] = useState<Finding[]>([]);
+  const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
   const [analysis, setAnalysis] = useState<Analysis | undefined>();
   const [activeAgents, setActiveAgents] = useState<Agent[]>([]);
   const [agentHistory, setAgentHistory] = useState<Agent[]>([]);
@@ -44,14 +44,14 @@ export function DashboardView() {
   const [clearing, setClearing] = useState(false);
   const [cleaning, setCleaning] = useState(false);
 
-  // Read current findings + agent activity + schedule history. All are produced
+  // Read current anomalies + agent activity + schedule history. All are produced
   // by the scheduled ingestion poller; `analyze=false` just reads them.
   // `analyze=true` is the explicit "Analyze now" override.
   const refresh = useCallback(async (analyze: boolean) => {
     setError(null);
     try {
-      const [f, a, s] = await Promise.all([api.findings(analyze), api.agents(), api.schedule()]);
-      setFindings(f.findings);
+      const [f, a, s] = await Promise.all([api.anomalies(analyze), api.agents(), api.schedule()]);
+      setAnomalies(f.anomalies);
       if (f.analysis) setAnalysis(f.analysis);
       setActiveAgents(a.active);
       setAgentHistory(a.history);
@@ -78,8 +78,8 @@ export function DashboardView() {
     if (clearing) return;
     setClearing(true);
     try {
-      await api.clearFindings();
-      setFindings([]);
+      await api.clearAnomalies();
+      setAnomalies([]);
       setAnalysis(undefined);
       setActiveAgents([]);
       setAgentHistory([]);
@@ -90,16 +90,16 @@ export function DashboardView() {
     }
   }
 
-  // Full database reset: findings + logs + agents + schedule history.
+  // Full database reset: anomalies + logs + agents + schedule history.
   async function cleanupDb() {
     if (cleaning) return;
-    if (typeof window !== 'undefined' && !window.confirm('Delete ALL findings, logs, agents, and schedule history?')) {
+    if (typeof window !== 'undefined' && !window.confirm('Delete ALL anomalies, logs, agents, and schedule history?')) {
       return;
     }
     setCleaning(true);
     try {
       await api.clearAllData();
-      setFindings([]);
+      setAnomalies([]);
       setAnalysis(undefined);
       setActiveAgents([]);
       setAgentHistory([]);
@@ -111,33 +111,33 @@ export function DashboardView() {
     }
   }
 
-  // Application filter (Agents + Findings). Show known apps + any seen in data.
+  // Application filter (Agents + Anomalies). Show known apps + any seen in data.
   const apps = useMemo(() => {
     const s = new Set<string>(KNOWN_APPS);
     for (const a of [...activeAgents, ...agentHistory]) if (a.application) s.add(a.application);
-    for (const f of findings) if (f.application) s.add(f.application);
+    for (const f of anomalies) if (f.application) s.add(f.application);
     return [...s].sort();
-  }, [activeAgents, agentHistory, findings]);
+  }, [activeAgents, agentHistory, anomalies]);
 
   const byApp = <T extends { application?: string }>(items: T[]): T[] =>
     appFilter === 'all' ? items : items.filter((i) => i.application === appFilter);
 
   const shownActive = byApp(activeAgents);
   const shownHistory = byApp(agentHistory);
-  const shownFindings = byApp(findings);
+  const shownAnomalies = byApp(anomalies);
 
-  // Split findings into recent (in the current window) vs retained history, so
+  // Split anomalies into recent (in the current window) vs retained history, so
   // the tab mirrors the Agents tab (active + history).
-  const recentCutoff = Date.now() - RECENT_FINDING_MIN * 60_000;
-  const recentFindings = shownFindings.filter((f) => f.createdAt >= recentCutoff);
-  const historyFindings = shownFindings.filter((f) => f.createdAt < recentCutoff);
+  const recentCutoff = Date.now() - RECENT_ANOMALY_MIN * 60_000;
+  const recentAnomalies = shownAnomalies.filter((f) => f.createdAt >= recentCutoff);
+  const historyAnomalies = shownAnomalies.filter((f) => f.createdAt < recentCutoff);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const f of recentFindings) c[f.severity] = (c[f.severity] ?? 0) + 1;
+    for (const f of recentAnomalies) c[f.severity] = (c[f.severity] ?? 0) + 1;
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shownFindings]);
+  }, [shownAnomalies]);
 
   const totalParsed = analysis
     ? Object.values(analysis.bySource).reduce((n, s) => n + s.parsed, 0)
@@ -146,7 +146,7 @@ export function DashboardView() {
 
   const tabs: { key: TabKey; label: string; badge: number }[] = [
     { key: 'agents', label: 'Agents', badge: shownActive.length },
-    { key: 'findings', label: 'Findings & Anomalies', badge: shownFindings.length },
+    { key: 'anomalies', label: 'Anomalies', badge: shownAnomalies.length },
     { key: 'schedule', label: 'Schedule', badge: schedule.length },
   ];
 
@@ -167,13 +167,13 @@ export function DashboardView() {
             disabled={clearing || loading}
             className="rounded-lg border border-edge px-3 py-1.5 text-sm text-slate-300 hover:bg-edge disabled:opacity-50"
           >
-            {clearing ? 'Clearing…' : 'Clear findings'}
+            {clearing ? 'Clearing…' : 'Clear anomalies'}
           </button>
           <button
             onClick={() => void cleanupDb()}
             disabled={cleaning || loading}
             className="rounded-lg border border-red-800/60 bg-red-900/20 px-3 py-1.5 text-sm text-red-300 hover:bg-red-900/40 disabled:opacity-50"
-            title="Delete all findings, logs, agents, and schedule history"
+            title="Delete all anomalies, logs, agents, and schedule history"
           >
             {cleaning ? 'Cleaning…' : 'Clean up DB'}
           </button>
@@ -226,7 +226,7 @@ export function DashboardView() {
             value={appFilter}
             onChange={(e) => setAppFilter(e.target.value)}
             className="rounded-md border border-edge bg-panel px-2 py-1 text-sm text-slate-200"
-            title="Filter Agents & Findings by application"
+            title="Filter Agents & Anomalies by application"
           >
             <option value="all">All applications</option>
             {apps.map((a) => (
@@ -253,7 +253,7 @@ export function DashboardView() {
         />
       )}
 
-      {!loading && tab === 'findings' && (
+      {!loading && tab === 'anomalies' && (
         <section>
           <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
             {ORDER.map((s) => (
@@ -265,33 +265,33 @@ export function DashboardView() {
           </div>
 
           <div className="mb-2 flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-white">Recent Findings &amp; Anomalies</h2>
+            <h2 className="text-lg font-semibold text-white">Recent Anomalies</h2>
             <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs text-sky-300">
-              {recentFindings.length}
+              {recentAnomalies.length}
             </span>
-            <span className="text-xs text-slate-500">last {RECENT_FINDING_MIN} min</span>
+            <span className="text-xs text-slate-500">last {RECENT_ANOMALY_MIN} min</span>
           </div>
-          {recentFindings.length > 0 ? (
+          {recentAnomalies.length > 0 ? (
             <div className="mb-8 grid gap-4 lg:grid-cols-2">
-              {recentFindings.map((f) => (
-                <FindingCard key={f.id} f={f} />
+              {recentAnomalies.map((f) => (
+                <AnomalyCard key={f.id} f={f} />
               ))}
             </div>
           ) : (
             <p className="mb-8 text-sm text-slate-500">
-              No recent findings{appFilter !== 'all' ? ` for ${appFilter}` : ''} in the last{' '}
-              {RECENT_FINDING_MIN} min. Simulate logs, then wait for the poller (or click Analyze now).
+              No recent anomalies{appFilter !== 'all' ? ` for ${appFilter}` : ''} in the last{' '}
+              {RECENT_ANOMALY_MIN} min. Simulate logs, then wait for the poller (or click Analyze now).
             </p>
           )}
 
           <div className="mb-2 flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-white">Findings &amp; Anomaly History</h2>
-            <span className="text-xs text-slate-500">{historyFindings.length} older</span>
+            <h2 className="text-lg font-semibold text-white">Anomaly History</h2>
+            <span className="text-xs text-slate-500">{historyAnomalies.length} older</span>
           </div>
-          {historyFindings.length > 0 ? (
-            <FindingsHistoryTable findings={historyFindings} />
+          {historyAnomalies.length > 0 ? (
+            <AnomaliesHistoryTable anomalies={historyAnomalies} />
           ) : (
-            <p className="text-sm text-slate-500">No older findings retained yet.</p>
+            <p className="text-sm text-slate-500">No older anomalies retained yet.</p>
           )}
         </section>
       )}

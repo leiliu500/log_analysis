@@ -4,16 +4,16 @@ import { LogSourceType } from './logs.js';
 export const Severity = z.enum(['info', 'low', 'medium', 'high', 'critical']);
 export type Severity = z.infer<typeof Severity>;
 
-export const FindingKind = z.enum([
+export const AnomalyKind = z.enum([
   'anomaly', // statistical / behavioural outlier
   'correlation', // related events across sources
   'inference', // derived conclusion (root cause candidate)
   'reasoning', // multi-step reasoned explanation
   'pattern', // recurring learned pattern
 ]);
-export type FindingKind = z.infer<typeof FindingKind>;
+export type AnomalyKind = z.infer<typeof AnomalyKind>;
 
-/** A citation back to the concrete logs that support a finding. */
+/** A citation back to the concrete logs that support a anomaly. */
 export const Evidence = z.object({
   logId: z.string().uuid(),
   source: LogSourceType,
@@ -23,16 +23,16 @@ export const Evidence = z.object({
 });
 export type Evidence = z.infer<typeof Evidence>;
 
-export const Finding = z.object({
+export const Anomaly = z.object({
   id: z.string().uuid(),
-  kind: FindingKind,
+  kind: AnomalyKind,
   severity: Severity,
   title: z.string(),
   summary: z.string(),
   /** Model/heuristic confidence 0..1. */
   confidence: z.number().min(0).max(1),
   sources: z.array(LogSourceType),
-  /** Owning application id (e.g. 'scp', 'apiflc'), when the finding is app-scoped. */
+  /** Owning application id (e.g. 'scp', 'apiflc'), when the anomaly is app-scoped. */
   application: z.string().optional(),
   fingerprint: z.string(),
   evidence: z.array(Evidence).default([]),
@@ -48,12 +48,12 @@ export const Finding = z.object({
   /** Vector embedding of title+summary for semantic retrieval (optional). */
   embedding: z.array(z.number()).optional(),
 });
-export type Finding = z.infer<typeof Finding>;
+export type Anomaly = z.infer<typeof Anomaly>;
 
-/** Alert emitted when a finding crosses notification thresholds. */
+/** Alert emitted when a anomaly crosses notification thresholds. */
 export const Alert = z.object({
   id: z.string().uuid(),
-  findingId: z.string().uuid(),
+  anomalyId: z.string().uuid(),
   severity: Severity,
   channel: z.enum(['email', 'sns', 'webhook', 'dashboard']),
   status: z.enum(['pending', 'sent', 'acknowledged', 'suppressed']),

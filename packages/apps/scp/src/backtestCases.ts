@@ -1,4 +1,4 @@
-import type { Agent, GoldCase, QualityFinding, Severity } from '@log/shared';
+import type { Agent, GoldCase, QualityAnomaly, Severity } from '@log/shared';
 import { MIN, scpLog, scpTransaction } from './backtestFixtures.js';
 
 /**
@@ -26,7 +26,7 @@ const mkAgent = (
   closedAt: o.closedAt ?? (o.status === 'awaiting' ? undefined : 100),
 });
 
-const qf = (severity: Severity, title = 'Integration latency'): QualityFinding[] => [{ id: `q-${severity}`, severity, kind: 'anomaly', title }];
+const qf = (severity: Severity, title = 'Integration latency'): QualityAnomaly[] => [{ id: `q-${severity}`, severity, kind: 'anomaly', title }];
 
 const ALL: Record<string, number> = { REQUEST: 0, ACK: 1 * MIN, RESPONSE: 2 * MIN };
 
@@ -53,32 +53,32 @@ export const scpGoldCases: GoldCase[] = [
 
   // ---- false-positive guards (looks suspicious, must stay quiet) ----
   {
-    name: 'scp: failed agent WITH its high finding → success (not double-flagged)',
+    name: 'scp: failed agent WITH its high anomaly → success (not double-flagged)',
     mode: 'false-positive',
     app: 'scp',
     agent: mkAgent({ messageId: 'S010', status: 'failed', phaseTs: { REQUEST: 0, ACK: 1 * MIN } }),
     logs: [scpLog(0, { type: 'REQUEST', messageId: 'S010' }), scpLog(1 * MIN, { type: 'ACK', messageId: 'S010-ack', initMessageId: 'S010', ackCode: 'FAILED' })],
-    findingSeverity: 'high',
+    anomalySeverity: 'high',
     now: NOW,
     expected: 'success',
   },
   {
-    name: 'scp: error agent WITH its medium (timeout) finding → success',
+    name: 'scp: error agent WITH its medium (timeout) anomaly → success',
     mode: 'false-positive',
     app: 'scp',
     agent: mkAgent({ messageId: 'S011', status: 'error', phaseTs: { REQUEST: 0, ACK: 1 * MIN } }),
     logs: [scpLog(0, { type: 'REQUEST', messageId: 'S011' }), scpLog(1 * MIN, { type: 'ACK', messageId: 'S011-ack', initMessageId: 'S011', ackCode: 'OK' })],
-    findingSeverity: 'medium',
+    anomalySeverity: 'medium',
     now: NOW,
     expected: 'success',
   },
   {
-    name: 'scp: completed + only INFO quality finding → success (below threshold, suppressed)',
+    name: 'scp: completed + only INFO quality anomaly → success (below threshold, suppressed)',
     mode: 'false-positive',
     app: 'scp',
     agent: mkAgent({ messageId: 'S012', status: 'completed', phaseTs: ALL }),
     logs: scpTransaction(0, 'S012'),
-    qualityFindings: qf('info', 'minor note'),
+    qualityAnomalies: qf('info', 'minor note'),
     now: NOW,
     expected: 'success',
   },
@@ -105,25 +105,25 @@ export const scpGoldCases: GoldCase[] = [
 
   // ---- false-negative guards (genuinely broken, must flag) ----
   {
-    name: 'scp: failed agent with NO finding → failure (missing finding)',
+    name: 'scp: failed agent with NO anomaly → failure (missing anomaly)',
     mode: 'false-negative',
     app: 'scp',
     agent: mkAgent({ messageId: 'S020', status: 'failed', phaseTs: { REQUEST: 0, ACK: 1 * MIN } }),
     logs: [scpLog(0, { type: 'REQUEST', messageId: 'S020' }), scpLog(1 * MIN, { type: 'ACK', messageId: 'S020-ack', initMessageId: 'S020', ackCode: 'FAILED' })],
     now: NOW,
     expected: 'failure',
-    expectDelta: /missing finding/,
+    expectDelta: /missing anomaly/,
   },
   {
-    name: 'scp: completed agent WITH an unexpected finding → failure',
+    name: 'scp: completed agent WITH an unexpected anomaly → failure',
     mode: 'false-negative',
     app: 'scp',
     agent: mkAgent({ messageId: 'S021', status: 'completed', phaseTs: ALL }),
     logs: scpTransaction(0, 'S021'),
-    findingSeverity: 'high',
+    anomalySeverity: 'high',
     now: NOW,
     expected: 'failure',
-    expectDelta: /unexpected finding/,
+    expectDelta: /unexpected anomaly/,
   },
   {
     name: 'scp: completed but agent is missing the RESPONSE phase → failure (missing phase)',
@@ -146,12 +146,12 @@ export const scpGoldCases: GoldCase[] = [
     expectDelta: /SLA breach/,
   },
   {
-    name: 'scp: error agent with a HIGH finding (wrong level) → failure',
+    name: 'scp: error agent with a HIGH anomaly (wrong level) → failure',
     mode: 'false-negative',
     app: 'scp',
     agent: mkAgent({ messageId: 'S024', status: 'error', phaseTs: { REQUEST: 0, ACK: 1 * MIN } }),
     logs: [scpLog(0, { type: 'REQUEST', messageId: 'S024' }), scpLog(1 * MIN, { type: 'ACK', messageId: 'S024-ack', initMessageId: 'S024', ackCode: 'OK' })],
-    findingSeverity: 'high',
+    anomalySeverity: 'high',
     now: NOW,
     expected: 'failure',
     expectDelta: /wrong level/,
@@ -180,12 +180,12 @@ export const scpGoldCases: GoldCase[] = [
     expectDelta: /duplicate RESPONSE/,
   },
   {
-    name: 'scp: completed + HIGH quality finding → completed_with_issues',
+    name: 'scp: completed + HIGH quality anomaly → completed_with_issues',
     mode: 'false-negative',
     app: 'scp',
     agent: mkAgent({ messageId: 'S027', status: 'completed', phaseTs: ALL }),
     logs: scpTransaction(0, 'S027'),
-    qualityFindings: qf('high', 'High latency 5639ms'),
+    qualityAnomalies: qf('high', 'High latency 5639ms'),
     now: NOW,
     expected: 'completed_with_issues',
   },
@@ -218,7 +218,7 @@ export const scpGoldCases: GoldCase[] = [
     app: 'scp',
     agent: mkAgent({ messageId: 'S031', status: 'failed', phaseTs: { REQUEST: 0, ACK: 1 * MIN } }),
     logs: scpTransaction(0, 'S031'),
-    findingSeverity: 'high', // present, so the ONLY delta is the status mismatch
+    anomalySeverity: 'high', // present, so the ONLY delta is the status mismatch
     now: NOW,
     expected: 'failure',
     expectDelta: /status mismatch/,

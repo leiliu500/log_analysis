@@ -5,7 +5,7 @@ import type { Cluster } from './correlate.js';
  * Production-anomaly taxonomy. Each log is classified into at most one category;
  * normal traffic (a request being sent, an idle window) classifies as none.
  * Matched logs are grouped per (category, signature) and LLM-reasoned into
- * findings by the pipeline.
+ * anomalies by the pipeline.
  */
 export interface AnomalyCategory {
   category: string;

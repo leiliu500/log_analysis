@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Finding, ParsedLog } from '@log/shared';
+import type { Anomaly, ParsedLog } from '@log/shared';
 import { loadPrompt } from '@log/shared';
 import { converseJson, embed } from './bedrock.js';
 import type { AnomalyScore } from './learn.js';
@@ -7,9 +7,9 @@ import type { Cluster } from './correlate.js';
 
 const REASONING_SYSTEM = loadPrompt('analysis/reason.md');
 
-interface ModelFinding {
-  kind: Finding['kind'];
-  severity: Finding['severity'];
+interface ModelAnomaly {
+  kind: Anomaly['kind'];
+  severity: Anomaly['severity'];
   title: string;
   summary: string;
   confidence: number;
@@ -28,13 +28,13 @@ function renderLogs(logs: ParsedLog[], max = 40): string {
 }
 
 /**
- * Ask the reasoning model to explain a correlated cluster and emit a Finding.
+ * Ask the reasoning model to explain a correlated cluster and emit a Anomaly.
  * The result is embedded for later semantic retrieval by the chatbot.
  */
 export async function reasonAboutCluster(
   cluster: Cluster,
   context: { anomaly?: AnomalyScore } = {},
-): Promise<Finding> {
+): Promise<Anomaly> {
   const stat = context.anomaly
     ? `Observed rate ${context.anomaly.observedRate.toFixed(2)}/min vs baseline ${context.anomaly.baselineRate.toFixed(2)}/min (z=${context.anomaly.zScore.toFixed(1)}, new=${context.anomaly.isNew}).`
     : 'No statistical baseline available.';
@@ -47,7 +47,7 @@ Statistical context: ${stat}
 Logs:
 ${renderLogs(cluster.logs)}`;
 
-  const mf = await converseJson<ModelFinding>(prompt, {
+  const mf = await converseJson<ModelAnomaly>(prompt, {
     system: REASONING_SYSTEM,
     temperature: 0.1,
   });
