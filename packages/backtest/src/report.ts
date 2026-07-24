@@ -1,4 +1,32 @@
+import type { BacktestSummary } from '@log/shared';
 import type { BacktestReport, CaseResult, Metrics } from './types.js';
+
+/**
+ * Trim the rich in-memory report to the JSON-safe {@link BacktestSummary} the API
+ * returns and the /backtest UI renders — dropping the RegExp matchers and the full
+ * ParsedLog fixtures each case carries (which are large and not serializable).
+ */
+export function toSummary(r: BacktestReport, ranAt: number): BacktestSummary {
+  return {
+    passed: r.passed,
+    ranAt,
+    overall: r.overall,
+    byApp: r.byApp,
+    byMode: r.byMode,
+    cases: r.results.map((c) => ({
+      name: c.case.name,
+      app: c.case.app,
+      mode: c.case.mode,
+      expected: c.case.expected,
+      actual: c.actual,
+      classification: c.classification,
+      resultMatched: c.resultMatched,
+      deltaMatched: c.deltaMatched,
+      delta: c.delta,
+      expectDelta: c.case.expectDelta ? String(c.case.expectDelta) : undefined,
+    })),
+  };
+}
 
 const pct = (n: number): string => `${(n * 100).toFixed(1)}%`.padStart(6);
 const pad = (s: string, n: number): string => s.padEnd(n);

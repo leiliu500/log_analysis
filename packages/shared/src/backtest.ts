@@ -4,6 +4,59 @@ import type { Severity } from './findings.js';
 import type { QualityFinding, ValidationResult } from './validation.js';
 import type { ReconciliationResult } from './application.js';
 
+// ---------------------------------------------------------------------------
+// Serializable backtest RESULT contract (shared by the runner, the API, and the
+// web UI). The rich in-memory report (with RegExp matchers and full ParsedLog
+// fixtures) stays inside `@log/backtest`; this is the JSON-safe view the API
+// returns and the /backtest page renders.
+// ---------------------------------------------------------------------------
+
+/** Confusion-matrix metrics for a set of cases (positive class = a problem was surfaced). */
+export interface Metrics {
+  total: number;
+  correct: number;
+  truePositives: number;
+  trueNegatives: number;
+  falsePositives: number;
+  falseNegatives: number;
+  /** TP / (TP + FP); 1 when nothing was surfaced. */
+  precision: number;
+  /** TP / (TP + FN); 1 when the set has no problems. */
+  recall: number;
+  /** Harmonic mean of precision and recall. */
+  f1: number;
+  /** (TP + TN) / total. */
+  accuracy: number;
+}
+
+/** One case's outcome, trimmed to what the UI needs (no RegExp, no log fixtures). */
+export interface CaseSummary {
+  name: string;
+  app: string;
+  mode: FailureMode;
+  expected: ValidationResult;
+  actual: ValidationResult;
+  classification: 'true-positive' | 'true-negative' | 'false-positive' | 'false-negative';
+  resultMatched: boolean;
+  /** null when the case declared no expected delta. */
+  deltaMatched: boolean | null;
+  /** The deltas the engine actually emitted. */
+  delta: string[];
+  /** The expected-delta matcher, stringified for display. */
+  expectDelta?: string;
+}
+
+/** The JSON-safe backtest report the API returns and the /backtest UI renders. */
+export interface BacktestSummary {
+  passed: boolean;
+  /** Epoch ms when the run completed. */
+  ranAt: number;
+  overall: Metrics;
+  byApp: Record<string, Metrics>;
+  byMode: Record<string, Metrics>;
+  cases: CaseSummary[];
+}
+
 /**
  * The GENERIC backtest contract. This is the platform-side type only — the shared,
  * app-agnostic shape of a labelled validation case and a fixture-log factory. The

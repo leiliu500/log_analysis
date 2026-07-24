@@ -1,9 +1,9 @@
-import type { FailureMode, GoldCase, ValidationResult } from '@log/shared';
+import type { FailureMode, GoldCase, Metrics, ValidationResult } from '@log/shared';
 
-// GoldCase + FailureMode are the GENERIC contract and live in @log/shared, so each
-// application package can author its own cases without depending on the backtest
-// runner. Re-export them here for ergonomic single-import use by the runner.
-export type { FailureMode, GoldCase } from '@log/shared';
+// The generic contract — GoldCase, FailureMode, Metrics, and the JSON-safe
+// BacktestSummary/CaseSummary — lives in @log/shared so app packages and the web UI
+// can use it without depending on this runner. Re-export for ergonomic single-import.
+export type { BacktestSummary, CaseSummary, FailureMode, GoldCase, Metrics } from '@log/shared';
 
 /** The outcome of replaying one gold case through the real validation engine. */
 export interface CaseResult {
@@ -19,23 +19,6 @@ export interface CaseResult {
   resultMatched: boolean;
   /** Did the expected delta match (null when the case declares none)? */
   deltaMatched: boolean | null;
-}
-
-export interface Metrics {
-  total: number;
-  correct: number;
-  truePositives: number;
-  trueNegatives: number;
-  falsePositives: number;
-  falseNegatives: number;
-  /** TP / (TP + FP); 1 when the engine surfaced nothing. */
-  precision: number;
-  /** TP / (TP + FN); 1 when the gold set has no problems. */
-  recall: number;
-  /** Harmonic mean of precision and recall. */
-  f1: number;
-  /** (TP + TN) / total. */
-  accuracy: number;
 }
 
 export interface BacktestReport {
