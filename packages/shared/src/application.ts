@@ -60,6 +60,16 @@ export interface ApplicationDef {
    * platform packages. Unset ⇒ this app makes no dynamic transitions (only timeouts fire).
    */
   ingestionAgent?: IngestionAgent;
+  /**
+   * App-owned scheduling hook (the engine only calls it — it holds no app logic). Of this
+   * app's currently-ACTIVE transactions (`activeIds`), return those with a decisive signal
+   * in `window` that produced NO protocol event, so the engine would otherwise never
+   * re-reason them until they time out. apiflc returns a correlationID once its API-Gateway
+   * HTTP status (keyed by the gateway requestId, not the correlationID) appears in the
+   * window, so the agent completes on the real status instead of timing out. Apps whose
+   * only signals are protocol events (e.g. SCP) omit it.
+   */
+  pendingSignals?(window: readonly ParsedLog[], activeIds: readonly string[]): string[];
 
   // ---- Simulator support (each application supplies its own) ----
   /** Detect this application's target log group named in a message (names/keywords). */

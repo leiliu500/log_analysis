@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AgentPromptContext, ParsedLog, TransitionDecision } from '@log/shared';
-import { apiflcIngestionAgent } from './agent.js';
+import { apiflcIngestionAgent, apiflcPendingSignals } from './agent.js';
 
 const log = (raw: string, stream = 'x'): ParsedLog =>
   ({ raw, source: 'cloudwatch', stream, timestamp: 0 } as unknown as ParsedLog);
@@ -49,4 +49,25 @@ test('apiflc agent defers (awaiting) when the correlated logs carry no HTTP stat
     /status:\s*\d{3}/i.test(user) ? { status: 'completed', detail: 'has status' } : { status: 'awaiting', waitingFor: 'RESPONSE', detail: 'no status yet' };
   const d = await apiflcIngestionAgent.decide(ctx(window), httpAware);
   assert.equal(d?.status, 'awaiting');
+});
+
+test('apiflcPendingSignals re-schedules an awaiting agent once the gateway HTTP status is in the window', () => {
+  const gw = '68f54c61-3e54-4e02-8ccf-2fbc14576104';
+  const lambda = '45e5ece0-7dbe-490a-880b-38670acab559';
+  // The gateway execution logs (all together) arrive in a LATER poll than the handler.
+  // They carry X-Correlation-ID=1234 and the decisive status, but NO protocol event.
+  const gatewayWindow = [
+    log(`(${gw}) Method request headers: {X-Correlation-ID=1234, User-Agent=x}`),
+    log(`(${gw}) Endpoint response headers: {x-amzn-RequestId=${lambda}}`),
+    log(`(${gw}) Received response. Status: 200, Integration latency: 5639 ms`),
+    log(`(${gw}) Method completed with status: 200`),
+  ];
+  assert.deepEqual(apiflcPendingSignals(gatewayWindow, ['1234']), ['1234']); // re-reason 1234
+
+  // No status line yet ⇒ do NOT re-schedule (it would just say "still awaiting").
+  const noStatus = [log(`(${gw}) Method request headers: {X-Correlation-ID=1234}`)];
+  assert.deepEqual(apiflcPendingSignals(noStatus, ['1234']), []);
+
+  // An id that doesn't correlate to anything in the window is not scheduled.
+  assert.deepEqual(apiflcPendingSignals(gatewayWindow, ['9999']), []);
 });
