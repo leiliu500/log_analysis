@@ -13,12 +13,17 @@ import type { BacktestReport, CaseResult } from './types.js';
 export function runBacktest(cases: GoldCase[]): BacktestReport {
   const results: CaseResult[] = cases.map(runCase);
 
-  const mismatches = results.filter((r) => !r.resultMatched);
-  const deltaMisses = results.filter((r) => r.deltaMatched === false);
+  // Known-gap cases document MISSING rules — they're expected to "mismatch" and must
+  // NOT count as regressions. The gate (metrics, mismatches, passed) is computed over
+  // the normal must-pass cases only; gaps are reported separately.
+  const normal = results.filter((r) => !r.case.knownGap);
 
-  const overall = metricsOf(results);
-  const byApp = metricsByGroup(results, (r) => r.case.app);
-  const byMode = metricsByGroup(results, (r) => r.case.mode) as Record<FailureMode, ReturnType<typeof metricsOf>>;
+  const mismatches = normal.filter((r) => !r.resultMatched);
+  const deltaMisses = normal.filter((r) => r.deltaMatched === false);
+
+  const overall = metricsOf(normal);
+  const byApp = metricsByGroup(normal, (r) => r.case.app);
+  const byMode = metricsByGroup(normal, (r) => r.case.mode) as Record<FailureMode, ReturnType<typeof metricsOf>>;
 
   const passed = overall.falsePositives === 0 && overall.falseNegatives === 0 && deltaMisses.length === 0 && mismatches.length === 0;
 

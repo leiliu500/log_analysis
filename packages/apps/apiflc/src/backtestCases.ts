@@ -1,5 +1,5 @@
 import type { Agent, GoldCase, QualityAnomaly, Severity } from '@log/shared';
-import { MIN, apiflcRequest, apiflcTransaction } from './backtestFixtures.js';
+import { MIN, apiflcRequest, apiflcResponse, apiflcTransaction } from './backtestFixtures.js';
 
 /**
  * apiflc's hand-labelled validation gold set. Exercises the apiflc-specific paths the
@@ -28,6 +28,34 @@ const mkAgent = (
 const qf = (severity: Severity, title = 'Integration latency 5639ms'): QualityAnomaly[] => [{ id: `q-${severity}`, severity, kind: 'anomaly', title }];
 
 export const apiflcGoldCases: GoldCase[] = [
+  // ---- known gaps: rules the validation worker is MISSING (documented, not gate-breaking) ----
+  {
+    name: 'apiflc: completed with NO gateway HTTP status in logs (outcome unproven)',
+    mode: 'false-negative',
+    app: 'apiflc',
+    agent: mkAgent({ messageId: 'GAP-API-1', status: 'completed', phaseTs: { REQUEST: 0, RESPONSE: 1 * MIN } }),
+    logs: [apiflcRequest(0, 'GAP-API-1'), apiflcResponse(3000, 'GAP-API-1')],
+    now: NOW,
+    expected: 'failure',
+    knownGap: {
+      rule: 'require confirmed gateway HTTP status',
+      detail: 'A completed apiflc transaction whose logs contain no API-Gateway HTTP status is accepted as success — the outcome is unproven (deriveOutcome trusts a bare handler RESPONSE line).',
+    },
+  },
+  {
+    name: 'apiflc: two RESPONSEs for one correlationID (duplicate call not detected)',
+    mode: 'false-negative',
+    app: 'apiflc',
+    agent: mkAgent({ messageId: 'GAP-API-2', status: 'completed', phaseTs: { REQUEST: 0, RESPONSE: 1 * MIN } }),
+    logs: [...apiflcTransaction(0, 'GAP-API-2', 200), apiflcResponse(6000, 'GAP-API-2')],
+    now: NOW,
+    expected: 'failure',
+    knownGap: {
+      rule: 'apiflc duplicate-phase detection',
+      detail: 'apiflc declares no ordering/duplicate checks (those are SCP-only); a second RESPONSE for the same correlationID is not flagged.',
+    },
+  },
+
   {
     name: 'apiflc: clean HTTP 200 within SLA → success',
     mode: 'clean',

@@ -19,6 +19,12 @@ export interface CaseResult {
   resultMatched: boolean;
   /** Did the expected delta match (null when the case declares none)? */
   deltaMatched: boolean | null;
+  /**
+   * Set when the case documents a MISSING rule (GoldCase.knownGap): 'open' = the
+   * engine still doesn't produce the correct result (rule missing), 'resolved' = it
+   * now does. Undefined for normal (must-pass) cases.
+   */
+  gapStatus?: 'open' | 'resolved';
 }
 
 export interface BacktestReport {

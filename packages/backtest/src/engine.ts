@@ -64,6 +64,7 @@ export function runCase(gc: GoldCase): CaseResult {
           ? 'false-positive'
           : 'false-negative';
 
+  const resultMatched = v.result === gc.expected;
   return {
     case: gc,
     actual: v.result,
@@ -71,7 +72,10 @@ export function runCase(gc: GoldCase): CaseResult {
     predictedProblem,
     expectedProblem,
     classification,
-    resultMatched: v.result === gc.expected,
+    resultMatched,
     deltaMatched: gc.expectDelta ? v.delta.some((d) => gc.expectDelta!.test(d)) : null,
+    // A known-gap case documents a missing rule: 'open' while the engine still gets it
+    // wrong (rule absent), 'resolved' once the engine produces the correct result.
+    gapStatus: gc.knownGap ? (resultMatched ? 'resolved' : 'open') : undefined,
   };
 }

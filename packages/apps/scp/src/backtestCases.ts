@@ -31,6 +31,21 @@ const qf = (severity: Severity, title = 'Integration latency'): QualityAnomaly[]
 const ALL: Record<string, number> = { REQUEST: 0, ACK: 1 * MIN, RESPONSE: 2 * MIN };
 
 export const scpGoldCases: GoldCase[] = [
+  // ---- known gaps: rules the validation worker is MISSING (documented, not gate-breaking) ----
+  {
+    name: 'scp: slow ACK — ACK arrived 120m after REQUEST (only ACK→RESPONSE is bounded)',
+    mode: 'false-negative',
+    app: 'scp',
+    agent: mkAgent({ messageId: 'GAP-SCP-1', status: 'completed', phaseTs: { REQUEST: 0, ACK: 120 * MIN, RESPONSE: 121 * MIN } }),
+    logs: scpTransaction(0, 'GAP-SCP-1', { ackTs: 120 * MIN, respTs: 121 * MIN }),
+    now: 150 * MIN,
+    expected: 'failure',
+    knownGap: {
+      rule: 'REQUEST→ACK SLA',
+      detail: 'The response SLA only bounds ACK→RESPONSE; a transaction whose ACK arrives far after its REQUEST (slow acknowledgement) is not flagged.',
+    },
+  },
+
   // ---- clean baseline ----
   {
     name: 'scp: clean completed within SLA',

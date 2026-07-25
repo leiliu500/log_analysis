@@ -44,6 +44,8 @@ export interface CaseSummary {
   delta: string[];
   /** The expected-delta matcher, stringified for display. */
   expectDelta?: string;
+  /** Set when this case documents a MISSING validation rule (see GoldCase.knownGap). */
+  gap?: { rule: string; detail: string; status: 'open' | 'resolved' };
 }
 
 /** The JSON-safe backtest report the API returns and the /backtest UI renders. */
@@ -55,6 +57,14 @@ export interface BacktestSummary {
   byApp: Record<string, Metrics>;
   byMode: Record<string, Metrics>;
   cases: CaseSummary[];
+  /**
+   * Missing-rule gaps the corpus documents — validation rules the worker does NOT yet
+   * enforce. `open` = the rule is still missing (engine didn't catch it); `resolved` =
+   * the engine now produces the correct result (the gap is closed). These do NOT affect
+   * `passed` (they're known, not regressions); they're surfaced so the team can track
+   * and prioritize what the validator still needs to cover.
+   */
+  gaps: Array<{ rule: string; detail: string; case: string; status: 'open' | 'resolved'; expected: string; actual: string; app: string }>;
 }
 
 /**
@@ -111,6 +121,15 @@ export interface GoldCase {
   expected: ValidationResult;
   /** Optional: a delta the engine is expected to emit (check-level assertion). */
   expectDelta?: RegExp;
+  /**
+   * Marks this case as documenting a validation rule the worker is currently MISSING
+   * (a gap), NOT a rule it already enforces. `expected` is what a COMPLETE validator
+   * SHOULD return; the engine currently returns something else, so the backtest
+   * reports it as an OPEN gap instead of a gate-breaking failure. When the engine's
+   * result later matches `expected`, the gap is auto-detected as RESOLVED (a nudge to
+   * drop the `knownGap` marker and promote it to a normal case).
+   */
+  knownGap?: { rule: string; detail: string };
 }
 
 let _logSeq = 0;

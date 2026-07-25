@@ -155,6 +155,37 @@ export function BacktestPanel({ summary }: { summary: BacktestSummary }) {
         <MetricsTable title="By failure mode" rows={Object.entries(summary.byMode).sort().map(([label, mm]) => ({ label, m: mm }))} />
       </div>
 
+      {/* Missing rules — validator gaps (documented, not counted against PASS) */}
+      {summary.gaps.length > 0 && (
+        <div className="rounded-xl border border-amber-600/40 bg-amber-500/5 p-4">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-semibold text-amber-200">Missing Rules — validator gaps</h2>
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300">
+              {summary.gaps.filter((g) => g.status === 'open').length} open
+            </span>
+            <span className="text-xs text-slate-500">rules the worker does not yet enforce — surfaced to track, not counted against PASS</span>
+          </div>
+          <div className="space-y-2">
+            {summary.gaps.map((g, i) => (
+              <div key={i} className="rounded-lg border border-edge bg-panel px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`text-xs font-semibold ${g.status === 'resolved' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {g.status === 'resolved' ? '✔ resolved' : '○ open'}
+                  </span>
+                  <span className="font-mono text-sm text-slate-200">{g.rule}</span>
+                  <span className="rounded border border-slate-600/50 px-1.5 py-0.5 text-[10px] text-slate-400">{g.app}</span>
+                </div>
+                <div className="mt-1 text-xs text-slate-400">{g.detail}</div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                  should be <span className={RESULT_STYLES[g.expected] ?? ''}>{g.expected}</span>, engine gives{' '}
+                  <span className={RESULT_STYLES[g.actual] ?? ''}>{g.actual}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Per-case review */}
       <div>
         <div className="mb-2 flex flex-wrap items-center gap-3">
