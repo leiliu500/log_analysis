@@ -9,12 +9,14 @@ Phases (in order):
 
 There is no ACK phase.
 
-Correlation. A REQUEST and its RESPONSE share the business `correlationID` (the id
-the Lambda handler logs, e.g. 1234). One apiflc call is logged across several
-groups (API-Gateway execution logs, the Lambda handler, the authorizer); correlate
-ONLY by the business correlationID. The API-Gateway execution-log lines are keyed
-by a different gateway `requestId` and are supporting detail, NOT their own
-transaction — never spawn an agent off them (one call must be one agent).
+Correlation. One apiflc call is logged across several groups — the Lambda handler,
+the authorizer, and the API-Gateway execution log — under DIFFERENT ids:
+  - the business `correlationID` the handler logs (e.g. 1234), and
+  - a gateway `requestId` the execution log is keyed by.
+These are the SAME call. You are given the whole call already correlated (the
+"Full correlated call logs" block lists every group's lines for this transaction).
+Treat that block as one transaction — never split the gateway lines off into their
+own agent (one call must be one agent).
 
 Recognize a transaction message from either shape:
   - Structured JSON: a `messageType`/`type` of REQUEST or RESPONSE, correlated by
@@ -22,24 +24,42 @@ Recognize a transaction message from either shape:
   - Handler text: "... correlationID: <id>; FedLine Request ..." (REQUEST) and
     "... correlationID: <id>; Response from Data Services ..." (RESPONSE).
 
+Reading the OUTCOME — the decisive signal. The authoritative result of an apiflc
+call is the API-Gateway HTTP status, which appears ONLY in the execution log, in a
+line like:
+    "... Received response. Status: 200 ..."
+    "Method completed with status: 500"
+Find that status in the correlated call logs and let it decide the outcome:
+  - 2xx / 3xx  ⇒ success (completed)
+  - 4xx / 5xx  ⇒ failure (failed, severity high)
+The handler "Response from Data Services" line marks that a RESPONSE phase was
+logged, but by itself it does NOT prove success — it often carries no status. Do
+NOT report "blank status, interpreted as success". When the handler RESPONSE is
+present but NO HTTP status line is in the correlated logs yet, the outcome is not
+yet proven: keep awaiting (the gateway line may arrive in a later poll), and only
+the inactivity timeout closes it as an error.
+
 Lifecycle:
 
 1. Spawn. On the REQUEST, spawn one agent for the correlationID (status
    `awaiting`, active). If the RESPONSE is seen first, spawn lazily on it.
 
-2. Advance. Record the REQUEST timestamp and await the RESPONSE. A RESPONSE
-   `ackCode`/status must denote success — an HTTP status < 400, or a success word
-   (OK, SUCCESS, PROCESSED, ACCEPTED, COMPLETE). No/blank status is success.
+2. Advance. Record the REQUEST timestamp and await the RESPONSE and its HTTP
+   status. The transaction is resolved once the correlated logs carry an HTTP
+   status (or an explicit success/failure ackCode).
 
 3. Close. Close the agent (inactive) and move it to history when any of:
-     - completed — REQUEST and RESPONSE both received with a success status;
-     - failed — the RESPONSE carried a non-success status/ackCode (severity high);
-     - error (timeout) — the RESPONSE was not received within the agent
-       inactivity timeout (severity medium).
+     - completed — the correlated logs carry a 2xx/3xx HTTP status (or an explicit
+       success ackCode) for the RESPONSE;
+     - failed — the correlated logs carry a 4xx/5xx HTTP status, or the RESPONSE
+       carried a non-success ackCode (severity high);
+     - error (timeout) — neither a RESPONSE nor an HTTP status was seen within the
+       agent inactivity timeout (severity medium).
 
 4. Report. On a NON-completed close (failed / error), emit exactly one finding
    `tx:<correlationID>` at the implied level (failed ⇒ high, timeout ⇒ medium). A
-   completed transaction produces no finding.
+   completed transaction produces no finding. Cite the gateway HTTP status line as
+   the evidence when reporting a failure.
 
 Terminal agents are immutable and idempotent across overlapping poll windows: once
 closed, further messages for the same correlationID do not reopen or duplicate it.

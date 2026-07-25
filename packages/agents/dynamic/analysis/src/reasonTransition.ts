@@ -35,6 +35,14 @@ export interface TransitionInput {
   ackCode?: string;
   /** The new correlated events this cycle (deterministic extraction), oldest first. */
   events: AgentEvent[];
+  /**
+   * The RAW log lines of the WHOLE correlated call — every group for this transaction
+   * (e.g. apiflc's handler + authorizer + API-Gateway execution logs), resolved by the
+   * app's cross-log-group join. This is what lets the LLM read signals that no
+   * protocol event carries — most importantly apiflc's HTTP status, which lives only in
+   * the gateway execution log. Bounded upstream.
+   */
+  relatedLogs?: string[];
   now: number;
 }
 
@@ -90,6 +98,13 @@ export async function reasonTransition(
     ...input.events.map(
       (e) => `  - phase=${e.type}${e.ackCode ? ` ackCode=${e.ackCode}` : ''} @ ${new Date(e.ts).toISOString()}\n    log: ${(e.raw ?? '').slice(0, 500)}`,
     ),
+    '',
+    'Full correlated call logs — every log group for THIS transaction (handler,',
+    'authorizer, API-Gateway execution). The outcome/HTTP status may appear ONLY here',
+    'and in no phase event above; correlate and read it per the spec:',
+    ...(input.relatedLogs && input.relatedLogs.length
+      ? input.relatedLogs.slice(0, 40).map((r) => `  ${r.slice(0, 400)}`)
+      : ['  (no additional correlated logs this cycle)']),
     '',
     'Decide this transaction\'s NEW lifecycle state. Respond ONLY with JSON:',
     '{ "status": "awaiting" | "completed" | "failed" | "error", "waitingFor": "<next phase or null>", "severity": "high" | "medium" | null, "detail": "<short reason>" }',

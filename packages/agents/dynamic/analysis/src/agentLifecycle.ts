@@ -222,9 +222,24 @@ function mergeByApp(a: Record<string, AgentCounts>, b: Record<string, AgentCount
 export async function stepAgentsDynamic(
   events: AgentEvent[],
   known: Agent[],
-  opts: StepOptions & { reasoner?: Parameters<typeof reasonTransition>[2]; maxLlm?: number },
+  opts: StepOptions & { reasoner?: Parameters<typeof reasonTransition>[2]; maxLlm?: number; windowLogs?: ParsedLog[] },
 ): Promise<StepResult> {
   const { now, timeoutMs, registry } = opts;
+  const windowLogs = opts.windowLogs ?? [];
+
+  /**
+   * The RAW lines of the WHOLE correlated call for a transaction — resolved by the app's
+   * cross-log-group join (apiflc's handler + authorizer + gateway) so the LLM can read
+   * signals no protocol event carries (the HTTP status lives only in the gateway log).
+   * Falls back to the eventOf-correlated lines when the app declares no join.
+   */
+  const relatedLinesFor = (app: ApplicationDef, id: string): string[] => {
+    if (!windowLogs.length) return [];
+    const related = app.relatedLogs
+      ? app.relatedLogs(id, windowLogs)
+      : windowLogs.filter((l) => app.protocol.eventOf(l)?.corrId === id);
+    return related.map((l) => l.raw ?? l.message).filter(Boolean);
+  };
   const agents = new Map<string, Agent>();
   for (const a of known) {
     agents.set(a.messageId, {
@@ -295,7 +310,15 @@ export async function stepAgentsDynamic(
       idx < maxLlm
         ? await reasonTransition(
             dec.app,
-            { messageId: dec.id, currentStatus: dec.a.status, phaseTs: dec.a.phaseTs, ackCode: dec.a.ackCode, events: dec.evs, now },
+            {
+              messageId: dec.id,
+              currentStatus: dec.a.status,
+              phaseTs: dec.a.phaseTs,
+              ackCode: dec.a.ackCode,
+              events: dec.evs,
+              relatedLogs: relatedLinesFor(dec.app, dec.id),
+              now,
+            },
             opts.reasoner,
           )
         : deterministicDecision(dec.app, dec.a.phaseTs, dec.a.ackCode);
@@ -409,7 +432,7 @@ export async function advanceAgents(
   const dynKnown = knownList.filter((a) => isDynamic(a.application));
   const dynStep: StepResult =
     dynEvents.length || dynKnown.length
-      ? await stepAgentsDynamic(dynEvents, dynKnown, { now, timeoutMs, registry })
+      ? await stepAgentsDynamic(dynEvents, dynKnown, { now, timeoutMs, registry, windowLogs: parsed })
       : { agents: new Map(), changed: new Set(), spawned: 0, advanced: 0, closed: 0, byApp: {} };
 
   const step: StepResult = {
