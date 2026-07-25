@@ -100,9 +100,16 @@ async function mapPool<T>(items: T[], limit: number, fn: (item: T, index: number
 }
 
 /** The default transition reasoner — a Bedrock structured-output call, injected into each
- *  app's {@link IngestionAgent} so the app packages never depend on Bedrock or this engine. */
+ *  app's {@link IngestionAgent} so the app packages never depend on Bedrock or this engine.
+ *
+ *  maxTokens must be GENEROUS: the configured foundation model (GPT-OSS) is a REASONING
+ *  model whose hidden reasoning tokens count against maxTokens. A tight budget (e.g. 400)
+ *  gets consumed by reasoning on large prompts, leaving NO final text — the reply comes back
+ *  empty, decideFromSpec returns null, and every transaction times out instead of
+ *  transitioning. The JSON answer itself is tiny; the budget is headroom for reasoning. */
+const REASONER_MAX_TOKENS = Number(process.env.INGEST_DYNAMIC_MAXTOKENS ?? 2000);
 const defaultReasoner: TransitionReasoner = (system, user) =>
-  converseJson<Partial<TransitionDecision>>(user, { system, temperature: 0, maxTokens: 400 });
+  converseJson<Partial<TransitionDecision>>(user, { system, temperature: 0, maxTokens: REASONER_MAX_TOKENS });
 
 /**
  * The dynamic lifecycle step (pure — no DB). Extraction/correlation + phaseTs bookkeeping
