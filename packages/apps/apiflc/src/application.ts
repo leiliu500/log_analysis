@@ -14,6 +14,9 @@ export const apiflcApplication: ApplicationDef = {
   protocol: apiflcTransactionProtocol,
   // Regular ingestion agent: apiflc's own REQUEST→RESPONSE transaction spec.
   transactionPromptPath: 'apps/apiflc/transaction.md',
+  // Dispatch apiflc's ingestion to the DYNAMIC agent (transaction.md-reasoned lifecycle
+  // transitions; deterministic extraction + validation shadow it, with fallback).
+  dynamicLifecycle: true,
   // Simulator: apiflc logs are raw Lambda / API-Gateway lines — write verbatim.
   // A single paste may target several groups (handler / authorizer / execution).
   matchLogGroup: parseApiflcLogGroup,

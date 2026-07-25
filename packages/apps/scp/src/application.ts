@@ -13,6 +13,10 @@ export const scpApplication: ApplicationDef = {
   protocol: scpTransactionProtocol,
   // Regular ingestion agent: SCP's own REQUEST→ACK→RESPONSE transaction spec.
   transactionPromptPath: 'apps/scp/transaction.md',
+  // Dispatch SCP's ingestion to the DYNAMIC agent: lifecycle transitions are reasoned
+  // from transaction.md over the raw logs (deterministic extraction + validation still
+  // shadow it; any model error falls back to the deterministic decision).
+  dynamicLifecycle: true,
   // Simulator: SCP uses the correlated cashMessage REQUEST/ACK/RESPONSE set model.
   matchLogGroup: parseLogGroup,
   defaultSamples: DEFAULT_CASHMESSAGE_SAMPLES,
