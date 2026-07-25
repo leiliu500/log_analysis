@@ -26,6 +26,16 @@ export interface ApplicationDef {
    * per-app lifecycle beside the {@link ApplicationValidation} spec.
    */
   transactionPromptPath?: string;
+  /**
+   * Opt this application's ingestion lifecycle into the DYNAMIC agent: instead of the
+   * deterministic state machine, each transaction's state transition is REASONED by an
+   * LLM prompted with this app's `transactionPromptPath` (transaction.md) over the
+   * correlated raw logs. Extraction/correlation stay deterministic (`protocol.eventOf`)
+   * — so the validation worker keeps an independent, non-LLM view to catch a bad
+   * transition — and any model error/timeout falls back to the deterministic decision.
+   * Absent/false ⇒ the deterministic lifecycle (unchanged).
+   */
+  dynamicLifecycle?: boolean;
 
   // ---- Simulator support (each application supplies its own) ----
   /** Detect this application's target log group named in a message (names/keywords). */

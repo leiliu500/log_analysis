@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Agent, Anomaly, LogSourceType, ParsedLog, Severity, ApplicationRegistry } from '@log/shared';
+import type { Agent, Anomaly, ApplicationDef, LogSourceType, ParsedLog, Severity, ApplicationRegistry } from '@log/shared';
+import { reasonTransition, deterministicDecision, type TransitionDecision } from './reasonTransition.js';
 import {
   getActiveAgents,
   getAgentsByMessageIds,
@@ -30,6 +31,8 @@ export interface AgentEvent {
   logGroup?: string;
   /** Owning application id (which protocol produced this event). */
   application: string;
+  /** The raw log line — passed to the dynamic (LLM-reasoned) lifecycle so it reasons over actual log text. */
+  raw?: string;
 }
 
 /** Pull the ordered transaction events out of a parsed window, across all apps. */
@@ -48,6 +51,7 @@ export function agentEvents(parsed: ParsedLog[], registry: ApplicationRegistry):
       source: l.source,
       logGroup: l.stream,
       application: app.id,
+      raw: l.raw ?? l.message,
     });
   }
   return out.sort((a, b) => a.ts - b.ts);
@@ -180,6 +184,166 @@ export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptio
   return { agents, changed, spawned, advanced, closed, byApp };
 }
 
+/** Bounded-concurrency map — runs `fn` over `items`, at most `limit` in flight. */
+async function mapPool<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length) {
+      const idx = next++;
+      await fn(items[idx]!, idx);
+    }
+  });
+  await Promise.all(workers);
+}
+
+/** Sum two per-application count maps. */
+function mergeByApp(a: Record<string, AgentCounts>, b: Record<string, AgentCounts>): Record<string, AgentCounts> {
+  const out: Record<string, AgentCounts> = {};
+  for (const src of [a, b]) {
+    for (const [k, v] of Object.entries(src)) {
+      const c = (out[k] ??= { spawned: 0, advanced: 0, closed: 0 });
+      c.spawned += v.spawned;
+      c.advanced += v.advanced;
+      c.closed += v.closed;
+    }
+  }
+  return out;
+}
+
+/**
+ * The DYNAMIC lifecycle step — the LLM-reasoned counterpart of {@link stepAgents} for
+ * apps that opt in via `dynamicLifecycle`. Extraction/correlation + phaseTs bookkeeping
+ * stay deterministic (the events come from `eventOf`); only the per-transaction state
+ * TRANSITION is reasoned from the app's `transaction.md` ({@link reasonTransition}).
+ * Timeouts stay a deterministic wall-clock check. Bounded concurrency + a per-poll cap
+ * protect the Lambda; beyond the cap (or on any model error) it uses the deterministic
+ * decision, so this can never block or corrupt ingestion.
+ */
+export async function stepAgentsDynamic(
+  events: AgentEvent[],
+  known: Agent[],
+  opts: StepOptions & { reasoner?: Parameters<typeof reasonTransition>[2]; maxLlm?: number },
+): Promise<StepResult> {
+  const { now, timeoutMs, registry } = opts;
+  const agents = new Map<string, Agent>();
+  for (const a of known) {
+    agents.set(a.messageId, {
+      ...a,
+      phaseTs: { ...(a.phaseTs ?? {}) },
+      phases: a.phases ?? registry.byId(a.application)?.protocol.allPhases ?? [],
+    });
+  }
+  const changed = new Set<string>();
+  const justSpawned = new Set<string>();
+  let spawned = 0;
+  let advanced = 0;
+  let closed = 0;
+  const byApp: Record<string, AgentCounts> = {};
+  const bump = (app: string | undefined, k: keyof AgentCounts): void => {
+    (byApp[app ?? 'unknown'] ??= { spawned: 0, advanced: 0, closed: 0 })[k] += 1;
+  };
+
+  // Group new events per transaction; spawn shells + record phaseTs deterministically.
+  const byTx = new Map<string, AgentEvent[]>();
+  for (const e of events) {
+    const arr = byTx.get(e.corrId) ?? [];
+    arr.push(e);
+    byTx.set(e.corrId, arr);
+  }
+  const decisions: Array<{ id: string; a: Agent; app: ApplicationDef; evs: AgentEvent[] }> = [];
+  for (const [id, evs] of byTx) {
+    evs.sort((x, y) => x.ts - y.ts);
+    let a = agents.get(id);
+    const appId = a?.application ?? evs[0]!.application;
+    const app = registry.byId(appId);
+    if (!a) {
+      const sp = app?.protocol;
+      a = {
+        messageId: id,
+        application: appId,
+        status: 'awaiting',
+        active: true,
+        waitingFor: sp?.phases[0],
+        phases: sp?.allPhases ?? [],
+        phaseTs: {},
+        source: evs[0]!.source,
+        logGroup: evs[0]!.logGroup,
+        spawnedAt: evs[0]!.ts,
+        updatedAt: now,
+      };
+      agents.set(id, a);
+      spawned += 1;
+      justSpawned.add(id);
+      bump(appId, 'spawned');
+      changed.add(id);
+    }
+    if (!a.active) continue; // terminal — immutable
+    for (const e of evs) {
+      if (a.phaseTs[e.type] === undefined) a.phaseTs[e.type] = e.ts;
+      if (e.ackCode) a.ackCode = e.ackCode;
+    }
+    a.updatedAt = now;
+    changed.add(id);
+    if (app) decisions.push({ id, a, app, evs });
+  }
+
+  // Reason each transition from transaction.md (bounded concurrency); cap protects the
+  // Lambda timeout — overflow uses the deterministic decision.
+  const maxLlm = opts.maxLlm ?? Number(process.env.INGEST_DYNAMIC_MAX ?? 40);
+  await mapPool(decisions, 6, async (dec, idx) => {
+    const d: TransitionDecision =
+      idx < maxLlm
+        ? await reasonTransition(
+            dec.app,
+            { messageId: dec.id, currentStatus: dec.a.status, phaseTs: dec.a.phaseTs, ackCode: dec.a.ackCode, events: dec.evs, now },
+            opts.reasoner,
+          )
+        : deterministicDecision(dec.app, dec.a.phaseTs, dec.a.ackCode);
+    const a = dec.a;
+    if (d.status === 'awaiting') {
+      a.status = 'awaiting';
+      a.active = true;
+      a.waitingFor = d.waitingFor ?? a.waitingFor;
+      a.detail = d.detail;
+      if (!justSpawned.has(dec.id)) {
+        advanced += 1;
+        bump(dec.app.id, 'advanced');
+      }
+    } else {
+      a.status = d.status;
+      a.active = false;
+      a.waitingFor = undefined;
+      a.closedAt = now;
+      a.detail = d.detail;
+      if (d.severity) a.severity = d.severity;
+      closed += 1;
+      bump(dec.app.id, 'closed');
+    }
+  });
+
+  // Deterministic timeout pass (a clock check, not reasoning).
+  for (const a of agents.values()) {
+    if (!a.active) continue;
+    const tsVals = Object.values(a.phaseTs);
+    const last = tsVals.length ? Math.max(...tsVals) : a.spawnedAt;
+    if (now - last > timeoutMs) {
+      const wf = a.waitingFor;
+      a.status = 'error';
+      a.active = false;
+      a.waitingFor = undefined;
+      a.closedAt = now;
+      a.detail = `Timed out awaiting ${wf ?? 'next phase'}`;
+      a.severity = 'medium';
+      a.updatedAt = now;
+      closed += 1;
+      bump(a.application, 'closed');
+      changed.add(a.messageId);
+    }
+  }
+
+  return { agents, changed, spawned, advanced, closed, byApp };
+}
+
 export interface AdvanceResult {
   spawned: number;
   advanced: number;
@@ -231,7 +395,31 @@ export async function advanceAgents(
   const known = new Map<string, Agent>();
   for (const a of [...active, ...matching]) known.set(a.messageId, a);
 
-  const step = stepAgents(events, [...known.values()], { now, timeoutMs, registry });
+  // Route each app's transactions to its lifecycle: the deterministic state machine,
+  // or — for apps that opt into `dynamicLifecycle` — the LLM-reasoned dynamic lifecycle
+  // (prompted by transaction.md), which falls back to deterministic on any model error.
+  const isDynamic = (appId?: string): boolean => !!registry.byId(appId)?.dynamicLifecycle;
+  const knownList = [...known.values()];
+  const detStep = stepAgents(
+    events.filter((e) => !isDynamic(e.application)),
+    knownList.filter((a) => !isDynamic(a.application)),
+    { now, timeoutMs, registry },
+  );
+  const dynEvents = events.filter((e) => isDynamic(e.application));
+  const dynKnown = knownList.filter((a) => isDynamic(a.application));
+  const dynStep: StepResult =
+    dynEvents.length || dynKnown.length
+      ? await stepAgentsDynamic(dynEvents, dynKnown, { now, timeoutMs, registry })
+      : { agents: new Map(), changed: new Set(), spawned: 0, advanced: 0, closed: 0, byApp: {} };
+
+  const step: StepResult = {
+    agents: new Map([...detStep.agents, ...dynStep.agents]),
+    changed: new Set([...detStep.changed, ...dynStep.changed]),
+    spawned: detStep.spawned + dynStep.spawned,
+    advanced: detStep.advanced + dynStep.advanced,
+    closed: detStep.closed + dynStep.closed,
+    byApp: mergeByApp(detStep.byApp, dynStep.byApp),
+  };
 
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
   await upsertAgents(toPersist);
