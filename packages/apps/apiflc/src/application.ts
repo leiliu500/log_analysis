@@ -3,6 +3,7 @@ import { APIFLC_LOG_GROUPS, parseApiflcLogGroup, splitApiflcByLogGroup } from '.
 import { apiflcTransactionProtocol } from './transactionProtocol.js';
 import { apiflcRelatedLogs } from './join.js';
 import { apiflcDeriveOutcome } from './httpOutcomes.js';
+import { apiflcReconcile } from './reconcile.js';
 import { APIFLC_SAMPLE } from './samples.js';
 
 /** The apiflc application: its CloudWatch log groups + REQUEST→RESPONSE protocol. */
@@ -42,5 +43,8 @@ export const apiflcApplication: ApplicationDef = {
     // A completed transaction with an associated high/critical anomaly (e.g. a
     // high integration-latency anomaly on a 200) is "completed with issues".
     qualityIssueSeverity: 'high',
+    // System-of-record cross-check against Data Services (env-configured; disabled
+    // until APIFLC_RECONCILE_URL is set).
+    reconcile: apiflcReconcile,
   },
 };
