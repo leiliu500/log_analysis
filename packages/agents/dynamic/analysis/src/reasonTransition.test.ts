@@ -79,6 +79,30 @@ test('deterministicDecision mirrors the state-machine rules (the fallback)', () 
   assert.equal(deterministicDecision(app, { REQUEST: 0, ACK: 1 }, 'FAILED').status, 'failed');
 });
 
+test('reasonTransition feeds the correlated call logs (HTTP status) to the reasoner', async () => {
+  // The apiflc bug: the handler RESPONSE carries no status, so a "blank ⇒ success"
+  // guess was wrong. The decisive 200 lives only in the gateway execution log — assert
+  // it reaches the model via relatedLogs, and only then does the model complete.
+  const httpAware = async (_s: string, user: string): Promise<Partial<TransitionDecision>> =>
+    /status:\s*200/i.test(user)
+      ? { status: 'completed', detail: 'gateway HTTP 200' }
+      : { status: 'awaiting', waitingFor: 'RESPONSE', detail: 'no HTTP status yet' };
+
+  const withStatus = await reasonTransition(
+    app,
+    { messageId: '1234', currentStatus: 'awaiting', phaseTs: { REQUEST: 0, RESPONSE: 1 }, events: [ev('RESPONSE', '1234', 1)], relatedLogs: ['... correlationID: 1234; Response from Data Services', 'Method completed with status: 200'], now: 5 },
+    httpAware,
+  );
+  assert.equal(withStatus.status, 'completed');
+
+  const withoutStatus = await reasonTransition(
+    app,
+    { messageId: '1234', currentStatus: 'awaiting', phaseTs: { REQUEST: 0, RESPONSE: 1 }, events: [ev('RESPONSE', '1234', 1)], relatedLogs: ['... correlationID: 1234; Response from Data Services'], now: 5 },
+    httpAware,
+  );
+  assert.equal(withoutStatus.status, 'awaiting'); // no HTTP status ⇒ not proven complete
+});
+
 test('reasonTransition normalizes the model output', async () => {
   const d = await reasonTransition(
     app,
