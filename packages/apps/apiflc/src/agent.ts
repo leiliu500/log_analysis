@@ -30,10 +30,19 @@ export function apiflcPendingSignals(window: readonly ParsedLog[], activeIds: re
  * `apps/apiflc/transaction.md`. None of this leaks into the platform engine; the engine
  * just calls {@link IngestionAgent.decide} and injects the model.
  */
+// The transaction-decisive apiflc lines: the phase markers and — crucially — the gateway
+// HTTP status. Everything else in the correlated call (auth tokens, full JSON response
+// bodies, header dumps) is noise that only makes the reasoning model burn tokens, so we
+// surface the decisive lines FIRST and cap the rest.
+const DECISIVE = /(method completed with status|received response\.\s*status|response from data services|fedline request|x-correlation-id|correlationid)/i;
+
 function apiflcEvidence(ctx: AgentPromptContext): string {
-  const related = apiflcRelatedLogs(ctx.messageId, ctx.window)
+  const raw = apiflcRelatedLogs(ctx.messageId, ctx.window)
     .map((l) => l.raw ?? l.message)
     .filter(Boolean);
+  const decisive = raw.filter((l) => DECISIVE.test(l));
+  const others = raw.filter((l) => !DECISIVE.test(l));
+  const picked = [...decisive, ...others].slice(0, 25).map((l) => `  ${l.slice(0, 200)}`);
   return [
     `Transaction: ${ctx.messageId} (application apiflc)`,
     `Protocol phases, in order: ${apiflcTransactionProtocol.allPhases.join(' -> ')}`,
@@ -41,12 +50,12 @@ function apiflcEvidence(ctx: AgentPromptContext): string {
     `Phases received so far: ${Object.keys(ctx.phaseTs).join(', ') || '(none)'}`,
     '',
     'New protocol events this cycle (oldest first):',
-    ...(ctx.eventLines.length ? ctx.eventLines.map((l) => `  ${l.slice(0, 400)}`) : ['  (none)']),
+    ...(ctx.eventLines.length ? ctx.eventLines.map((l) => `  ${l.slice(0, 200)}`) : ['  (none)']),
     '',
-    'Full correlated call logs — every apiflc group for THIS transaction (handler,',
-    'authorizer, API-Gateway execution). The HTTP status appears ONLY here and in no',
-    'protocol event above; correlate and read it as the authoritative outcome per the spec:',
-    ...(related.length ? related.slice(0, 40).map((l) => `  ${l.slice(0, 400)}`) : ['  (no correlated logs this cycle)']),
+    'Correlated call logs — every apiflc group for THIS transaction (handler, authorizer,',
+    'API-Gateway execution), decisive lines first. The HTTP status appears ONLY here and in',
+    'no protocol event above; read it as the authoritative outcome per the spec:',
+    ...(picked.length ? picked : ['  (no correlated logs this cycle)']),
   ].join('\n');
 }
 

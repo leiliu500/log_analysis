@@ -40,7 +40,7 @@ test('apiflc agent joins the gateway execution log so the model reasons over the
   assert.equal(d?.status, 'completed');
   // The gateway status — which no protocol event carries — reached the prompt.
   assert.match(seenUser, /Method completed with status: 200/);
-  assert.match(seenUser, /Full correlated call logs/);
+  assert.match(seenUser, /Correlated call logs/);
 });
 
 test('apiflc agent defers (awaiting) when the correlated logs carry no HTTP status yet', async () => {
