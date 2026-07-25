@@ -29,6 +29,13 @@ locals {
     BEDROCK_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
     CLOUDWATCH_LOG_GROUPS  = join(",", concat(var.cloudwatch_log_groups, var.application_log_groups))
     APP_ENDPOINTS_JSON     = var.app_endpoints_json
+    # System-of-record reconciliation endpoints for the validation worker. Empty by
+    # default ⇒ reconciliation is disabled (returns 'unknown', never affects a verdict).
+    # Set these to activate the cross-check against the downstream ledger / Data Services.
+    SCP_RECONCILE_URL      = var.scp_reconcile_url
+    SCP_RECONCILE_TOKEN    = var.scp_reconcile_token
+    APIFLC_RECONCILE_URL   = var.apiflc_reconcile_url
+    APIFLC_RECONCILE_TOKEN = var.apiflc_reconcile_token
   }
 }
 

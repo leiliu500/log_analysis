@@ -2,6 +2,7 @@ import type { ApplicationDef } from '@log/shared';
 import { APPLICATION_LOG_GROUPS, parseLogGroup } from './logGroups.js';
 import { scpTransactionProtocol, scpMessageMeta } from './transactionProtocol.js';
 import { scpValidationChecks } from './validationChecks.js';
+import { scpReconcile } from './reconcile.js';
 import { DEFAULT_CASHMESSAGE_SAMPLES } from './samples.js';
 
 /** The SCP application: its CloudWatch log groups + REQUEST→ACK→RESPONSE protocol. */
@@ -43,5 +44,8 @@ export const scpApplication: ApplicationDef = {
     // Rooted in SCP's intermediate ACK phase; apiflc (REQUEST→RESPONSE) has no ACK
     // and declares no `checks`.
     checks: scpValidationChecks,
+    // System-of-record cross-check (env-configured; disabled until SCP_RECONCILE_URL
+    // is set) — the only signal that catches a false negative the logs can't show.
+    reconcile: scpReconcile,
   },
 };

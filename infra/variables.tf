@@ -87,6 +87,32 @@ variable "app_endpoints_json" {
   default     = "{\"scp\":\"https://scp.example.internal/api/execute\"}"
 }
 
+# ---- System-of-record reconciliation (validation worker) ----
+# Empty ⇒ reconciliation disabled (the hook returns 'unknown' and never affects a
+# verdict). Set to the downstream ledger / Data Services status API to activate.
+variable "scp_reconcile_url" {
+  description = "Base URL of the SCP settlement / system-of-record status API. Empty = disabled."
+  type        = string
+  default     = ""
+}
+variable "scp_reconcile_token" {
+  description = "Optional bearer token for the SCP reconciliation API."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+variable "apiflc_reconcile_url" {
+  description = "Base URL of the apiflc Data Services system-of-record status API. Empty = disabled."
+  type        = string
+  default     = ""
+}
+variable "apiflc_reconcile_token" {
+  description = "Optional bearer token for the apiflc reconciliation API."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "flow_revision" {
   description = "Bump to force the Bedrock flow to re-prepare, re-version, and re-point its alias."
   type        = number

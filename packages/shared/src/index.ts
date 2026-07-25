@@ -5,6 +5,7 @@ export * from './agentLifecycle.js';
 export * from './validation.js';
 export * from './transactionProtocol.js';
 export * from './application.js';
+export * from './reconcile.js';
 export * from './agents.js';
 export * from './chat.js';
 export * from './simulate.js';
