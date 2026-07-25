@@ -9,6 +9,7 @@ import {
   insertAnomaly,
   insertAlert,
   getUnreportedClosedAgents,
+  queryLogs,
 } from '@log/db';
 
 /**
@@ -324,7 +325,23 @@ export async function advanceAgents(
   const known = new Map<string, Agent>();
   for (const a of [...active, ...matching]) known.set(a.messageId, a);
 
-  const step = await stepAgentsDynamic(events, [...known.values()], { now, timeoutMs, registry, windowLogs: parsed });
+  // Cross-poll correlation window. The connector pulls INCREMENTALLY — each log lands in
+  // exactly one poll — so a transaction's later-arriving cross-group signal (apiflc's
+  // gateway HTTP status is ingested in a different poll than the handler logs, and is not
+  // a protocol event) would otherwise never share a window with its call. Correlate over
+  // recent STORED logs spanning an agent's active lifetime, merged with this poll's logs
+  // (which may not be persisted yet), so app joins (`relatedLogs`) see the whole call.
+  let windowLogs = parsed;
+  try {
+    const stored = await queryLogs({ from: now - timeoutMs, to: now, limit: 10000 });
+    const byId = new Map<string, ParsedLog>();
+    for (const l of [...stored, ...parsed]) byId.set(l.id, l);
+    windowLogs = [...byId.values()];
+  } catch (err) {
+    console.error('advanceAgents: correlation-window query failed, using this poll only', (err as Error).message);
+  }
+
+  const step = await stepAgentsDynamic(events, [...known.values()], { now, timeoutMs, registry, windowLogs });
 
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
   await upsertAgents(toPersist);
