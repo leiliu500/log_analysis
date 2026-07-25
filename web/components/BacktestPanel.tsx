@@ -70,11 +70,18 @@ function ModeBadge({ mode }: { mode: FailureMode }) {
 }
 
 function CaseRow({ c }: { c: CaseSummary }) {
+  const isGap = !!c.gap;
   const ok = c.resultMatched && c.deltaMatched !== false;
   return (
-    <tr className={`border-b border-edge/50 ${ok ? '' : 'bg-red-500/5'}`}>
+    <tr className={`border-b border-edge/50 ${isGap ? 'bg-amber-500/5' : ok ? '' : 'bg-red-500/5'}`}>
       <td className="px-3 py-1.5">
-        {ok ? <span className="text-emerald-400">✓</span> : <span className="text-red-400">✗</span>}
+        {isGap ? (
+          <span className="text-amber-400" title={`missing rule: ${c.gap!.rule}`}>○</span>
+        ) : ok ? (
+          <span className="text-emerald-400">✓</span>
+        ) : (
+          <span className="text-red-400">✗</span>
+        )}
       </td>
       <td className="px-3 py-1.5"><ModeBadge mode={c.mode} /></td>
       <td className="px-3 py-1.5 text-slate-400">{c.app}</td>
@@ -82,7 +89,7 @@ function CaseRow({ c }: { c: CaseSummary }) {
       <td className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
         <span className={RESULT_STYLES[c.expected]}>{c.expected}</span>
         <span className="text-slate-600"> → </span>
-        <span className={`${RESULT_STYLES[c.actual]} ${c.resultMatched ? '' : 'underline decoration-red-500'}`}>{c.actual}</span>
+        <span className={`${RESULT_STYLES[c.actual]} ${!isGap && !c.resultMatched ? 'underline decoration-red-500' : ''}`}>{c.actual}</span>
       </td>
       <td className="px-3 py-1.5">
         {c.delta.length ? (
@@ -120,6 +127,8 @@ export function BacktestPanel({ summary }: { summary: BacktestSummary }) {
   );
 
   const m = summary.overall;
+  const openGaps = summary.gaps.filter((g) => g.status === 'open').length;
+  const totalCases = m.total + summary.gaps.length;
 
   return (
     <div className="space-y-6">
@@ -129,40 +138,36 @@ export function BacktestPanel({ summary }: { summary: BacktestSummary }) {
           <span className="text-2xl">{summary.passed ? '✅' : '❌'}</span>
           <div>
             <div className={`text-lg font-semibold ${summary.passed ? 'text-emerald-300' : 'text-red-300'}`}>
-              {summary.passed ? 'PASS — engine reproduced every human label' : 'FAIL — the engine diverged from the gold set'}
+              {summary.passed ? 'PASS — engine reproduced every gated label' : 'FAIL — the engine diverged from the gold set'}
             </div>
             <div className="text-sm text-slate-400">
-              {m.total} cases · {m.falsePositives} false positive{m.falsePositives === 1 ? '' : 's'} · {m.falseNegatives} false negative
-              {m.falseNegatives === 1 ? '' : 's'} · ran {new Date(summary.ranAt).toLocaleTimeString()}
+              {totalCases} cases ({m.total} gated{summary.gaps.length ? ` + ${summary.gaps.length} gap` : ''}) · {m.falsePositives} false positive
+              {m.falsePositives === 1 ? '' : 's'} · {m.falseNegatives} false negative{m.falseNegatives === 1 ? '' : 's'}
+              {openGaps ? <span className="text-amber-300"> · {openGaps} open gap{openGaps === 1 ? '' : 's'}</span> : null} · ran{' '}
+              {new Date(summary.ranAt).toLocaleTimeString()}
             </div>
           </div>
         </div>
       </div>
 
       {/* KPI tiles */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <Kpi label="Cases" value={String(m.total)} />
-        <Kpi label="Correct" value={`${m.correct}/${m.total}`} tone={m.correct === m.total ? 'good' : 'bad'} />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+        <Kpi label="Cases" value={String(totalCases)} hint={`${m.total} gated + ${summary.gaps.length} gap case(s)`} />
+        <Kpi label="Correct" value={`${m.correct}/${m.total}`} tone={m.correct === m.total ? 'good' : 'bad'} hint="Over the gated (must-pass) cases" />
         <Kpi label="False Pos" value={String(m.falsePositives)} tone={m.falsePositives ? 'bad' : 'good'} hint="Engine flagged a clean-labelled transaction" />
         <Kpi label="False Neg" value={String(m.falseNegatives)} tone={m.falseNegatives ? 'bad' : 'good'} hint="Engine passed a problem-labelled transaction" />
         <Kpi label="Precision" value={pct(m.precision)} tone={m.precision === 1 ? 'good' : 'bad'} />
         <Kpi label="Recall" value={pct(m.recall)} tone={m.recall === 1 ? 'good' : 'bad'} />
-      </div>
-
-      {/* Metrics breakdowns */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <MetricsTable title="By application" rows={Object.entries(summary.byApp).sort().map(([label, mm]) => ({ label, m: mm }))} />
-        <MetricsTable title="By failure mode" rows={Object.entries(summary.byMode).sort().map(([label, mm]) => ({ label, m: mm }))} />
+        <Kpi label="Open Gaps" value={String(openGaps)} tone={openGaps ? 'bad' : 'good'} hint="Validation rules the worker does not yet enforce" />
       </div>
 
       {/* Missing rules — validator gaps (documented, not counted against PASS) */}
       {summary.gaps.length > 0 && (
-        <div className="rounded-xl border border-amber-600/40 bg-amber-500/5 p-4">
+        <div className="rounded-xl border border-amber-600/40 bg-amber-500/10 p-4">
           <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-lg">🕳️</span>
             <h2 className="text-base font-semibold text-amber-200">Missing Rules — validator gaps</h2>
-            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300">
-              {summary.gaps.filter((g) => g.status === 'open').length} open
-            </span>
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300">{openGaps} open</span>
             <span className="text-xs text-slate-500">rules the worker does not yet enforce — surfaced to track, not counted against PASS</span>
           </div>
           <div className="space-y-2">
@@ -185,6 +190,12 @@ export function BacktestPanel({ summary }: { summary: BacktestSummary }) {
           </div>
         </div>
       )}
+
+      {/* Metrics breakdowns */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <MetricsTable title="By application" rows={Object.entries(summary.byApp).sort().map(([label, mm]) => ({ label, m: mm }))} />
+        <MetricsTable title="By failure mode" rows={Object.entries(summary.byMode).sort().map(([label, mm]) => ({ label, m: mm }))} />
+      </div>
 
       {/* Per-case review */}
       <div>
