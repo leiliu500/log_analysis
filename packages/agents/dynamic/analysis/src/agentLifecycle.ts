@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Agent, Anomaly, ApplicationDef, LogSourceType, ParsedLog, Severity, ApplicationRegistry } from '@log/shared';
-import { reasonTransition, deterministicDecision, type TransitionDecision } from './reasonTransition.js';
+import type { Agent, Anomaly, ApplicationDef, AgentPromptContext, LogSourceType, ParsedLog, Severity, ApplicationRegistry, TransitionDecision, TransitionReasoner } from '@log/shared';
+import { converseJson } from './bedrock.js';
 import {
   getActiveAgents,
   getAgentsByMessageIds,
@@ -12,12 +12,17 @@ import {
 } from '@log/db';
 
 /**
- * The stateful ingestion-agent lifecycle. Unlike the ephemeral per-batch model,
- * an agent persists across poll cycles: it is spawned on the initiating message
- * and stays ACTIVE until it receives a terminal signal, then closes and moves to
- * history. The transaction shape (which phases, in what order, and what counts as
- * a success) is supplied by a {@link TransactionProtocol}, so the engine is
- * generic — SCP is REQUEST → ACK → RESPONSE, another app may be REQUEST → RESPONSE.
+ * The stateful ingestion-agent lifecycle. Every application's ingestion is dispatched to
+ * the DYNAMIC agent: an agent persists across poll cycles — spawned on the initiating
+ * message, ACTIVE until a terminal signal, then closed and moved to history — and each
+ * per-transaction state TRANSITION is reasoned by the owning app's own ingestion agent
+ * ({@link ApplicationDef.ingestionAgent}) from its `transaction.md`, never a hardcoded
+ * state machine, and never with any app-specific logic in this engine.
+ *
+ * The only deterministic pieces left are (1) app-owned EXTRACTION — `protocol.eventOf`
+ * turns a raw log into a phase event (parsing, not lifecycle logic; it lives in the app
+ * package) — and (2) the wall-clock inactivity timeout, an app-configured SLA backstop.
+ * On a model error the transition is simply deferred to the next poll.
  */
 
 /** One correlated message extracted from a parsed log. */
@@ -31,7 +36,7 @@ export interface AgentEvent {
   logGroup?: string;
   /** Owning application id (which protocol produced this event). */
   application: string;
-  /** The raw log line — passed to the dynamic (LLM-reasoned) lifecycle so it reasons over actual log text. */
+  /** The raw log line — handed to the dynamic agent so it reasons over actual log text. */
   raw?: string;
 }
 
@@ -81,109 +86,6 @@ export interface StepResult {
   byApp: Record<string, AgentCounts>;
 }
 
-/**
- * Advance the agent state machine over a batch of events (pure — no DB). Given
- * the currently-known agents (active ones + any matching this window's ids),
- * apply each event per the protocol and time out stuck agents. Terminal agents
- * are immutable (idempotent across overlapping poll windows).
- */
-export function stepAgents(events: AgentEvent[], known: Agent[], opts: StepOptions): StepResult {
-  const { now, timeoutMs, registry } = opts;
-  const protoFor = (appId?: string) => registry.byId(appId)?.protocol;
-  const agents = new Map<string, Agent>();
-  for (const a of known) {
-    agents.set(a.messageId, {
-      ...a,
-      phaseTs: { ...(a.phaseTs ?? {}) },
-      phases: a.phases ?? protoFor(a.application)?.allPhases ?? [],
-    });
-  }
-  const changed = new Set<string>();
-  let spawned = 0;
-  let advanced = 0;
-  let closed = 0;
-  const byApp: Record<string, AgentCounts> = {};
-  const bump = (app: string | undefined, k: keyof AgentCounts): void => {
-    (byApp[app ?? 'unknown'] ??= { spawned: 0, advanced: 0, closed: 0 })[k] += 1;
-  };
-
-  const close = (a: Agent, status: Agent['status'], detail: string, severity?: string): void => {
-    a.status = status;
-    a.active = false;
-    a.waitingFor = undefined;
-    a.closedAt = now;
-    a.detail = detail;
-    if (severity) a.severity = severity;
-    closed += 1;
-    bump(a.application, 'closed');
-  };
-
-  for (const e of events) {
-    let a = agents.get(e.corrId);
-    if (!a) {
-      // Spawn — on the initiating message, or lazily if a later phase arrives
-      // first (its initiating message was in an earlier, already-aged-out window).
-      const sp = protoFor(e.application);
-      a = {
-        messageId: e.corrId,
-        application: e.application,
-        status: 'awaiting',
-        active: true,
-        waitingFor: sp?.phases[0],
-        phases: sp?.allPhases ?? [],
-        phaseTs: {},
-        source: e.source,
-        logGroup: e.logGroup,
-        spawnedAt: e.ts,
-        updatedAt: now,
-      };
-      agents.set(e.corrId, a);
-      spawned += 1;
-      bump(a.application, 'spawned');
-      changed.add(e.corrId);
-    }
-    if (!a.active) continue; // terminal — ignore further events
-
-    if (a.phaseTs[e.type] === undefined) a.phaseTs[e.type] = e.ts;
-    if (e.ackCode) a.ackCode = e.ackCode;
-
-    // The initiating phase only records its timestamp; the follow-up phases drive
-    // the state machine (resolved via the agent's owning application protocol).
-    const proto = protoFor(a.application ?? e.application);
-    if (proto && e.type !== proto.initial && proto.phases.includes(e.type)) {
-      if (e.ackCode && !proto.isSuccess(e.ackCode)) {
-        close(a, 'failed', `${e.type} failed — ackCode ${e.ackCode}`, 'high');
-      } else {
-        const remaining = proto.phases.filter((p) => a!.phaseTs[p] === undefined);
-        if (remaining.length === 0) {
-          close(a, 'completed', `${e.type} received`);
-        } else {
-          a.waitingFor = remaining[0];
-          a.detail = `${e.type} ok — awaiting ${remaining[0]}`;
-          advanced += 1;
-          bump(a.application, 'advanced');
-        }
-      }
-    }
-    a.updatedAt = now;
-    changed.add(e.corrId);
-  }
-
-  // Time out agents that have been waiting too long (covers the "or error" path).
-  for (const a of agents.values()) {
-    if (!a.active) continue;
-    const tsVals = Object.values(a.phaseTs);
-    const last = tsVals.length ? Math.max(...tsVals) : a.spawnedAt;
-    if (now - last > timeoutMs) {
-      close(a, 'error', `Timed out awaiting ${a.waitingFor ?? 'next phase'}`, 'medium');
-      a.updatedAt = now;
-      changed.add(a.messageId);
-    }
-  }
-
-  return { agents, changed, spawned, advanced, closed, byApp };
-}
-
 /** Bounded-concurrency map — runs `fn` over `items`, at most `limit` in flight. */
 async function mapPool<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
   let next = 0;
@@ -196,50 +98,28 @@ async function mapPool<T>(items: T[], limit: number, fn: (item: T, index: number
   await Promise.all(workers);
 }
 
-/** Sum two per-application count maps. */
-function mergeByApp(a: Record<string, AgentCounts>, b: Record<string, AgentCounts>): Record<string, AgentCounts> {
-  const out: Record<string, AgentCounts> = {};
-  for (const src of [a, b]) {
-    for (const [k, v] of Object.entries(src)) {
-      const c = (out[k] ??= { spawned: 0, advanced: 0, closed: 0 });
-      c.spawned += v.spawned;
-      c.advanced += v.advanced;
-      c.closed += v.closed;
-    }
-  }
-  return out;
-}
+/** The default transition reasoner — a Bedrock structured-output call, injected into each
+ *  app's {@link IngestionAgent} so the app packages never depend on Bedrock or this engine. */
+const defaultReasoner: TransitionReasoner = (system, user) =>
+  converseJson<Partial<TransitionDecision>>(user, { system, temperature: 0, maxTokens: 400 });
 
 /**
- * The DYNAMIC lifecycle step — the LLM-reasoned counterpart of {@link stepAgents} for
- * apps that opt in via `dynamicLifecycle`. Extraction/correlation + phaseTs bookkeeping
- * stay deterministic (the events come from `eventOf`); only the per-transaction state
- * TRANSITION is reasoned from the app's `transaction.md` ({@link reasonTransition}).
- * Timeouts stay a deterministic wall-clock check. Bounded concurrency + a per-poll cap
- * protect the Lambda; beyond the cap (or on any model error) it uses the deterministic
- * decision, so this can never block or corrupt ingestion.
+ * The dynamic lifecycle step (pure — no DB). Extraction/correlation + phaseTs bookkeeping
+ * are deterministic (the events come from the app's `eventOf`); the per-transaction state
+ * TRANSITION is delegated to the owning app's {@link ApplicationDef.ingestionAgent}, which
+ * assembles its own evidence and reasons it against its `transaction.md`. This engine holds
+ * no app-specific logic — it only dispatches and injects the model. Bounded concurrency + a
+ * per-poll cap protect the Lambda; beyond the cap, or on any model error (a null decision),
+ * no transition is applied and the agent is retried next poll. Timeouts are a deterministic
+ * wall-clock check.
  */
 export async function stepAgentsDynamic(
   events: AgentEvent[],
   known: Agent[],
-  opts: StepOptions & { reasoner?: Parameters<typeof reasonTransition>[2]; maxLlm?: number; windowLogs?: ParsedLog[] },
+  opts: StepOptions & { reasoner?: TransitionReasoner; maxLlm?: number; windowLogs?: ParsedLog[] },
 ): Promise<StepResult> {
   const { now, timeoutMs, registry } = opts;
   const windowLogs = opts.windowLogs ?? [];
-
-  /**
-   * The RAW lines of the WHOLE correlated call for a transaction — resolved by the app's
-   * cross-log-group join (apiflc's handler + authorizer + gateway) so the LLM can read
-   * signals no protocol event carries (the HTTP status lives only in the gateway log).
-   * Falls back to the eventOf-correlated lines when the app declares no join.
-   */
-  const relatedLinesFor = (app: ApplicationDef, id: string): string[] => {
-    if (!windowLogs.length) return [];
-    const related = app.relatedLogs
-      ? app.relatedLogs(id, windowLogs)
-      : windowLogs.filter((l) => app.protocol.eventOf(l)?.corrId === id);
-    return related.map((l) => l.raw ?? l.message).filter(Boolean);
-  };
   const agents = new Map<string, Agent>();
   for (const a of known) {
     agents.set(a.messageId, {
@@ -303,25 +183,25 @@ export async function stepAgentsDynamic(
   }
 
   // Reason each transition from transaction.md (bounded concurrency); cap protects the
-  // Lambda timeout — overflow uses the deterministic decision.
+  // Lambda timeout — beyond it (or on a null/no-transition result) the agent is left
+  // unchanged and retried next poll.
   const maxLlm = opts.maxLlm ?? Number(process.env.INGEST_DYNAMIC_MAX ?? 40);
   await mapPool(decisions, 6, async (dec, idx) => {
-    const d: TransitionDecision =
-      idx < maxLlm
-        ? await reasonTransition(
-            dec.app,
-            {
-              messageId: dec.id,
-              currentStatus: dec.a.status,
-              phaseTs: dec.a.phaseTs,
-              ackCode: dec.a.ackCode,
-              events: dec.evs,
-              relatedLogs: relatedLinesFor(dec.app, dec.id),
-              now,
-            },
-            opts.reasoner,
-          )
-        : deterministicDecision(dec.app, dec.a.phaseTs, dec.a.ackCode);
+    if (idx >= maxLlm) return; // over the per-poll cap — defer to next poll
+    const ctx: AgentPromptContext = {
+      messageId: dec.id,
+      currentStatus: dec.a.status,
+      phaseTs: dec.a.phaseTs,
+      ackCode: dec.a.ackCode,
+      phasesThisCycle: dec.evs.map((e) => e.type),
+      eventLines: dec.evs.map((e) => e.raw ?? '').filter(Boolean),
+      window: windowLogs,
+      now,
+    };
+    const agent = dec.app.ingestionAgent;
+    if (!agent) return; // app declares no dynamic agent — only its timeouts fire
+    const d = await agent.decide(ctx, opts.reasoner ?? defaultReasoner);
+    if (!d) return; // no transition this poll (model error / no spec) — leave unchanged
     const a = dec.a;
     if (d.status === 'awaiting') {
       a.status = 'awaiting';
@@ -344,7 +224,7 @@ export async function stepAgentsDynamic(
     }
   });
 
-  // Deterministic timeout pass (a clock check, not reasoning).
+  // Deterministic timeout pass (a clock check, not reasoning) — the SLA backstop.
   for (const a of agents.values()) {
     if (!a.active) continue;
     const tsVals = Object.values(a.phaseTs);
@@ -390,10 +270,10 @@ export const agentAnomalyFingerprint = (a: Agent): string => `tx:${a.messageId}`
 
 /**
  * DB-backed driver — the complete per-poll lifecycle step. Loads the relevant
- * agents (all active + any matching this window's ids), advances the state
- * machine against the protocol, persists changes, and reports a Anomaly for every
- * agent in history that closed NOT-completed (failed / error) and has none yet.
- * Runs even with no new logs so idle polls still fire timeouts + their Anomalies.
+ * agents (all active + any matching this window's ids), advances every application's
+ * transactions through the dynamic (LLM-reasoned) agent, persists changes, and reports a
+ * Anomaly for every agent in history that closed NOT-completed (failed / error) and has
+ * none yet. Runs even with no new logs so idle polls still fire timeouts + their Anomalies.
  */
 export async function advanceAgents(
   parsed: ParsedLog[],
@@ -418,31 +298,7 @@ export async function advanceAgents(
   const known = new Map<string, Agent>();
   for (const a of [...active, ...matching]) known.set(a.messageId, a);
 
-  // Route each app's transactions to its lifecycle: the deterministic state machine,
-  // or — for apps that opt into `dynamicLifecycle` — the LLM-reasoned dynamic lifecycle
-  // (prompted by transaction.md), which falls back to deterministic on any model error.
-  const isDynamic = (appId?: string): boolean => !!registry.byId(appId)?.dynamicLifecycle;
-  const knownList = [...known.values()];
-  const detStep = stepAgents(
-    events.filter((e) => !isDynamic(e.application)),
-    knownList.filter((a) => !isDynamic(a.application)),
-    { now, timeoutMs, registry },
-  );
-  const dynEvents = events.filter((e) => isDynamic(e.application));
-  const dynKnown = knownList.filter((a) => isDynamic(a.application));
-  const dynStep: StepResult =
-    dynEvents.length || dynKnown.length
-      ? await stepAgentsDynamic(dynEvents, dynKnown, { now, timeoutMs, registry, windowLogs: parsed })
-      : { agents: new Map(), changed: new Set(), spawned: 0, advanced: 0, closed: 0, byApp: {} };
-
-  const step: StepResult = {
-    agents: new Map([...detStep.agents, ...dynStep.agents]),
-    changed: new Set([...detStep.changed, ...dynStep.changed]),
-    spawned: detStep.spawned + dynStep.spawned,
-    advanced: detStep.advanced + dynStep.advanced,
-    closed: detStep.closed + dynStep.closed,
-    byApp: mergeByApp(detStep.byApp, dynStep.byApp),
-  };
+  const step = await stepAgentsDynamic(events, [...known.values()], { now, timeoutMs, registry, windowLogs: parsed });
 
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
   await upsertAgents(toPersist);

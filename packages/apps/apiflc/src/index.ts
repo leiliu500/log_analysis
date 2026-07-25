@@ -10,5 +10,6 @@ export * from './transactionProtocol.js';
 export * from './join.js';
 export * from './samples.js';
 export * from './application.js';
+export * from './agent.js';
 export * from './httpOutcomes.js';
 export * from './reconcile.js';

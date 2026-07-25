@@ -1,6 +1,7 @@
 import type { ApplicationDef } from '@log/shared';
 import { APPLICATION_LOG_GROUPS, parseLogGroup } from './logGroups.js';
 import { scpTransactionProtocol, scpMessageMeta } from './transactionProtocol.js';
+import { scpIngestionAgent } from './agent.js';
 import { scpValidationChecks } from './validationChecks.js';
 import { scpReconcile } from './reconcile.js';
 import { DEFAULT_CASHMESSAGE_SAMPLES } from './samples.js';
@@ -11,12 +12,11 @@ export const scpApplication: ApplicationDef = {
   displayName: 'SCP',
   logGroups: APPLICATION_LOG_GROUPS,
   protocol: scpTransactionProtocol,
-  // Regular ingestion agent: SCP's own REQUEST→ACK→RESPONSE transaction spec.
+  // Dynamic ingestion agent: SCP's REQUEST→ACK→RESPONSE transaction spec is the LLM
+  // system prompt; SCP's own agent assembles the evidence (its ackCode rides on the
+  // cashMessage events, so no cross-group join) and reasons each transition.
   transactionPromptPath: 'apps/scp/transaction.md',
-  // Dispatch SCP's ingestion to the DYNAMIC agent: lifecycle transitions are reasoned
-  // from transaction.md over the raw logs (deterministic extraction + validation still
-  // shadow it; any model error falls back to the deterministic decision).
-  dynamicLifecycle: true,
+  ingestionAgent: scpIngestionAgent,
   // Simulator: SCP uses the correlated cashMessage REQUEST/ACK/RESPONSE set model.
   matchLogGroup: parseLogGroup,
   defaultSamples: DEFAULT_CASHMESSAGE_SAMPLES,

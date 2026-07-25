@@ -181,8 +181,10 @@ export function DashboardView() {
       </div>
       <p className="mb-4 text-sm text-slate-400">
         The scheduled ingestion poller runs agentic analysis (parse · detect anomalies · reason ·
-        learn) plus the request/ack/response agent lifecycle. This view auto-refreshes every{' '}
-        {REFRESH_MS / 1000}s. Use <b>Analyze now</b> to run a cycle immediately.
+        learn). Each application dispatches a <b>dynamic agent</b> that reasons every transaction&apos;s
+        lifecycle state transitions from its own <code>transaction.md</code> over the correlated logs
+        (no hardcoded state machine). This view auto-refreshes every {REFRESH_MS / 1000}s. Use{' '}
+        <b>Analyze now</b> to run a cycle immediately.
       </p>
 
       {analysis && (

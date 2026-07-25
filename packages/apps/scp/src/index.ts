@@ -13,4 +13,5 @@ export * from './transactionProtocol.js';
 export * from './validationChecks.js';
 export * from './reconcile.js';
 export * from './samples.js';
+export * from './agent.js';
 export * from './application.js';
