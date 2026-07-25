@@ -7,6 +7,17 @@ import type { BacktestReport, CaseResult, Metrics } from './types.js';
  * ParsedLog fixtures each case carries (which are large and not serializable).
  */
 export function toSummary(r: BacktestReport, ranAt: number): BacktestSummary {
+  const gaps = r.results
+    .filter((c) => c.case.knownGap)
+    .map((c) => ({
+      rule: c.case.knownGap!.rule,
+      detail: c.case.knownGap!.detail,
+      case: c.case.name,
+      app: c.case.app,
+      status: c.gapStatus ?? ('open' as const),
+      expected: c.case.expected as string,
+      actual: c.actual as string,
+    }));
   return {
     passed: r.passed,
     ranAt,
@@ -24,7 +35,9 @@ export function toSummary(r: BacktestReport, ranAt: number): BacktestSummary {
       deltaMatched: c.deltaMatched,
       delta: c.delta,
       expectDelta: c.case.expectDelta ? String(c.case.expectDelta) : undefined,
+      gap: c.case.knownGap ? { rule: c.case.knownGap.rule, detail: c.case.knownGap.detail, status: c.gapStatus ?? ('open' as const) } : undefined,
     })),
+    gaps,
   };
 }
 
@@ -73,6 +86,19 @@ export function formatReport(r: BacktestReport): string {
   detail('RESULT MISMATCHES', r.mismatches, (c) => `${c.case.name}\n        expected ${c.case.expected}, got ${c.actual}  [delta: ${c.delta.join('; ') || '—'}]`);
   detail('EXPECTED-DELTA MISSES', r.deltaMisses, (c) => `${c.case.name}\n        expected delta ${String(c.case.expectDelta)}, got [${c.delta.join('; ') || '—'}]`);
 
+  // Missing-rule gaps — rules the validator does NOT yet enforce (do not affect PASS).
+  const gapRows = r.results.filter((c) => c.case.knownGap);
+  if (gapRows.length) {
+    const open = gapRows.filter((c) => c.gapStatus === 'open').length;
+    lines.push(`  MISSING RULES / GAPS (${open} open of ${gapRows.length} — not counted against PASS):`);
+    for (const c of gapRows) {
+      const mark = c.gapStatus === 'resolved' ? '✔ resolved' : '○ open    ';
+      lines.push(`    ${mark}  [${c.case.app}] ${c.case.knownGap!.rule} — ${c.case.knownGap!.detail}`);
+      lines.push(`                should be ${c.case.expected}, engine gives ${c.actual}`);
+    }
+    lines.push('');
+  }
+
   lines.push('─'.repeat(72));
   lines.push(
     r.passed
@@ -93,6 +119,7 @@ export function reportToJson(r: BacktestReport): string {
       byMode: r.byMode,
       mismatches: r.mismatches.map((c) => ({ name: c.case.name, expected: c.case.expected, actual: c.actual, delta: c.delta })),
       deltaMisses: r.deltaMisses.map((c) => ({ name: c.case.name, expectDelta: String(c.case.expectDelta), delta: c.delta })),
+      gaps: r.results.filter((c) => c.case.knownGap).map((c) => ({ rule: c.case.knownGap!.rule, detail: c.case.knownGap!.detail, app: c.case.app, status: c.gapStatus, expected: c.case.expected, actual: c.actual })),
     },
     null,
     2,

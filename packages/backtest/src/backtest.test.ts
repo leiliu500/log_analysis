@@ -65,6 +65,21 @@ test('toSummary produces a JSON-safe summary the UI can render (no RegExp / logs
   assert.ok(!json.includes('ingestedAt'), 'raw log fixtures leaked into the summary');
 });
 
+test('gaps: known-missing-rule cases are surfaced as gaps, not gate failures', () => {
+  const r = runBacktest(corpus);
+  assert.equal(r.passed, true, 'documented known gaps must NOT break the pass gate');
+  const s = toSummary(r, 1);
+  assert.ok(s.gaps.length >= 3, `expected >= 3 documented validator gaps, got ${s.gaps.length}`);
+  // Gap cases are excluded from the confusion metrics (they'd otherwise be false negatives).
+  assert.equal(s.overall.falseNegatives, 0);
+  for (const g of s.gaps) {
+    assert.ok(g.rule && g.detail, 'each gap must name a rule + detail');
+    assert.ok(g.status === 'open' || g.status === 'resolved');
+  }
+  // Every gap in the corpus is currently OPEN (the rules are genuinely missing).
+  assert.ok(s.gaps.every((g) => g.status === 'open'), 'a gap resolved unexpectedly — promote it to a normal case');
+});
+
 test('harness discriminates: a deliberately flipped label is caught as a mismatch', () => {
   // Guards against a harness that trivially passes everything.
   const broken = corpus.map((c) => (c.name.startsWith('apiflc: clean HTTP 200') ? { ...c, expected: 'failure' as const } : c));
