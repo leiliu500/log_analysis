@@ -11,6 +11,7 @@ export * from './chat.js';
 export * from './simulate.js';
 export * from './schedule.js';
 export * from './prompts.js';
+export * from './ingestionAgent.js';
 export * from './backtest.js';
 
 /** Small helpers shared across packages. */

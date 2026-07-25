@@ -3,6 +3,7 @@ import { APIFLC_LOG_GROUPS, parseApiflcLogGroup, splitApiflcByLogGroup } from '.
 import { apiflcTransactionProtocol } from './transactionProtocol.js';
 import { apiflcRelatedLogs } from './join.js';
 import { apiflcDeriveOutcome } from './httpOutcomes.js';
+import { apiflcIngestionAgent } from './agent.js';
 import { apiflcReconcile } from './reconcile.js';
 import { APIFLC_SAMPLE } from './samples.js';
 
@@ -12,11 +13,11 @@ export const apiflcApplication: ApplicationDef = {
   displayName: 'apiflc',
   logGroups: APIFLC_LOG_GROUPS,
   protocol: apiflcTransactionProtocol,
-  // Regular ingestion agent: apiflc's own REQUEST→RESPONSE transaction spec.
+  // Dynamic ingestion agent: apiflc's REQUEST→RESPONSE transaction spec (the LLM system
+  // prompt) + apiflc's own agent, which joins the gateway execution log so it reasons over
+  // the HTTP status. All apiflc-specific correlation lives in the app package.
   transactionPromptPath: 'apps/apiflc/transaction.md',
-  // Dispatch apiflc's ingestion to the DYNAMIC agent (transaction.md-reasoned lifecycle
-  // transitions; deterministic extraction + validation shadow it, with fallback).
-  dynamicLifecycle: true,
+  ingestionAgent: apiflcIngestionAgent,
   // Simulator: apiflc logs are raw Lambda / API-Gateway lines — write verbatim.
   // A single paste may target several groups (handler / authorizer / execution).
   matchLogGroup: parseApiflcLogGroup,

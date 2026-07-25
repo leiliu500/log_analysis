@@ -1,6 +1,31 @@
 import type { ParsedLog } from './logs.js';
 import type { Severity } from './anomalies.js';
 import type { TransactionProtocol } from './transactionProtocol.js';
+import type { IngestionAgent } from './ingestionAgent.js';
+
+/**
+ * The per-transaction context handed to an app's {@link IngestionAgent.decide} so it can
+ * assemble its own evidence from its OWN logs. Everything here is plain data (no engine
+ * internals): the transaction's current state, the protocol events seen this cycle, and
+ * the full poll window so the app can correlate across its groups (e.g. join apiflc's
+ * gateway execution log to read the HTTP status).
+ */
+export interface AgentPromptContext {
+  messageId: string;
+  /** Current persisted status ('new' when the transaction has not been spawned yet). */
+  currentStatus: string;
+  /** Protocol phase → first-seen timestamp, accumulated across polls. */
+  phaseTs: Record<string, number>;
+  /** The decisive ackCode seen so far, if any. */
+  ackCode?: string;
+  /** Protocol phases observed this cycle, oldest first. */
+  phasesThisCycle: string[];
+  /** Raw log lines of this cycle's protocol events, oldest first. */
+  eventLines: string[];
+  /** The whole poll window — the app correlates its own related logs from this. */
+  window: readonly ParsedLog[];
+  now: number;
+}
 
 /**
  * An application onboarded to the platform (e.g. SCP, apiflc). It declares which
@@ -27,15 +52,14 @@ export interface ApplicationDef {
    */
   transactionPromptPath?: string;
   /**
-   * Opt this application's ingestion lifecycle into the DYNAMIC agent: instead of the
-   * deterministic state machine, each transaction's state transition is REASONED by an
-   * LLM prompted with this app's `transactionPromptPath` (transaction.md) over the
-   * correlated raw logs. Extraction/correlation stay deterministic (`protocol.eventOf`)
-   * — so the validation worker keeps an independent, non-LLM view to catch a bad
-   * transition — and any model error/timeout falls back to the deterministic decision.
-   * Absent/false ⇒ the deterministic lifecycle (unchanged).
+   * This application's DYNAMIC ingestion agent — it OWNS how a transaction's context
+   * becomes a lifecycle transition: assembling its own evidence (correlating its own logs
+   * across its groups — apiflc joins the gateway execution log to read the HTTP status the
+   * handler events never carry) and reasoning it against its `transaction.md`. The engine
+   * only dispatches to it, injecting the model call; no application logic lives in the
+   * platform packages. Unset ⇒ this app makes no dynamic transitions (only timeouts fire).
    */
-  dynamicLifecycle?: boolean;
+  ingestionAgent?: IngestionAgent;
 
   // ---- Simulator support (each application supplies its own) ----
   /** Detect this application's target log group named in a message (names/keywords). */
