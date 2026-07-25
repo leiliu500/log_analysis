@@ -36,8 +36,10 @@ The handler "Response from Data Services" line marks that a RESPONSE phase was
 logged, but by itself it does NOT prove success — it often carries no status. Do
 NOT report "blank status, interpreted as success". When the handler RESPONSE is
 present but NO HTTP status line is in the correlated logs yet, the outcome is not
-yet proven: keep awaiting (the gateway line may arrive in a later poll), and only
-the inactivity timeout closes it as an error.
+yet proven: keep awaiting. The API-Gateway execution log (which carries the status)
+is often written in a later poll than the handler log — you are re-checked once it
+appears in the correlated window, and you complete on that status then. Only if it
+never arrives does the inactivity timeout close the transaction as an error.
 
 Lifecycle:
 

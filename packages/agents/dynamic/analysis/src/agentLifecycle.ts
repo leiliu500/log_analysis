@@ -182,6 +182,32 @@ export async function stepAgentsDynamic(
     if (app) decisions.push({ id, a, app, evs });
   }
 
+  // Some apps' decisive signal is NOT a protocol event, so no eventOf fired to schedule
+  // the transaction above (apiflc's outcome is the API-Gateway HTTP status, logged under
+  // the gateway requestId — it never becomes an event). Ask each app, via its own
+  // `pendingSignals` hook, which of its ACTIVE transactions have such a signal in THIS
+  // window; the engine re-reasons those. The criterion is entirely app-owned — no
+  // application's out-of-band signal is known here.
+  const scheduled = new Set(decisions.map((d) => d.id));
+  const activeIdsByApp = new Map<string, string[]>();
+  for (const a of agents.values()) {
+    if (!a.active || scheduled.has(a.messageId)) continue;
+    const list = activeIdsByApp.get(a.application ?? '') ?? [];
+    list.push(a.messageId);
+    activeIdsByApp.set(a.application ?? '', list);
+  }
+  for (const [appId, ids] of activeIdsByApp) {
+    const app = registry.byId(appId);
+    if (!app?.pendingSignals || !app.ingestionAgent) continue;
+    for (const id of app.pendingSignals(windowLogs, ids)) {
+      const a = agents.get(id);
+      if (a?.active && !scheduled.has(id)) {
+        decisions.push({ id, a, app, evs: [] });
+        scheduled.add(id);
+      }
+    }
+  }
+
   // Reason each transition from transaction.md (bounded concurrency); cap protects the
   // Lambda timeout — beyond it (or on a null/no-transition result) the agent is left
   // unchanged and retried next poll.

@@ -189,6 +189,34 @@ test('a timed-out agent maps to its stable anomaly fingerprint', async () => {
   assert.equal(agentAnomalyFingerprint(a), 'tx:001');
 });
 
+test('an awaiting agent is re-reasoned when its app.pendingSignals fires (no new event)', async () => {
+  // Reproduces the apiflc gateway-status case generically: the decisive signal is a
+  // non-event log that arrives in a LATER poll, so nothing would re-schedule the agent
+  // and it would time out — unless the app's pendingSignals hook re-schedules it.
+  const plog = (raw: string): ParsedLog => ({ raw, source: 'cloudwatch', stream: 'g', timestamp: NOW } as unknown as ParsedLog);
+  const gwRegistry = new ApplicationRegistry().register({
+    id: 'gw',
+    displayName: 'GW',
+    logGroups: [],
+    protocol: testProtocol,
+    ingestionAgent: {
+      decide: async (c) => (c.window.some((l) => /STATUS200/.test(l.raw)) ? { status: 'completed', detail: 'gateway 200' } : { status: 'awaiting', waitingFor: 'RESPONSE', detail: 'awaiting status' }),
+    },
+    pendingSignals: (window, ids) => (window.some((l) => /STATUS200/.test(l.raw)) ? [...ids] : []),
+  });
+  const known: Agent[] = [{ messageId: 'g1', application: 'gw', status: 'awaiting', active: true, waitingFor: 'RESPONSE', phases: ['REQUEST', 'ACK', 'RESPONSE'], phaseTs: { REQUEST: NOW, RESPONSE: NOW }, spawnedAt: NOW, updatedAt: NOW }];
+
+  // Later poll: NO new events, but the gateway status is now in the window.
+  const done = await stepAgentsDynamic([], structuredClone(known), { now: NOW + 60_000, timeoutMs: TIMEOUT, registry: gwRegistry, windowLogs: [plog('(abc) Method completed with STATUS200')] });
+  assert.equal(done.agents.get('g1')!.status, 'completed');
+  assert.equal(done.agents.get('g1')!.active, false);
+
+  // Same poll but status not present yet ⇒ pendingSignals is silent ⇒ agent left awaiting.
+  const still = await stepAgentsDynamic([], structuredClone(known), { now: NOW + 60_000, timeoutMs: TIMEOUT, registry: gwRegistry, windowLogs: [plog('(abc) Method request headers: X-Correlation-ID=g1')] });
+  assert.equal(still.agents.get('g1')!.status, 'awaiting');
+  assert.equal(still.agents.get('g1')!.active, true);
+});
+
 test('agentEvents extracts ordered request/ack/response from parsed logs', () => {
   const cash = (type: string, tags: Record<string, string>) =>
     `<ns:cashMessage xmlns:ns="x"><header><messageType>${type}</messageType>${Object.entries(tags)

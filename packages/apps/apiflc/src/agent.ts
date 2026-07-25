@@ -1,7 +1,25 @@
-import type { AgentPromptContext, IngestionAgent } from '@log/shared';
+import type { AgentPromptContext, IngestionAgent, ParsedLog } from '@log/shared';
 import { decideFromSpec } from '@log/shared';
 import { apiflcRelatedLogs } from './join.js';
 import { apiflcTransactionProtocol } from './transactionProtocol.js';
+
+/** The API-Gateway HTTP status line — apiflc's decisive outcome, and the ONLY thing that
+ *  should re-open reasoning for an already-awaiting agent. It carries no correlationID and
+ *  no protocol event, so it never schedules the transaction on its own. */
+const HTTP_STATUS = /(?:received response\.\s*status|method completed with status):\s*\d{3}/i;
+
+/**
+ * apiflc's scheduling hook ({@link ApplicationDef.pendingSignals}). An apiflc agent that
+ * has seen its REQUEST/RESPONSE sits `awaiting` until the gateway HTTP status arrives — but
+ * that status is a non-event gateway log, so nothing would re-reason the agent and it would
+ * time out. This returns each active correlationID whose correlated call now carries an HTTP
+ * status in the window, so the engine re-reasons it and it completes on the real outcome.
+ */
+export function apiflcPendingSignals(window: readonly ParsedLog[], activeIds: readonly string[]): string[] {
+  return activeIds.filter((id) =>
+    apiflcRelatedLogs(id, window).some((l) => HTTP_STATUS.test(l.raw ?? l.message ?? '')),
+  );
+}
 
 /**
  * apiflc's dynamic ingestion agent. It OWNS apiflc's correlation: one call is logged

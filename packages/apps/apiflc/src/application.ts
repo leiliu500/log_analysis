@@ -3,7 +3,7 @@ import { APIFLC_LOG_GROUPS, parseApiflcLogGroup, splitApiflcByLogGroup } from '.
 import { apiflcTransactionProtocol } from './transactionProtocol.js';
 import { apiflcRelatedLogs } from './join.js';
 import { apiflcDeriveOutcome } from './httpOutcomes.js';
-import { apiflcIngestionAgent } from './agent.js';
+import { apiflcIngestionAgent, apiflcPendingSignals } from './agent.js';
 import { apiflcReconcile } from './reconcile.js';
 import { APIFLC_SAMPLE } from './samples.js';
 
@@ -18,6 +18,9 @@ export const apiflcApplication: ApplicationDef = {
   // the HTTP status. All apiflc-specific correlation lives in the app package.
   transactionPromptPath: 'apps/apiflc/transaction.md',
   ingestionAgent: apiflcIngestionAgent,
+  // Re-reason an awaiting agent when its gateway HTTP status (a non-event log) arrives,
+  // so it completes on the real 200/500 instead of timing out. apiflc-owned criterion.
+  pendingSignals: apiflcPendingSignals,
   // Simulator: apiflc logs are raw Lambda / API-Gateway lines — write verbatim.
   // A single paste may target several groups (handler / authorizer / execution).
   matchLogGroup: parseApiflcLogGroup,
