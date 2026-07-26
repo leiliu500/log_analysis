@@ -123,13 +123,27 @@ export async function simulate(req: SimulateRequest): Promise<SimulateResult> {
  * `count` sets, freshening uuid / correlationID tokens per set so each set is a
  * distinct transaction. No XML rewriting — the content is written as pasted.
  */
-export async function simulateVerbatim(req: SimulateRequest): Promise<SimulateResult> {
+/**
+ * Build the verbatim records + summary (pure — no I/O), so the id-rewriting logic is
+ * unit-testable without a connector.
+ *
+ * rewriteIds (default true): freshen the uuid/correlationID per set off a single pasted
+ * transaction. Set FALSE for already-final content that carries its OWN correlation ids —
+ * e.g. app-synthesized logs spanning SEVERAL transactions in one blob, where rewriting
+ * every `correlationID:` token to the first id would collapse them all into one
+ * (5678/91011 handler lines relabeled to 1234).
+ */
+export function buildVerbatimRecords(
+  req: SimulateRequest,
+  opts: { rewriteIds?: boolean; now?: number } = {},
+): { records: RawLogRecord[]; summary: SimulatedMessage[]; batchId: string } {
+  const rewriteIds = opts.rewriteIds ?? true;
   const lines = req.samples
     .split(/\r?\n/)
     .map((l) => l.replace(/\s+$/, ''))
     .filter((l) => l.trim().length > 0);
   const stream = req.logGroup?.trim() || `/sim/${req.application}`;
-  const now = Date.now();
+  const now = opts.now ?? Date.now();
   const spreadMs = req.spreadMinutes * 60_000;
   const batchId = randomUUID();
   const records: RawLogRecord[] = [];
@@ -142,6 +156,25 @@ export async function simulateVerbatim(req: SimulateRequest): Promise<SimulateRe
   const pastedCorr = req.samples.match(/correlationID:\s*([A-Za-z0-9._-]+)/i)?.[1];
   const corrBase = req.startMessageId ?? pastedCorr;
 
+  // Verbatim final content: write every line exactly as given (ids already correct),
+  // and report each DISTINCT correlationID present so the summary reflects every
+  // synthesized transaction, not just the first.
+  if (!rewriteIds) {
+    lines.forEach((line, k) => {
+      records.push({
+        source: 'cloudwatch',
+        stream,
+        timestamp: now + k,
+        raw: line,
+        attributes: { application: req.application, batchId, set: 0 },
+      });
+    });
+    const ids = new Set<string>();
+    for (const m of req.samples.matchAll(/(?:correlationID:\s*|X-Correlation-ID\s*[=:]\s*)([A-Za-z0-9._-]+)/gi)) {
+      ids.add(m[1]!);
+    }
+    for (const id of ids) summary.push({ messageType: 'SET', messageId: id });
+  } else
   for (let i = 0; i < req.count; i++) {
     const freshUuid = randomUUID();
     const freshCorr = corrBase ? bumpId(corrBase, i) : String(1000 + i);
@@ -162,6 +195,14 @@ export async function simulateVerbatim(req: SimulateRequest): Promise<SimulateRe
     // Report the transaction by its correlationID (what apiflc correlates on).
     summary.push({ messageType: 'SET', messageId: freshCorr });
   }
+  return { records, summary, batchId };
+}
+
+export async function simulateVerbatim(
+  req: SimulateRequest,
+  opts: { rewriteIds?: boolean } = {},
+): Promise<SimulateResult> {
+  const { records, summary, batchId } = buildVerbatimRecords(req, opts);
 
   const written = {} as Record<LogSourceType, number>;
   for (const sink of req.sinks) {
