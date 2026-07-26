@@ -8,7 +8,9 @@ import {
   splitInstructions,
   separateSamplesAndInstructions,
 } from './simulate.js';
+import { buildVerbatimRecords } from './simulator.js';
 import { parseLogGroup, resolveLogGroup } from '@log/app-scp';
+import { SimulateRequest } from '@log/shared';
 
 const REQ4 =
   'simulate 3 request/ack/response sets with message_id=001 to 004. Make sure the first 3 request/ack/response with success and no error';
@@ -137,6 +139,32 @@ test('ack status negation', () => {
   assert.equal(parseAckStatus('ack with failure'), 'failure');
   assert.equal(parseAckStatus('rejected transaction'), 'failure');
   assert.equal(parseAckStatus('all successful, no errors'), 'success');
+});
+
+test('verbatim rewriteIds:false preserves EVERY correlationID (synth blob spanning 3 transactions)', () => {
+  // Reproduces the deployed bug: a synthesized blob carries handler lines for 1234, 5678
+  // and 91011. The default per-set rewrite would relabel every `correlationID:` token to
+  // the first id (1234), collapsing three transactions into one. rewriteIds:false keeps them.
+  const samples = [
+    '2026 h-1234 INFO correlationID: 1234; FedLine Request: {}',
+    '(gw-1234) Method request headers: {X-Correlation-ID=1234}',
+    '2026 h-5678 INFO correlationID: 5678; FedLine Request: {}',
+    '(gw-5678) Method request headers: {X-Correlation-ID=5678}',
+    '2026 h-91011 INFO correlationID: 91011; FedLine Request: {}',
+  ].join('\n');
+  const req = SimulateRequest.parse({ application: 'apiflc', samples, sinks: ['cloudwatch'], logGroup: 'g' });
+
+  const kept = buildVerbatimRecords(req, { rewriteIds: false, now: 0 });
+  const raw = kept.records.map((r) => r.raw).join('\n');
+  assert.match(raw, /correlationID: 1234;/);
+  assert.match(raw, /correlationID: 5678;/);
+  assert.match(raw, /correlationID: 91011;/);
+  assert.deepEqual(new Set(kept.summary.map((s) => s.messageId)), new Set(['1234', '5678', '91011']));
+
+  // And prove the default (rewriteIds:true) is exactly what WOULD have broken it.
+  const collapsed = buildVerbatimRecords(req, { now: 0 });
+  const rawC = collapsed.records.map((r) => r.raw).join('\n');
+  assert.ok(!/correlationID: 5678;/.test(rawC) && !/correlationID: 91011;/.test(rawC), 'default collapses to first id');
 });
 
 test('resolveLogGroup accepts explicit names and content types', () => {

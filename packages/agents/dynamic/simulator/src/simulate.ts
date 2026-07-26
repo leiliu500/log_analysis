@@ -412,8 +412,9 @@ export async function handleSimulatePrompt(
     if (synthTargets && synthTargets.length) {
       const results: SimulatePromptOutcome[] = [];
       for (const t of synthTargets) {
-        // The synthesized samples already carry the correct correlation ids per set,
-        // so write them as-is (count 1 — the sets are baked into the samples).
+        // The synthesized samples already carry the correct correlation ids per set
+        // (a single blob may span several transactions), so write them verbatim with
+        // NO id rewriting — otherwise every correlationID would collapse to the first.
         const req = SimulateRequest.parse({
           application: app.id,
           samples: t.samples,
@@ -421,7 +422,7 @@ export async function handleSimulatePrompt(
           count: 1,
           logGroup: t.group,
         });
-        const result = await simulateVerbatim(req);
+        const result = await simulateVerbatim(req, { rewriteIds: false });
         results.push({
           instruction: `write a synthesized ${app.displayName} transaction to ${t.group}`,
           spec: { count: 1, messageTypes: phases, ackStatus: 'success', application: app.id, logGroup: t.group },
