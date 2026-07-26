@@ -164,7 +164,7 @@ export function parseApiflcGroups(message: string): ApiflcLogGroup[] {
   return groups.length ? [...new Set(groups)] : [...CALL_GROUPS];
 }
 
-/** True when the message actually pastes raw apiflc log lines — the verbatim path owns those. */
+/** True when a segment actually pastes raw apiflc log lines — the verbatim path owns those. */
 function looksLikeRawApiflcLogs(message: string): boolean {
   return /method completed with status:|received response\.\s*status:|fedline request:|starting execution\b|endpoint request uri|auth response from|^\s*\([0-9a-f][0-9a-f-]{7,}\)/im.test(
     message,
@@ -172,29 +172,55 @@ function looksLikeRawApiflcLogs(message: string): boolean {
 }
 
 /**
- * Turn a natural-language apiflc simulate request into synthesized per-group samples.
- * Returns undefined when the request pastes raw logs (verbatim path handles it) or
- * names no correlationID (nothing to correlate the synthesized call on).
+ * Split a request into one segment per simulate command, so a prompt carrying several
+ * ("(4) simulate … success  (5) simulate … failure  (6) simulate … no response") is not
+ * collapsed into a single command (which would only ever honor the first correlationID /
+ * outcome). Boundaries are each "simulate" keyword, else numbered "(n)" markers; a
+ * single-command prompt returns one segment. Any preamble before the first boundary (e.g.
+ * pasted reference logs) is dropped — it carries no command.
  */
-export function synthesizeApiflcFromRequest(message: string): Array<{ group: string; samples: string }> | undefined {
-  if (looksLikeRawApiflcLogs(message)) return undefined;
-  const corr = parseApiflcCorrelationId(message);
-  if (!corr) return undefined;
+function splitApiflcCommands(message: string): string[] {
+  const idx = (re: RegExp): number[] =>
+    [...message.matchAll(re)].map((m) => m.index).filter((i): i is number => i !== undefined);
+  // "(n)" markers are the user's own numbering and don't collide with gateway "(uuid)"
+  // ids (those aren't 1–2 digits), so prefer them; else fall back to "simulate" keywords.
+  let starts = idx(/\(\d{1,2}\)/g);
+  if (starts.length < 2) starts = idx(/\bsimulate\b/gi);
+  if (starts.length < 2) return [message];
+  const segs: string[] = [];
+  for (let k = 0; k < starts.length; k++) {
+    const seg = message.slice(starts[k]!, k + 1 < starts.length ? starts[k + 1]! : message.length).trim();
+    if (seg) segs.push(seg);
+  }
+  return segs.length ? segs : [message];
+}
 
-  const outcome = parseApiflcOutcome(message);
-  const groups = parseApiflcGroups(message);
-  const count = parseApiflcCount(message);
-
-  const byGroup = new Map<ApiflcLogGroup, string[]>();
+/** Accumulate one command's synthesized lines into the per-group map. */
+function addCommand(byGroup: Map<ApiflcLogGroup, string[]>, segment: string): void {
+  if (looksLikeRawApiflcLogs(segment)) return; // a pasted-logs segment → verbatim path, not synth
+  const corr = parseApiflcCorrelationId(segment);
+  if (!corr) return; // nothing to correlate this segment's synthesized call on
+  const outcome = parseApiflcOutcome(segment);
+  const groups = parseApiflcGroups(segment);
+  const count = parseApiflcCount(segment);
   for (let i = 0; i < count; i++) {
-    const c = bumpCorr(corr, i);
-    for (const { group, lines } of synthesizeApiflcSet(c, outcome)) {
+    for (const { group, lines } of synthesizeApiflcSet(bumpCorr(corr, i), outcome)) {
       if (!groups.includes(group)) continue;
-      const acc = byGroup.get(group) ?? [];
-      acc.push(...lines);
-      byGroup.set(group, acc);
+      byGroup.set(group, [...(byGroup.get(group) ?? []), ...lines]);
     }
   }
+}
+
+/**
+ * Turn a natural-language apiflc simulate request into synthesized per-group samples,
+ * honoring EVERY simulate command in the prompt (each with its own correlationID and
+ * outcome) and merging their lines per log group. Returns undefined when no segment is a
+ * synthesizable command — i.e. the prompt only pastes raw logs (verbatim path handles it)
+ * or names no correlationID.
+ */
+export function synthesizeApiflcFromRequest(message: string): Array<{ group: string; samples: string }> | undefined {
+  const byGroup = new Map<ApiflcLogGroup, string[]>();
+  for (const segment of splitApiflcCommands(message)) addCommand(byGroup, segment);
 
   const out = [...byGroup.entries()].map(([group, lines]) => ({ group, samples: lines.join('\n') }));
   return out.length ? out : undefined;
