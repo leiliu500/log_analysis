@@ -81,6 +81,17 @@ export interface ApplicationDef {
    * single-group request.
    */
   splitByLogGroup?(message: string): Array<{ group: string; samples: string }>;
+  /**
+   * Synthesize realistic per-log-group samples for a natural-language simulate
+   * request that pastes NO raw logs — e.g. "simulate apiflc handler / authorizer /
+   * API-Gateway-execution logs for correlationID 1234, completed success". The app
+   * OWNS its log shape, so it builds a whole correlated call across its groups (the
+   * shared cross-group identifiers intact) from the described correlation id and
+   * outcome. Returns undefined when the request isn't a synthesizable one for this
+   * app (no correlation id, or the message actually pastes raw logs — the verbatim
+   * path handles those). Only consulted for `simulationMode: 'verbatim'` apps.
+   */
+  synthesizeFromRequest?(message: string): Array<{ group: string; samples: string }> | undefined;
 
   /**
    * Every log record belonging to the same call as `id`, resolved across this

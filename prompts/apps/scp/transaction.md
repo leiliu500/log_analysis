@@ -28,7 +28,9 @@ Lifecycle:
      - completed — REQUEST, ACK, and RESPONSE all received;
      - failed — an ACK/RESPONSE carried a non-success ackCode (severity high);
      - error (timeout) — the next expected phase was not received within the agent
-       inactivity timeout (severity medium).
+       inactivity timeout of 30 minutes (severity medium). This inactivity timeout
+       is 30 minutes: a still-active transaction with no new phase for 30 minutes is
+       closed as an error.
 
 4. Report. On a NON-completed close (failed / error), emit exactly one finding
    `tx:<messageId>` at the implied level (failed ⇒ high, timeout ⇒ medium). A

@@ -6,6 +6,7 @@ import { apiflcDeriveOutcome } from './httpOutcomes.js';
 import { apiflcIngestionAgent, apiflcPendingSignals } from './agent.js';
 import { apiflcReconcile } from './reconcile.js';
 import { APIFLC_SAMPLE } from './samples.js';
+import { synthesizeApiflcFromRequest } from './simulateApiflc.js';
 
 /** The apiflc application: its CloudWatch log groups + REQUEST→RESPONSE protocol. */
 export const apiflcApplication: ApplicationDef = {
@@ -25,6 +26,10 @@ export const apiflcApplication: ApplicationDef = {
   // A single paste may target several groups (handler / authorizer / execution).
   matchLogGroup: parseApiflcLogGroup,
   splitByLogGroup: splitApiflcByLogGroup,
+  // Generative simulation: a request that pastes no raw logs (e.g. "simulate apiflc
+  // handler/authorizer/execution for correlationID 1234, completed success") synthesizes
+  // a whole correlated call across the three groups, with the join ids kept consistent.
+  synthesizeFromRequest: synthesizeApiflcFromRequest,
   // Log Assistant: one apiflc call is logged under three different ids, so resolve
   // a question's id to the whole call (handler + authorizer + gateway execution).
   relatedLogs: apiflcRelatedLogs,
