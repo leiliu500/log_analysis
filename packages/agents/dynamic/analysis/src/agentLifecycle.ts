@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, Anomaly, ApplicationDef, AgentPromptContext, LogSourceType, ParsedLog, Severity, ApplicationRegistry, TransitionDecision, TransitionReasoner } from '@log/shared';
+import { lifecycleTimeoutMs } from '@log/shared';
 import { converseJson } from './bedrock.js';
 import {
   getActiveAgents,
@@ -65,7 +66,12 @@ export function agentEvents(parsed: ParsedLog[], registry: ApplicationRegistry):
 
 export interface StepOptions {
   now: number;
-  /** Close a still-active agent this long after its last activity. */
+  /**
+   * Fallback inactivity timeout for an app whose `transaction.md` states none. The
+   * effective timeout is per-app — {@link lifecycleTimeoutMs} reads each app's own
+   * spec (SCP 30 min, apiflc 2 min) — so this is only used when an app declares no
+   * directive (or no prompt).
+   */
   timeoutMs: number;
   registry: ApplicationRegistry;
 }
@@ -258,12 +264,15 @@ export async function stepAgentsDynamic(
     }
   });
 
-  // Deterministic timeout pass (a clock check, not reasoning) — the SLA backstop.
+  // Deterministic timeout pass (a clock check, not reasoning) — the SLA backstop. The
+  // timeout is per-app, sourced from each app's transaction.md (SCP 30 min, apiflc
+  // 2 min); `timeoutMs` is only the fallback for an app that states none.
   for (const a of agents.values()) {
     if (!a.active) continue;
     const tsVals = Object.values(a.phaseTs);
     const last = tsVals.length ? Math.max(...tsVals) : a.spawnedAt;
-    if (now - last > timeoutMs) {
+    const appTimeoutMs = lifecycleTimeoutMs(registry.byId(a.application), timeoutMs);
+    if (now - last > appTimeoutMs) {
       const wf = a.waitingFor;
       a.status = 'error';
       a.active = false;
@@ -316,6 +325,8 @@ export async function advanceAgents(
 ): Promise<AdvanceResult> {
   const now = opts.now ?? Date.now();
   const windowMs = opts.windowMs ?? 5 * 60_000;
+  // FALLBACK inactivity timeout only — the effective timeout is per-app, read from each
+  // app's transaction.md by lifecycleTimeoutMs. Used when an app states no directive.
   const timeoutMs =
     opts.timeoutMs ?? Number(process.env.INGEST_AGENT_TIMEOUT_MINUTES ?? 30) * 60_000;
   // Reconcile only within anomalies retention, so an agent whose anomaly was pruned
@@ -338,9 +349,15 @@ export async function advanceAgents(
   // a protocol event) would otherwise never share a window with its call. Correlate over
   // recent STORED logs spanning an agent's active lifetime, merged with this poll's logs
   // (which may not be persisted yet), so app joins (`relatedLogs`) see the whole call.
+  // Span the LARGEST per-app inactivity timeout so no app's active lifetime is
+  // under-covered (SCP's 30-min window must still load even while apiflc's is 2 min).
+  const windowSpanMs = Math.max(
+    timeoutMs,
+    ...registry.all().map((app) => lifecycleTimeoutMs(app, timeoutMs)),
+  );
   let windowLogs = parsed;
   try {
-    const stored = await queryLogs({ from: now - timeoutMs, to: now, limit: 10000 });
+    const stored = await queryLogs({ from: now - windowSpanMs, to: now, limit: 10000 });
     const byId = new Map<string, ParsedLog>();
     for (const l of [...stored, ...parsed]) byId.set(l.id, l);
     windowLogs = [...byId.values()];

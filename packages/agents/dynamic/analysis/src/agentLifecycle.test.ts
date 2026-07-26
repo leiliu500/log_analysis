@@ -143,6 +143,27 @@ test('a still-active agent past the timeout is closed as error (deterministic cl
   assert.match(a.detail ?? '', /timed out/i);
 });
 
+test('the inactivity timeout is per-app, sourced from transaction.md (SCP 30m, apiflc 2m)', async () => {
+  // Two apps sharing the generic protocol but pointing at their real specs: SCP's states
+  // a 30-minute inactivity timeout, apiflc's a 2-minute one. An agent idle for 5 minutes
+  // must survive under SCP's spec but time out under apiflc's — proving the value is read
+  // from the prompt, not a single global constant.
+  const perApp = new ApplicationRegistry()
+    .register({ id: 'scp', displayName: 'SCP', logGroups: [], transactionPromptPath: 'apps/scp/transaction.md', protocol: testProtocol, ingestionAgent: { decide: async () => null } })
+    .register({ id: 'apiflc', displayName: 'apiflc', logGroups: [], transactionPromptPath: 'apps/apiflc/transaction.md', protocol: testProtocol, ingestionAgent: { decide: async () => null } });
+
+  const idle5m = (application: string): Agent => ({
+    messageId: application, application, status: 'awaiting', active: true, waitingFor: 'RESPONSE',
+    phases: ['REQUEST', 'ACK', 'RESPONSE'], phaseTs: { REQUEST: NOW - 5 * 60_000 },
+    spawnedAt: NOW - 5 * 60_000, updatedAt: NOW - 5 * 60_000,
+  });
+
+  // Fallback (opts.timeoutMs) is a large 60m so ONLY the per-app spec can trip apiflc.
+  const r = await stepAgentsDynamic([], [idle5m('scp'), idle5m('apiflc')], { now: NOW, timeoutMs: 60 * 60_000, registry: perApp });
+  assert.equal(r.agents.get('scp')!.status, 'awaiting', 'SCP (30m) still active after 5m');
+  assert.equal(r.agents.get('apiflc')!.status, 'error', 'apiflc (2m) timed out after 5m');
+});
+
 test('a later phase arriving before the initial lazily spawns the agent', async () => {
   const r = await step([ev('ACK', '001', NOW - 9 * S, 'OK')]);
   const a = r.agents.get('001')!;

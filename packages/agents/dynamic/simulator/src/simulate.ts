@@ -399,11 +399,50 @@ export async function handleSimulatePrompt(
   const app = appMatch?.app;
 
   if (app && (app.simulationMode ?? 'cashMessage') === 'verbatim') {
-    const plan = await understandSimulation(prompt, app);
-    const count = plan?.count ?? parseCount(prompt, undefined);
     const phases = app.protocol.allPhases.filter(
       (p): p is 'REQUEST' | 'ACK' | 'RESPONSE' => p === 'REQUEST' || p === 'ACK' || p === 'RESPONSE',
     );
+
+    // 2a-i) Generative synthesis. A natural-language request that pastes NO raw logs
+    //   (e.g. "simulate apiflc handler/authorizer/execution for correlationID 1234,
+    //   completed success") — the app builds a whole correlated call across its own
+    //   log groups, cross-group ids intact, so one transaction lands in every group
+    //   at once. Returns undefined when the paste IS raw logs (verbatim path below).
+    const synthTargets = app.synthesizeFromRequest?.(prompt);
+    if (synthTargets && synthTargets.length) {
+      const results: SimulatePromptOutcome[] = [];
+      for (const t of synthTargets) {
+        // The synthesized samples already carry the correct correlation ids per set,
+        // so write them as-is (count 1 — the sets are baked into the samples).
+        const req = SimulateRequest.parse({
+          application: app.id,
+          samples: t.samples,
+          sinks: ['cloudwatch'],
+          count: 1,
+          logGroup: t.group,
+        });
+        const result = await simulateVerbatim(req);
+        results.push({
+          instruction: `write a synthesized ${app.displayName} transaction to ${t.group}`,
+          spec: { count: 1, messageTypes: phases, ackStatus: 'success', application: app.id, logGroup: t.group },
+          result,
+          correlationLabel: app.correlationLabel ?? 'messageId',
+        });
+      }
+      const wrote = results.reduce(
+        (n, r) => n + Object.values(r.result.written).reduce((a, b) => a + b, 0),
+        0,
+      );
+      const groups = results.map((r) => r.spec.logGroup).filter(Boolean);
+      return {
+        route,
+        results,
+        note: `Simulator Agent synthesized application "${app.id}" logs and wrote ${wrote} line(s) across ${groups.length} log group(s): ${groups.join(', ')}. No analysis ran now — the scheduled poller will ingest and analyze these at the next interval, then update the Dashboard.`,
+      };
+    }
+
+    const plan = await understandSimulation(prompt, app);
+    const count = plan?.count ?? parseCount(prompt, undefined);
     // The LLM's per-group correlation id (understood via the app's own field).
     const corrByGroup = new Map<string, string>();
     for (const g of plan?.groups ?? []) if (g.correlationId) corrByGroup.set(g.logGroup, g.correlationId);
