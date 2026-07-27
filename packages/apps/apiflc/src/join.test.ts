@@ -111,6 +111,31 @@ test('property: a log line is never attributed to two different transactions (no
   assert.ok(a.size > 0 && b.size > 0, 'both calls must resolve to some lines');
 });
 
+test('property: a requestId reused across two correlationIDs does NOT entangle them (pollution guard)', () => {
+  // The prod failure: a stray/older line carries call-1234's lambda requestId but a
+  // DIFFERENT business correlationID (5678). Without the corr-authoritative rule this
+  // one line bridges corr:1234 <-> corr:5678 and collapses every call into one blob,
+  // so an agent reads a foreign transaction's HTTP status (5678 saw 1234's 200).
+  const polluted: ParsedLog[] = [
+    ...LOGS2,
+    mk(HANDLER, `2026-07-02T04:34:43.000Z ${HANDLER_REQ} INFO correlationID: ${CORR2}; FedLine Request: {`),
+  ];
+  const a = apiflcRelatedLogs(CORR, polluted);
+  const b = apiflcRelatedLogs(CORR2, polluted);
+  const rawA = a.map((l) => l.raw).join('\n');
+  const rawB = b.map((l) => l.raw).join('\n');
+
+  // 1234 must still see ITS 200 and never 5678's 500; 5678 must see its 500, never 1234's 200.
+  assert.match(rawA, /Method completed with status: 200/);
+  assert.ok(!rawA.includes('status: 500'), '1234 pulled in 5678 (500) — entangled');
+  assert.match(rawB, /Method completed with status: 500/);
+  assert.ok(!rawB.includes('status: 200'), '5678 pulled in 1234 (200) — entangled');
+
+  // And the outcomes are attributed correctly despite the shared requestId.
+  assert.equal(apiflcDeriveOutcome(CORR, a).status, 'completed');
+  assert.equal(apiflcDeriveOutcome(CORR2, b).status, 'failed');
+});
+
 test('property: every id of a call resolves to the identical line set (consistent components)', () => {
   const canonical = new Set(apiflcRelatedLogs(CORR, LOGS2));
   for (const id of [GW_REQ, HANDLER_REQ, TRACE, AUTHZ_REQ]) {
