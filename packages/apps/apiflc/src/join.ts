@@ -48,11 +48,22 @@ export interface ApiflcJoin {
   present: Set<string>;
   /** The coalesced entries, and the ids each one carries (same order). */
   entries: Array<{ raw: string; lines: ParsedLog[]; head: ParsedLog; ids: string[] }>;
+  /** The business correlationID anchoring a component (undefined when it carries none). */
+  corrForRoot: (x: string) => string | undefined;
 }
 
-/** Union every id that co-occurs in one entry, connecting the three groups' id spaces. */
+/**
+ * Union every id that co-occurs in one entry, connecting the three groups' id spaces —
+ * with ONE hard rule: the business `correlationID` is authoritative and two DIFFERENT
+ * correlationIDs are NEVER merged into one call. A gateway/lambda requestId or X-Ray
+ * trace id is a weaker link; if the same requestId shows up under two business ids (a
+ * reused/derived id, or corrupt data), the shared requestId must not entangle the two
+ * distinct transactions. Without this, one bad line collapses every apiflc call into a
+ * single blob and no agent can read its own HTTP status.
+ */
 export function apiflcJoin(logs: readonly ParsedLog[]): ApiflcJoin {
   const parent = new Map<string, string>();
+  const corrOf = new Map<string, string>(); // component root -> its business correlationID
   const find = (x: string): string => {
     if (!parent.has(x)) parent.set(x, x);
     let r = x;
@@ -65,18 +76,32 @@ export function apiflcJoin(logs: readonly ParsedLog[]): ApiflcJoin {
     return r;
   };
   const union = (a: string, b: string) => {
-    parent.set(find(a), find(b));
+    const ra = find(a);
+    const rb = find(b);
+    if (ra === rb) return;
+    const ca = corrOf.get(ra);
+    const cb = corrOf.get(rb);
+    if (ca !== undefined && cb !== undefined && ca !== cb) return; // never merge two business corrs
+    parent.set(ra, rb);
+    const c = cb ?? ca;
+    if (c !== undefined) corrOf.set(rb, c);
   };
 
   const present = new Set<string>();
   const entries = coalesceEntries(logs).map((e) => {
     const ids = apiflcIdsOf(e.raw);
-    for (const id of ids) present.add(id);
+    for (const id of ids) {
+      present.add(id);
+      if (id.startsWith('corr:')) {
+        const r = find(id);
+        if (!corrOf.has(r)) corrOf.set(r, id.slice('corr:'.length));
+      }
+    }
     for (let i = 1; i < ids.length; i++) union(ids[0]!, ids[i]!);
     return { raw: e.raw, lines: e.lines, head: e.head, ids };
   });
 
-  return { find, present, entries };
+  return { find, present, entries, corrForRoot: (x) => corrOf.get(find(x)) };
 }
 
 /**
@@ -84,13 +109,24 @@ export function apiflcJoin(logs: readonly ParsedLog[]): ApiflcJoin {
  * Give it a business correlationID (1234), a gateway/lambda requestId or an X-Ray
  * trace id; it resolves the rest through the shared identifiers above. Returns []
  * when the id joins to nothing in the window.
+ *
+ * When the call is anchored by a business correlationID, entries that name a DIFFERENT
+ * correlationID are excluded — so a stray line that merely shares a requestId can never
+ * pull a foreign transaction's HTTP status into this call.
  */
 export function apiflcRelatedLogs(id: string, logs: readonly ParsedLog[]): ParsedLog[] {
-  const { find, present, entries } = apiflcJoin(logs);
+  const { find, present, entries, corrForRoot } = apiflcJoin(logs);
   const seeds = [`corr:${id}`, `req:${id.toLowerCase()}`, `trace:${id.toLowerCase()}`].filter((s) => present.has(s));
   if (!seeds.length) return [];
   const roots = new Set(seeds.map(find));
+  const anchorCorr = seeds.map((s) => corrForRoot(s)).find((c) => c !== undefined);
   const out: ParsedLog[] = [];
-  for (const e of entries) if (e.ids.some((x) => roots.has(find(x)))) out.push(...e.lines);
+  for (const e of entries) {
+    if (!e.ids.some((x) => roots.has(find(x)))) continue;
+    // Corr-consistency: drop any entry that names a different business correlationID.
+    const entryCorr = e.ids.find((x) => x.startsWith('corr:'))?.slice('corr:'.length);
+    if (anchorCorr !== undefined && entryCorr !== undefined && entryCorr !== anchorCorr) continue;
+    out.push(...e.lines);
+  }
   return out;
 }
