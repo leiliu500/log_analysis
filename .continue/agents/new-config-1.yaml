@@ -1,0 +1,42 @@
+# This is an example configuration file
+# To learn more, see the full config.yaml reference: https://docs.continue.dev/reference
+
+name: Main Config
+version: 1.0.0
+schema: v1
+
+# Define which models can be used
+# https://docs.continue.dev/customization/models
+models:
+  - name: "ClaudeSonet4.5"
+    provider: bedrock
+    model: arn:aws-us-gov:bedrock:us-gov-west-1:679343992698:inference-profile/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0
+    env:
+      region: us-gov-west-1
+      profile: continue_dev_profile
+    roles:
+      - autocomplete
+      - chat
+      - edit
+    defaultCompletionOptions:
+      maxTokens: 64000
+      temperature: 1
+  - name: "ClaudeOpus4.8"
+    provider: bedrock
+    model: arn:aws-us-gov:bedrock:us-gov-west-1:679343992698:inference-profile/us-gov.anthropic.claude-opus-4-8
+    env:
+      region: us-gov-west-1
+      profile: continue_dev_profile
+    roles:
+      - chat
+      - edit
+    defaultCompletionOptions:
+      maxTokens: 64000
+      reasoning: false
+    requestOptions:
+      extraBodyProperties:
+        thinking:
+          type: "adaptive"
+        output_config:
+          effort: "high"
+
