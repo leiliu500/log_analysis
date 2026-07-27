@@ -56,9 +56,9 @@ Lifecycle:
      - failed — the correlated logs carry a 4xx/5xx HTTP status, or the RESPONSE
        carried a non-success ackCode (severity high);
      - error (timeout) — neither a RESPONSE nor an HTTP status was seen within the
-       agent inactivity timeout of 2 minutes (severity medium). This inactivity
-       timeout is 2 minutes: a still-active transaction with no RESPONSE and no HTTP
-       status for 2 minutes is closed as an error.
+       agent inactivity timeout of 10 minutes (severity medium). This inactivity
+       timeout is 10 minutes: a still-active transaction with no RESPONSE and no HTTP
+       status for 10 minutes is closed as an error.
 
 4. Report. On a NON-completed close (failed / error), emit exactly one finding
    `tx:<correlationID>` at the implied level (failed ⇒ high, timeout ⇒ medium). A
