@@ -2,6 +2,7 @@ import type { ParsedLog } from './logs.js';
 import type { Severity } from './anomalies.js';
 import type { TransactionProtocol } from './transactionProtocol.js';
 import type { IngestionAgent } from './ingestionAgent.js';
+import type { ValidationAgentDef } from './validationAgent.js';
 
 /**
  * The per-transaction context handed to an app's {@link IngestionAgent.decide} so it can
@@ -215,6 +216,15 @@ export interface ApplicationValidation {
    */
   promptPath: string;
   /**
+   * Path (relative to the `prompts/` root) of THIS application's VALIDATION AGENT prompt
+   * (e.g. 'apps/scp/validation.agent.md') — the residual reviewer's spec, distinct from
+   * {@link promptPath}, which specifies the deterministic worker. Declared here (like
+   * {@link ApplicationDef.transactionPromptPath}) so the prompt-consistency test proves
+   * it resolves at runtime; the app's own {@link validationAgent} loads it by the same
+   * path. Set it whenever the app declares a `validationAgent`.
+   */
+  agentPromptPath?: string;
+  /**
    * Minutes allowed to receive the final RESPONSE that completes the transaction,
    * measured from {@link responseTimeoutFrom}. An active transaction past this
    * budget is overdue; a completed one whose RESPONSE arrived later than this
@@ -261,6 +271,19 @@ export interface ApplicationValidation {
    * (a throw is swallowed).
    */
   checks?(input: { messageId: string; agentStatus: string; relatedLogs: readonly ParsedLog[] }): string[];
+  /**
+   * This application's VALIDATION AI AGENT — the only LLM in the validation path, and a
+   * deliberately powerless one. The engine invokes it for RESIDUAL transactions only:
+   * ones where the deterministic checks emitted no delta AND {@link deriveOutcome} could
+   * not prove the outcome from the logs, i.e. exactly the set the deterministic engine
+   * passes without evidence. It may only emit claims, each of which must cite real
+   * `parsed_logs` ids and carry predicates that are RE-EXECUTED before the claim is
+   * admitted; anything that fails re-verification is discarded. Admitted claims land in
+   * `ValidationAgent.aiFindings` and the separate `ai_suspected` result — they never
+   * append a delta and never overturn a deterministic verdict. Absent ⇒ this app runs
+   * deterministic validation only.
+   */
+  validationAgent?: ValidationAgentDef;
 }
 
 /** What the Log Assistant reads from one log for an application. */

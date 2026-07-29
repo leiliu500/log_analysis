@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AiReviewOutcome,
   ApplicationDef,
   ApplicationRegistry,
   DerivedOutcome,
@@ -9,12 +10,16 @@ import type {
   ReconciliationResult,
   Severity,
   ValidationAgent,
+  ValidationClaim,
+  ValidationReasoner,
 } from '@log/shared';
 import { expectedAnomalyFor } from '@log/shared';
+import { converseJson } from './bedrock.js';
 import {
   getActiveAgents,
   getAgentHistory,
   getAgentAnomalySeverities,
+  getAiReviewedMessageIds,
   getNonTransactionAnomaliesSince,
   queryLogs,
   upsertValidationAgents,
@@ -51,6 +56,16 @@ import {
  *   8. app-specific checks (opt-in, ApplicationValidation.checks) — invariants a
  *      protocol has that the generic engine can't express (e.g. SCP's REQUEST→ACK→
  *      RESPONSE ordering + duplicate-phase integrity; apiflc, with no ACK, has none).
+ *   9. the app's VALIDATION AI AGENT (opt-in, ApplicationValidation.validationAgent) —
+ *      the ONLY model in this path, and deliberately powerless. It runs on the RESIDUAL
+ *      only ({@link residualReason}): transactions checks 1–8 passed while check 5 could
+ *      not PROVE the outcome from the logs — the set that today passes without evidence.
+ *      Its claims must cite real `parsed_logs` ids and carry predicates that the platform
+ *      re-executes before admitting them, so a fabricated id or quote is dropped rather
+ *      than recorded. Admitted claims land in `aiFindings` and the separate
+ *      `ai_suspected` result; they NEVER append a delta and never overturn checks 1–8.
+ *      Consequence: the model can only reduce false negatives on the unproven set, and
+ *      is structurally incapable of adding a false positive to the proven one.
  *
  * It is isolated from the ingest path: it only READS `agents` / `anomalies` /
  * `parsed_logs` and WRITES `validation_agents`, so it can never mutate or block
@@ -65,6 +80,20 @@ export interface ValidationCounts {
   failed: number;
   pending: number;
   /**
+   * Transactions the app's validation AI agent reviewed (the residual — deterministically
+   * clean but with an unproven outcome). Kept separate from `checked` so the model's blast
+   * radius is a reported number: it only ever saw this many of the transactions.
+   */
+  aiReviewed: number;
+  /** Residual transactions carrying at least one AI claim that survived re-verification. */
+  aiSuspected: number;
+  /**
+   * AI claims DISCARDED by the admission gate (fabricated log id, predicate that did not
+   * hold, no witness). This is the model's observed hallucination rate in production —
+   * every one of these would have been a false positive had the claim been trusted.
+   */
+  aiRejected: number;
+  /**
    * Completed transactions that carried an associated analysis anomaly BELOW the
    * app's `qualityIssueSeverity` threshold — recorded but not surfaced as `issues`.
    * Counted so the by-design suppression is observable per app, never invisible.
@@ -75,6 +104,14 @@ export interface ValidationCounts {
 export interface ValidationRunResult extends ValidationCounts {
   /** Per-application breakdown (application id → counts). */
   byApplication: Record<string, ValidationCounts>;
+  /**
+   * Deterministic checks the AI agents PROPOSED this run, aggregated by rule id and
+   * ordered by how often they recurred. This is the promotion queue that keeps the model
+   * out of the long-term loop: a rule that keeps recurring is one a human should encode
+   * as an `ApplicationValidation.checks` predicate, after which that whole class of
+   * problem is caught deterministically and the agent stops proposing it.
+   */
+  ruleCandidates: Array<{ id: string; application: string; title: string; rationale: string; count: number }>;
 }
 
 /** The per-application validation context resolved from the registry for one agent. */
@@ -102,6 +139,69 @@ const worstSeverity = (fs: QualityAnomaly[]): Severity | undefined =>
 /** Does `sev` meet the app's "issues" threshold (default 'high')? */
 const meetsThreshold = (sev: Severity | undefined, threshold: Severity = 'high'): boolean =>
   sev != null && rank(sev) >= rank(threshold);
+
+// ---------------------------------------------------------------------------
+// Validation AI agent configuration. The stage is bounded on every axis that
+// matters — it can be switched off, it is capped per poll, and it only ever runs
+// over the residual — so enabling it cannot change the cost or the latency profile
+// of the poll by more than a known constant.
+// ---------------------------------------------------------------------------
+
+/** Kill switch. Set VALIDATION_AI_ENABLED=false to run deterministic validation only. */
+const AI_ENABLED = (process.env.VALIDATION_AI_ENABLED ?? 'true').toLowerCase() !== 'false';
+/** Hard cap on model calls per poll — bounds cost and keeps the Lambda inside its budget. */
+const AI_MAX_PER_POLL = Number(process.env.VALIDATION_AI_MAX_PER_POLL ?? 10);
+/** Concurrent model calls. Small: this poller is never on the critical path. */
+const AI_CONCURRENCY = Number(process.env.VALIDATION_AI_CONCURRENCY ?? 3);
+/**
+ * Wall-clock budget for the WHOLE AI stage. The deterministic results are persisted
+ * AFTER this stage, so an unbounded stage could let a slow model run the Lambda out of
+ * time and drop the deterministic verdicts with it — the model would then be able to
+ * break validation without ever emitting a claim. The stage stops starting new reviews
+ * once the budget is spent, so the upsert always runs. Keep it well under the Lambda's
+ * own timeout (`infra/lambda.tf`).
+ */
+const AI_DEADLINE_MS = Number(process.env.VALIDATION_AI_DEADLINE_MS ?? 60_000);
+/**
+ * Generous, for the same reason as the ingestion reasoner: the configured foundation
+ * model spends hidden reasoning tokens against this budget, and a starved reply comes
+ * back empty. An empty reply is safe here (no claims ⇒ no findings) but wastes the call.
+ */
+const AI_MAX_TOKENS = Number(process.env.VALIDATION_AI_MAXTOKENS ?? 2000);
+
+/**
+ * The default validation reasoner — a Bedrock structured-output call at temperature 0,
+ * injected into each app's validation agent so the app packages never depend on Bedrock
+ * or on this engine. Temperature 0 is for reproducibility of the *proposal*, not for
+ * correctness: correctness comes from the admission gate re-executing every claim.
+ */
+const defaultValidationReasoner: ValidationReasoner = (system, user) =>
+  converseJson<{ claims?: ValidationClaim[] }>(user, { system, temperature: 0, maxTokens: AI_MAX_TOKENS });
+
+/**
+ * Run `fn` over `items` with bounded concurrency, stopping early once `deadline` passes.
+ * Returns how many items were actually started, so a truncated stage can say so instead
+ * of reading as full coverage.
+ */
+async function pool<T>(
+  items: readonly T[],
+  limit: number,
+  deadline: number,
+  fn: (item: T) => Promise<void>,
+): Promise<number> {
+  let next = 0;
+  let started = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length && Date.now() < deadline) {
+      const item = items[next++];
+      if (item === undefined) continue;
+      started += 1;
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
+  return started;
+}
 
 /** Compare one regular agent against the anomalies + its app rules → a validation agent. */
 export function validateAgent(
@@ -174,6 +274,7 @@ export function validateAgent(
       delta: overdue ? [overdue] : [],
       missingPhases: [],
       qualityAnomalies: [],
+      aiFindings: [],
       detail: overdue
         ? `NEEDS ATTENTION: ${overdue}`
         : agent.waitingFor
@@ -292,9 +393,51 @@ export function validateAgent(
     missingPhases,
     qualityAnomalies: quality,
     maxQualitySeverity,
+    // The AI stage runs later, in the driver, and only for the residual — a purely
+    // deterministic `validateAgent` call (the one the backtest replays) never has any.
+    aiFindings: [],
     detail,
     closedAt: agent.closedAt ?? now,
   };
+}
+
+/**
+ * Is this transaction RESIDUAL — i.e. did the deterministic engine let it pass WITHOUT
+ * proving anything about it? Returns the human-readable reason when it is, else null.
+ *
+ * This is the gate that bounds the AI agent's blast radius, and it is deliberately
+ * narrow: a transaction qualifies only when the deterministic checks produced NO delta,
+ * the result is a clean `success`, and {@link deriveOutcome} could not read a terminal
+ * outcome out of the logs. So the agent is never consulted about a transaction that has
+ * a proven verdict — it cannot contradict one — and the population it does see is
+ * exactly the one that previously passed on absence of evidence.
+ */
+export function residualReason(v: ValidationAgent, derived?: DerivedOutcome): string | null {
+  if (v.active) return null; // still in flight; nothing terminal to review yet
+  if (v.delta.length > 0) return null; // deterministically decided — never revisited
+  if (v.result !== 'success') return null; // issues/failure already carry a signal
+  if (!derived) return 'this transaction\'s logs were not loaded, so no outcome could be derived from them';
+  if (derived.status === 'unknown') {
+    return `the logs do not prove a terminal outcome (${derived.detail ?? 'no decisive evidence found'})`;
+  }
+  return null; // the outcome was positively derived — this transaction is proven, not residual
+}
+
+/**
+ * Record one AI review on a validation agent WITHOUT letting it overturn anything. The
+ * deterministic `delta` is never touched, and the result is relabelled only for a clean
+ * `success` (the sole population the agent is allowed to see). Rejected-claim counts are
+ * kept even when nothing is admitted, so a review that produced only hallucinations is
+ * still visible rather than indistinguishable from one that found nothing.
+ */
+export function applyAiReview(v: ValidationAgent, outcome: AiReviewOutcome, now: number): void {
+  v.aiReviewedAt = now;
+  v.aiRejected = outcome.rejected.length;
+  v.aiFindings = outcome.findings;
+  if (!outcome.findings.length) return;
+  const worst = outcome.findings.reduce((a, b) => (rank(b.severity) > rank(a.severity) ? b : a));
+  v.result = 'ai_suspected';
+  v.detail = `AI-suspected (outcome unproven): ${outcome.findings.length} verified claim(s), highest ${worst.severity} — ${worst.title}`;
 }
 
 /** Resolve one application's validation context from the registry (phases + SLA). */
@@ -382,7 +525,13 @@ export function reconcileDelta(agentStatus: string, recon: ReconciliationResult)
  */
 export async function validateAgents(
   registry?: ApplicationRegistry,
-  opts: { now?: number; historyTtlMs?: number; qualityWindowMs?: number } = {},
+  opts: {
+    now?: number;
+    historyTtlMs?: number;
+    qualityWindowMs?: number;
+    /** Override the model call for the AI stage (tests inject a stub; prod uses Bedrock). */
+    validationReasoner?: ValidationReasoner;
+  } = {},
 ): Promise<ValidationRunResult> {
   const now = opts.now ?? Date.now();
   const historyTtlMin = Number(process.env.INGEST_AGENT_HISTORY_TTL_MINUTES ?? 1440);
@@ -525,29 +674,127 @@ export async function validateAgents(
     }
   }
 
+  // (9) The validation AI agent — LAST, so every deterministic verdict above is already
+  // final and the agent can only annotate what those checks left unproven. Best-effort
+  // throughout: a model error, a missing prompt, or a claim that fails re-verification
+  // leaves the transaction exactly as the deterministic engine decided it.
+  const ruleTally = new Map<string, { id: string; application: string; title: string; rationale: string; count: number }>();
+  if (registry && AI_ENABLED && AI_MAX_PER_POLL > 0) {
+    const byMsg = new Map(validations.map((v) => [v.messageId, v]));
+    // A residual stays inside the log-backed window for several polls, so without this
+    // the same transaction would be re-sent to the model on each of them. The review is
+    // one-shot; its stored result is sticky (see upsertValidationAgents).
+    let alreadyReviewed = new Set<string>();
+    try {
+      alreadyReviewed = await getAiReviewedMessageIds(recentClosed.map((a) => a.messageId));
+    } catch (err) {
+      console.error('validation: could not read prior AI reviews, skipping the AI stage', (err as Error).message);
+      alreadyReviewed = new Set(recentClosed.map((a) => a.messageId)); // fail closed — never re-review blindly
+    }
+    type Residual = { v: ValidationAgent; app: ApplicationDef; reason: string; related: ParsedLog[] };
+    const residuals: Residual[] = [];
+    for (const a of recentClosed) {
+      if (alreadyReviewed.has(a.messageId)) continue;
+      const v = byMsg.get(a.messageId);
+      const app = registry.byId(a.application);
+      if (!v || !app?.validation?.validationAgent) continue;
+      const reason = residualReason(v, derivedByMsg.get(a.messageId));
+      if (!reason) continue;
+      const related = relatedByMsg.get(a.messageId) ?? [];
+      // With no logs there is nothing a claim could cite, so a review could only
+      // hallucinate. Skip rather than spend the call.
+      if (!related.length) continue;
+      residuals.push({ v, app, reason, related });
+    }
+
+    const reviewed = residuals.slice(0, AI_MAX_PER_POLL);
+    if (residuals.length > reviewed.length) {
+      // Never let a cap silently read as "everything was reviewed".
+      console.warn(
+        `validation: AI review capped at ${AI_MAX_PER_POLL} of ${residuals.length} residual transaction(s); the rest keep their deterministic result`,
+      );
+    }
+    const started = await pool(reviewed, AI_CONCURRENCY, now + AI_DEADLINE_MS, async ({ v, app, reason, related }) => {
+      try {
+        const outcome = await app.validation!.validationAgent!.review(
+          {
+            messageId: v.messageId,
+            application: v.application,
+            agentStatus: v.agentStatus,
+            relatedLogs: related,
+            deterministicResult: v.result,
+            deterministicDetail: v.detail,
+            residualReason: reason,
+            phases: v.phases,
+            phaseTs: v.phaseTs,
+          },
+          opts.validationReasoner ?? defaultValidationReasoner,
+        );
+        applyAiReview(v, outcome, now);
+        for (const r of outcome.rejected) {
+          console.warn(`validation: AI claim discarded for ${v.messageId} — ${r.reason} ("${r.title}")`);
+        }
+        for (const f of outcome.findings) {
+          if (!f.proposedRule) continue;
+          const key = `${app.id}:${f.proposedRule.id}`;
+          const prev = ruleTally.get(key);
+          if (prev) prev.count += 1;
+          else ruleTally.set(key, { ...f.proposedRule, application: app.id, count: 1 });
+        }
+      } catch (err) {
+        console.error(`validation: AI review failed for ${v.messageId}`, (err as Error).message);
+      }
+    });
+    if (started < reviewed.length) {
+      console.warn(
+        `validation: AI stage hit its ${AI_DEADLINE_MS}ms budget after ${started} of ${reviewed.length} review(s); the rest keep their deterministic result`,
+      );
+    }
+  }
+
   await upsertValidationAgents(validations);
   await pruneClosedValidationAgentsOlderThan(now - historyTtlMs);
 
-  const empty = (): ValidationCounts => ({ checked: 0, passed: 0, issues: 0, failed: 0, pending: 0, suppressed: 0 });
+  const empty = (): ValidationCounts => ({
+    checked: 0,
+    passed: 0,
+    issues: 0,
+    failed: 0,
+    pending: 0,
+    aiReviewed: 0,
+    aiSuspected: 0,
+    aiRejected: 0,
+    suppressed: 0,
+  });
   const byApplication: Record<string, ValidationCounts> = {};
   const total = empty();
   for (const v of validations) {
     const b = (byApplication[v.application ?? 'unknown'] ??= empty());
     b.checked += 1;
     total.checked += 1;
-    const bump = (k: keyof ValidationCounts) => {
-      b[k] += 1;
-      total[k] += 1;
+    const bump = (k: keyof ValidationCounts, by = 1) => {
+      b[k] += by;
+      total[k] += by;
     };
     if (v.result === 'success') bump('passed');
     else if (v.result === 'completed_with_issues') bump('issues');
     else if (v.result === 'failure') bump('failed');
+    else if (v.result === 'ai_suspected') bump('aiSuspected');
     else bump('pending');
+    // AI stage counters, kept independent of the verdict tally above so the model's
+    // reach (how many it saw) and its error rate (how many claims were discarded) stay
+    // legible next to the deterministic numbers instead of folded into them.
+    if (v.aiReviewedAt != null) bump('aiReviewed');
+    if (v.aiRejected) bump('aiRejected', v.aiRejected);
     // (5-surfacing) A clean success that still carried an associated anomaly means
     // the anomaly was below the app's threshold and suppressed — count it so the
     // by-design suppression is observable per app rather than silently invisible.
     if (v.result === 'success' && v.qualityAnomalies.length > 0) bump('suppressed');
   }
 
-  return { ...total, byApplication };
+  return {
+    ...total,
+    byApplication,
+    ruleCandidates: [...ruleTally.values()].sort((a, b) => b.count - a.count),
+  };
 }

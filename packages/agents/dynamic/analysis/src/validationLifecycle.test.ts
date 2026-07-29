@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAgent, type AppValidationContext } from './validationLifecycle.js';
+import type { DerivedOutcome } from '@log/shared';
+import { applyAiReview, residualReason, validateAgent, type AppValidationContext } from './validationLifecycle.js';
 
 // SCP-shaped context: REQUEST→ACK→RESPONSE, RESPONSE within 30 min of ACK.
 const SCP: AppValidationContext = {
@@ -187,4 +188,69 @@ test('failed agent ignores quality anomalies (result unaffected)', () => {
   );
   assert.equal(v.result, 'success'); // failed+high anomaly = correct; quality not applied
   assert.deepEqual(v.qualityAnomalies, []);
+});
+
+// ---------------------------------------------------------------------------
+// The validation AI stage. These lock the two properties that make an LLM safe
+// here: it is only ever consulted about transactions nothing was proven for, and
+// what it says can never overturn something that was.
+// ---------------------------------------------------------------------------
+
+const closedClean = { ...base, messageId: 'r1', status: 'completed' as const, active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN, RESPONSE: 2 * MIN } };
+const unknownOutcome: DerivedOutcome = { status: 'unknown', evidenceLogIds: ['l1'], phasesSeen: ['REQUEST'], detail: 'no RESPONSE phase in logs' };
+const provenOutcome: DerivedOutcome = { status: 'completed', evidenceLogIds: ['l1'], phasesSeen: ['REQUEST', 'ACK', 'RESPONSE'], detail: 'RESPONSE present with a success code' };
+
+test('residual: a clean success whose outcome the logs do NOT prove is reviewable', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  assert.equal(v.result, 'success');
+  assert.match(residualReason(v, unknownOutcome) ?? '', /do not prove a terminal outcome/);
+});
+
+test('not residual: an outcome positively derived from the logs is proven, not reviewed', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], provenOutcome);
+  assert.equal(residualReason(v, provenOutcome), null);
+});
+
+test('not residual: a transaction with a deterministic delta is never reopened by the AI', () => {
+  // Logs show a failure the agent recorded as completed → a hard deterministic failure.
+  const failedByLogs: DerivedOutcome = { status: 'failed', evidenceLogIds: ['l1'], phasesSeen: ['REQUEST'], detail: 'a phase carried a failure ackCode' };
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], failedByLogs);
+  assert.equal(v.result, 'failure');
+  assert.equal(residualReason(v, failedByLogs), null, 'the AI is never asked about a proven verdict');
+});
+
+test('not residual: an active (pending) transaction is never reviewed', () => {
+  const v = validateAgent(
+    { ...base, messageId: 'r2', status: 'awaiting', active: true, waitingFor: 'RESPONSE', phaseTs: { REQUEST: 0, ACK: 1 * MIN } },
+    undefined,
+    5 * MIN,
+    SCP,
+  );
+  assert.equal(residualReason(v, undefined), null);
+});
+
+test('applyAiReview relabels a residual success without touching the deterministic delta', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  applyAiReview(
+    v,
+    {
+      findings: [
+        { kind: 'business-failure', title: 'gateway 200 over an ACCOUNT_FROZEN body', severity: 'high', evidenceLogIds: ['l1'], verifiedPredicates: 2 },
+      ],
+      rejected: [{ title: 'fabricated', reason: 'cites unknown logId l9' }],
+    },
+    99 * MIN,
+  );
+  assert.equal(v.result, 'ai_suspected', 'surfaced as its own population, never as a failure');
+  assert.deepEqual(v.delta, [], 'the deterministic evidence trail is untouched');
+  assert.equal(v.aiFindings.length, 1);
+  assert.equal(v.aiRejected, 1, 'discarded claims stay countable');
+  assert.equal(v.aiReviewedAt, 99 * MIN);
+});
+
+test('applyAiReview with no admitted findings leaves the deterministic result intact', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  applyAiReview(v, { findings: [], rejected: [{ title: 'hallucinated', reason: 'predicate failed' }] }, 99 * MIN);
+  assert.equal(v.result, 'success');
+  assert.equal(v.aiRejected, 1, 'a review that produced only hallucinations is still visible');
 });
