@@ -118,3 +118,28 @@ variable "flow_revision" {
   type        = number
   default     = 1
 }
+
+# --- Validation AI agent (the per-application residual reviewer) --------------
+# The only model in the validation path. It is invoked ONLY for transactions the
+# deterministic worker passed while the logs never proved the outcome, and every claim
+# it makes is re-executed against the real log rows before being recorded — so it can
+# add a suspicion to the unproven set but can never overturn a proven verdict. These
+# knobs exist so the stage can be switched off or re-bounded without a code deploy.
+
+variable "validation_ai_enabled" {
+  description = "Run each application's validation AI agent over the residual set. false = deterministic validation only."
+  type        = bool
+  default     = true
+}
+
+variable "validation_ai_max_per_poll" {
+  description = "Hard cap on validation AI model calls per poll. Bounds cost; a truncated run is logged, never silent."
+  type        = number
+  default     = 10
+}
+
+variable "validation_ai_deadline_ms" {
+  description = "Wall-clock budget for the whole validation AI stage. Must stay well under the validation Lambda timeout, since deterministic results are persisted after the stage."
+  type        = number
+  default     = 60000
+}

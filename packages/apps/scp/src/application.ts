@@ -3,6 +3,7 @@ import { APPLICATION_LOG_GROUPS, parseLogGroup } from './logGroups.js';
 import { scpTransactionProtocol, scpMessageMeta } from './transactionProtocol.js';
 import { scpIngestionAgent } from './agent.js';
 import { scpValidationChecks } from './validationChecks.js';
+import { scpValidationAgent } from './validationAgent.js';
 import { scpReconcile } from './reconcile.js';
 import { DEFAULT_CASHMESSAGE_SAMPLES } from './samples.js';
 
@@ -48,6 +49,13 @@ export const scpApplication: ApplicationDef = {
     // Rooted in SCP's intermediate ACK phase; apiflc (REQUEST→RESPONSE) has no ACK
     // and declares no `checks`.
     checks: scpValidationChecks,
+    // Validation AI agent: reviews ONLY the residual — transactions the deterministic
+    // checks above passed while `deriveOutcome` could not prove the outcome from the
+    // logs. Its claims must cite real SCP log ids and carry predicates that are
+    // re-executed before admission, and they surface as `ai_suspected`, never as a
+    // delta — so it can only reduce false negatives, never overturn a proven verdict.
+    agentPromptPath: 'apps/scp/validation.agent.md',
+    validationAgent: scpValidationAgent,
     // System-of-record cross-check (env-configured; disabled until SCP_RECONCILE_URL
     // is set) — the only signal that catches a false negative the logs can't show.
     reconcile: scpReconcile,

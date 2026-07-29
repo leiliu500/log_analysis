@@ -341,25 +341,46 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
         (message_id, application, agent_status, active, result, expected_anomaly, expected_severity,
          actual_anomaly, actual_severity, delta, missing_phases, sla_breached, sla_budget_minutes,
          sla_from_phase, response_latency_ms, quality_anomalies, max_quality_severity,
+         ai_findings, ai_rejected, ai_reviewed_at,
          phases, phase_ts, detail, spawned_at, updated_at, closed_at)
         VALUES (${v.messageId}, ${v.application ?? null}, ${v.agentStatus}, ${v.active}, ${v.result},
                 ${v.expectedAnomaly}, ${v.expectedSeverity ?? null}, ${v.actualAnomaly}, ${v.actualSeverity ?? null},
                 ${JSON.stringify(v.delta)}::jsonb, ${JSON.stringify(v.missingPhases)}::jsonb, ${v.slaBreached},
                 ${v.slaBudgetMinutes ?? null}, ${v.slaFromPhase ?? null}, ${v.responseLatencyMs ?? null},
                 ${JSON.stringify(v.qualityAnomalies)}::jsonb, ${v.maxQualitySeverity ?? null},
+                ${JSON.stringify(v.aiFindings ?? [])}::jsonb, ${v.aiRejected ?? null}, ${v.aiReviewedAt ?? null},
                 ${JSON.stringify(v.phases)}::jsonb, ${JSON.stringify(v.phaseTs)}::jsonb,
                 ${v.detail ?? null}, ${v.spawnedAt}, ${v.updatedAt}, ${v.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
           application = COALESCE(validation_agents.application, EXCLUDED.application),
-          agent_status = EXCLUDED.agent_status, active = EXCLUDED.active, result = EXCLUDED.result,
+          agent_status = EXCLUDED.agent_status, active = EXCLUDED.active,
           expected_anomaly = EXCLUDED.expected_anomaly, expected_severity = EXCLUDED.expected_severity,
           actual_anomaly = EXCLUDED.actual_anomaly, actual_severity = EXCLUDED.actual_severity,
           delta = EXCLUDED.delta, missing_phases = EXCLUDED.missing_phases, sla_breached = EXCLUDED.sla_breached,
           sla_budget_minutes = EXCLUDED.sla_budget_minutes, sla_from_phase = EXCLUDED.sla_from_phase,
           response_latency_ms = EXCLUDED.response_latency_ms,
           quality_anomalies = EXCLUDED.quality_anomalies, max_quality_severity = EXCLUDED.max_quality_severity,
+          -- The AI review is one-shot: it runs only while a closed transaction is inside
+          -- the log-backed window, so later polls re-validate it deterministically and
+          -- carry no review (ai_reviewed_at NULL). Treat that as "no new information" and
+          -- keep the stored review rather than wiping a result that cost a model call.
+          ai_findings = CASE WHEN EXCLUDED.ai_reviewed_at IS NULL THEN validation_agents.ai_findings ELSE EXCLUDED.ai_findings END,
+          ai_rejected = COALESCE(EXCLUDED.ai_rejected, validation_agents.ai_rejected),
+          ai_reviewed_at = COALESCE(EXCLUDED.ai_reviewed_at, validation_agents.ai_reviewed_at),
+          -- Same reason for the verdict: a stored 'ai_suspected' survives a later
+          -- deterministic re-pass, but ONLY while that re-pass is still a clean success —
+          -- if the deterministic engine now has something to say (failure, issues), its
+          -- verdict wins, exactly as it does everywhere else.
+          result = CASE
+            WHEN EXCLUDED.ai_reviewed_at IS NULL AND EXCLUDED.result = 'success'
+                 AND jsonb_array_length(validation_agents.ai_findings) > 0 THEN 'ai_suspected'
+            ELSE EXCLUDED.result END,
           phases = EXCLUDED.phases, phase_ts = EXCLUDED.phase_ts,
-          detail = EXCLUDED.detail, updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
+          detail = CASE
+            WHEN EXCLUDED.ai_reviewed_at IS NULL AND EXCLUDED.result = 'success'
+                 AND jsonb_array_length(validation_agents.ai_findings) > 0 THEN validation_agents.detail
+            ELSE EXCLUDED.detail END,
+          updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
     }
   });
 }
@@ -376,6 +397,21 @@ export async function getValidationHistory(limit = 200): Promise<ValidationAgent
   const sqlc = getSql();
   const rows = await sqlc`SELECT * FROM validation_agents WHERE active = FALSE ORDER BY closed_at DESC NULLS LAST LIMIT ${limit}`;
   return rows.map(rawRowToValidationAgent);
+}
+
+/**
+ * Of `messageIds`, those whose validation agent has ALREADY been reviewed by the app's
+ * validation AI agent. A residual transaction stays inside the log-backed window for
+ * several polls, so without this the same transaction would be re-sent to the model on
+ * every one of them — the review is one-shot by design, and its stored result is sticky
+ * (see the ON CONFLICT clause in {@link upsertValidationAgents}).
+ */
+export async function getAiReviewedMessageIds(messageIds: string[]): Promise<Set<string>> {
+  if (!messageIds.length) return new Set();
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT message_id FROM validation_agents
+    WHERE message_id = ANY(${messageIds}) AND ai_reviewed_at IS NOT NULL`;
+  return new Set(rows.map((r) => r.message_id as string));
 }
 
 export async function pruneClosedValidationAgentsOlderThan(cutoff: number): Promise<number> {
@@ -410,6 +446,9 @@ function rawRowToValidationAgent(r: Record<string, unknown>): ValidationAgent {
     responseLatencyMs: num(r.response_latency_ms),
     qualityAnomalies: jsonbField<ValidationAgent['qualityAnomalies']>(r.quality_anomalies, []),
     maxQualitySeverity: (r.max_quality_severity ?? undefined) as ValidationAgent['maxQualitySeverity'],
+    aiFindings: jsonbField<ValidationAgent['aiFindings']>(r.ai_findings, []),
+    aiRejected: num(r.ai_rejected),
+    aiReviewedAt: num(r.ai_reviewed_at),
     phases: jsonbField<string[]>(r.phases, []),
     phaseTs: jsonbField<Record<string, number>>(r.phase_ts, {}),
     detail: (r.detail ?? undefined) as string | undefined,

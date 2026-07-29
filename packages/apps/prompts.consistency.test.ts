@@ -16,6 +16,7 @@ function declaredPromptPaths(app: ReturnType<typeof applicationRegistry.all>[num
   return [
     ['transactionPromptPath', app.transactionPromptPath],
     ['validation.promptPath', app.validation?.promptPath],
+    ['validation.agentPromptPath', app.validation?.agentPromptPath],
     ['assistantPromptPath', app.assistantPromptPath],
     ['simulateUnderstandingPromptPath', app.simulateUnderstandingPromptPath],
   ] as const;
@@ -39,6 +40,49 @@ test('scp and apiflc each declare their own transaction + validation prompts', (
     assert.ok(app!.validation?.promptPath.includes(`apps/${id}/validation.md`), `${id} has its own validation.md`);
   }
 });
+
+/**
+ * The validation AI agent is per-application by construction: its prompt encodes that
+ * app's protocol and — critically — the deterministic checks it must NOT restate. A
+ * shared prompt would make it duplicate work the worker already does, so assert each app
+ * declares its own agent + spec together (one without the other is a silent no-op).
+ */
+for (const app of applicationRegistry.all()) {
+  const v = app.validation;
+  if (!v) continue;
+
+  test(`${app.id}: validation agent and its prompt are declared together`, () => {
+    assert.equal(
+      v.validationAgent === undefined,
+      v.agentPromptPath === undefined,
+      `${app.id} declares one of validationAgent/agentPromptPath without the other`,
+    );
+  });
+
+  if (!v.agentPromptPath) continue;
+
+  test(`${app.id}: validation.agent.md is this app's own, and is not the worker spec`, () => {
+    assert.ok(v.agentPromptPath!.includes(`apps/${app.id}/validation.agent.md`), `${app.id} needs its own validation.agent.md`);
+    assert.notEqual(v.agentPromptPath, v.promptPath, 'the AI agent spec must be separate from the deterministic worker spec');
+  });
+
+  test(`${app.id}: validation.agent.md agrees with the executable SLA + phase config`, () => {
+    const body = loadPrompt(v.agentPromptPath!);
+    assert.ok(body.includes(String(v.responseTimeoutMinutes)), `prompt omits the ${v.responseTimeoutMinutes}-minute budget`);
+    for (const phase of app.protocol.allPhases) {
+      assert.ok(new RegExp(`\\b${phase}\\b`).test(body), `prompt omits protocol phase ${phase}`);
+    }
+  });
+
+  test(`${app.id}: validation.agent.md tells the agent to cite evidence and not invent it`, () => {
+    // The safety of the AI stage is enforced by the admission gate in code, but the
+    // prompt must not fight it: an agent told to speculate just burns discarded claims.
+    const body = loadPrompt(v.agentPromptPath!).toLowerCase();
+    assert.ok(body.includes('logid'), 'prompt must require citing log ids');
+    assert.ok(body.includes('predicate'), 'prompt must require a re-executable predicate');
+    assert.ok(body.includes('absent'), 'prompt must forbid inferring a problem from absent evidence');
+  });
+}
 
 /**
  * Config ↔ protocol consistency. The deterministic validation engine is only as

@@ -36,6 +36,17 @@ locals {
     SCP_RECONCILE_TOKEN    = var.scp_reconcile_token
     APIFLC_RECONCILE_URL   = var.apiflc_reconcile_url
     APIFLC_RECONCILE_TOKEN = var.apiflc_reconcile_token
+    # Per-application VALIDATION AI AGENT (the residual reviewer). Set explicitly rather
+    # than relying on the code default so it can be switched off, or its cost re-bounded,
+    # without a code deploy. It only ever sees transactions the deterministic worker
+    # passed without proving the outcome, and its claims are re-verified in code before
+    # being recorded, so it can never overturn a deterministic verdict.
+    VALIDATION_AI_ENABLED      = tostring(var.validation_ai_enabled)
+    VALIDATION_AI_MAX_PER_POLL = tostring(var.validation_ai_max_per_poll)
+    # Wall-clock budget for the whole AI stage, kept well under the validation Lambda's
+    # timeout below: deterministic results are persisted AFTER the stage, so the stage
+    # must never be able to run the Lambda out of time.
+    VALIDATION_AI_DEADLINE_MS = tostring(var.validation_ai_deadline_ms)
   }
 }
 
@@ -85,8 +96,10 @@ resource "aws_lambda_function" "validation_poller" {
   handler          = "index.validationPollerHandler"
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
-  timeout          = 120
-  memory_size      = 1024
+  # Deterministic validation is fast; the headroom is for the residual AI stage, which is
+  # itself bounded by VALIDATION_AI_DEADLINE_MS so the deterministic upsert always runs.
+  timeout     = 300
+  memory_size = 1024
 
   vpc_config {
     subnet_ids         = aws_subnet.private[*].id

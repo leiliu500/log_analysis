@@ -23,6 +23,10 @@ const RESULT_STYLES: Record<string, string> = {
   completed_with_issues: 'bg-amber-500/20 text-amber-300',
   failure: 'bg-red-500/20 text-red-300',
   pending: 'bg-sky-500/20 text-sky-300',
+  // Deliberately NOT red: an AI-suspected transaction is not a proven failure. It is a
+  // clean deterministic pass whose outcome the logs never proved, carrying a claim that
+  // re-verified against those logs. Its own colour keeps the two populations distinct.
+  ai_suspected: 'bg-violet-500/20 text-violet-300',
 };
 
 const isElevated = (s?: string): boolean => s === 'high' || s === 'critical';
@@ -54,6 +58,7 @@ const RESULT_LABELS: Record<string, string> = {
   completed_with_issues: 'completed · issues',
   failure: 'failure',
   pending: 'pending',
+  ai_suspected: 'AI-suspected',
 };
 
 /** A protocol phase progress pip (mirrors AgentsPanel so the two views read alike). */
@@ -121,6 +126,8 @@ export function ValidationPanel({
   // Completed cleanly BUT carried an associated anomaly below the app's issue
   // threshold — recorded, not flagged. Surfaced so the suppression is observable.
   const suppressed = history.filter((v) => v.result === 'success' && v.qualityAnomalies.length > 0).length;
+  const aiSuspected = history.filter((v) => v.result === 'ai_suspected').length;
+  const aiDiscarded = history.reduce((n, v) => n + (v.aiRejected ?? 0), 0);
 
   return (
     <section className="mb-8">
@@ -169,6 +176,22 @@ export function ValidationPanel({
             {suppressed} suppressed
           </span>
         ) : null}
+        {aiSuspected > 0 ? (
+          <span
+            className="rounded-full bg-violet-500/20 px-2 py-0.5 text-xs text-violet-300"
+            title="Deterministically clean, but the outcome was never proven from the logs and the app's validation AI agent raised a claim that re-verified against those logs. A suspicion to triage, not a proven failure."
+          >
+            {aiSuspected} AI-suspected
+          </span>
+        ) : null}
+        {aiDiscarded > 0 ? (
+          <span
+            className="rounded-full bg-slate-500/20 px-2 py-0.5 text-xs text-slate-400"
+            title="AI claims the admission gate discarded because a cited log id, quoted value, or predicate did not re-verify. This is the model's observed hallucination rate — every one would have been a false positive had it been trusted."
+          >
+            {aiDiscarded} AI claim{aiDiscarded === 1 ? '' : 's'} discarded
+          </span>
+        ) : null}
       </div>
       {history.length > 0 ? (
         <div className="overflow-x-auto rounded-xl border border-edge bg-panel">
@@ -183,6 +206,9 @@ export function ValidationPanel({
                 <th className="px-3 py-2">expected</th>
                 <th className="px-3 py-2">actual</th>
                 <th className="px-3 py-2">anomalies</th>
+                <th className="px-3 py-2" title="Residual-only AI review: claims that re-verified against the real log rows, and claims the admission gate discarded. Never a verdict.">
+                  AI review
+                </th>
                 <th className="px-3 py-2">delta</th>
                 <th className="px-3 py-2">validated</th>
               </tr>
@@ -221,6 +247,38 @@ export function ValidationPanel({
                       </span>
                     ) : (
                       '—'
+                    )}
+                  </td>
+                  <td className="px-3 py-1.5 font-sans">
+                    {v.aiReviewedAt == null ? (
+                      <span className="text-slate-600" title="Not residual — the deterministic checks proved this transaction's outcome, so no AI review was run.">
+                        —
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1">
+                        {v.aiFindings.length ? (
+                          <span
+                            className="cursor-help whitespace-nowrap rounded border border-violet-500/40 bg-violet-500/20 px-1.5 py-0.5 text-[10px] text-violet-200"
+                            title={v.aiFindings
+                              .map((f) => `${f.severity}: ${f.title} (${f.verifiedPredicates} predicate(s) re-verified on ${f.evidenceLogIds.join(', ')})`)
+                              .join('\n')}
+                          >
+                            {v.aiFindings.length} verified
+                          </span>
+                        ) : (
+                          <span className="text-slate-500" title="Reviewed; no claim survived re-verification.">
+                            no claim
+                          </span>
+                        )}
+                        {v.aiRejected ? (
+                          <span
+                            className="cursor-help whitespace-nowrap rounded border border-slate-600 bg-slate-500/20 px-1.5 py-0.5 text-[10px] text-slate-400"
+                            title="Claims the admission gate discarded — a fabricated log id, a quote that did not match, or an assertion with no re-executable predicate. Each one would have been a false positive had it been trusted."
+                          >
+                            {v.aiRejected} discarded
+                          </span>
+                        ) : null}
+                      </span>
                     )}
                   </td>
                   <td className="px-3 py-1.5 font-sans">
