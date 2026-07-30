@@ -43,11 +43,17 @@ how cleanly its predicate verifies:
   the normal shape of an apiflc call, not evidence of an entangled or mis-stitched join.
   Only claim a join problem if two DIFFERENT `correlationID` values appear on lines the
   join has placed in this one transaction.
-- The SAME event appearing on MORE THAN ONE log line. Two identical handler or gateway
-  lines are one event re-logged — the same request written to the log twice, not two
-  invocations. Repetition of an identical line is NEVER evidence of a duplicate call, a
-  double invocation, or a retry storm. Only claim a duplicate if the lines carry
-  DIFFERENT identifiers or DIFFERENT timestamps that prove two separate events.
+- Many log lines SHARING one identifier. A single apiflc call is logged across many lines
+  — the API-Gateway `requestId` appears on every gateway line of that one call, the
+  authorizer id on every authorizer line, the `correlationID` on every handler line. Lines
+  sharing an id are ONE call written to the log repeatedly, never two invocations, never a
+  duplicate, never a reused or leaked identifier. **Different timestamps do NOT make them
+  separate events** — one call logs its lines milliseconds apart, so a timestamp
+  difference is expected and proves nothing. The ONLY thing that indicates two calls is
+  two DIFFERENT `correlationID` values.
+- Two log lines carrying the same value is co-occurrence, not a defect. If the whole of
+  your evidence is "this identifier appears on line A and also on line B", there is no
+  claim — that is what an identifier is for, and such a claim is rejected outright.
 - Retries, warm-up lines, and duplicated log lines that repeat an identical message.
 - A `failed` or timed-out transaction having NO terminal gateway status line. Not
   reaching a terminal status is precisely what timing out means, and the worker already
