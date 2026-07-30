@@ -11,4 +11,4 @@ export {
   // @log/ingestion so it can inject the same application registry the ingest poller uses.
   validationPollerHandler,
 } from '@log/ingestion';
-export { validateAgents, type ValidationRunResult } from '@log/analysis';
+export { validateAgents, validationAgentInfo, type ValidationRunResult } from '@log/analysis';

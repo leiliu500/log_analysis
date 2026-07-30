@@ -122,6 +122,33 @@ export interface ValidationAgent {
 }
 
 /**
+ * One application's VALIDATION AI AGENT as a given runtime has it configured — the
+ * registry declaration plus the env that gates it. Lives here (like `BacktestSummary`)
+ * so the API and the web UI share one contract without the UI depending on the engine.
+ *
+ * It reports the EFFECTIVE configuration of the process that served it, not a static
+ * description: the API container and the validation Lambda are configured separately and
+ * have drifted before, so an agent must never render as healthy in a runtime that
+ * actually has it switched off.
+ */
+export interface ValidationAgentInfo {
+  application: string;
+  displayName: string;
+  /** True only if the app declares an agent AND the stage is switched on here. */
+  enabled: boolean;
+  /** Why it is off, when it is — so a disabled agent is never silently invisible. */
+  disabledReason?: string;
+  /** The app's own validation-agent spec (its prompt). */
+  promptPath?: string;
+  /** 'clean' = every deterministically-clean transaction; 'unproven' = only unprovable outcomes. */
+  scope: 'clean' | 'unproven';
+  maxPerPoll: number;
+  deadlineMs: number;
+  /** Reviews recorded before this instant are stale and get redone. */
+  reviewEpoch: number;
+}
+
+/**
  * The invariant, encoded once (mirrors `agentAnomaly` in the analysis package):
  *   failed    ⇒ a anomaly at 'high'
  *   error     ⇒ a anomaly at 'medium' (timeout)

@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ValidationAgent } from '@log/shared';
+import type { ValidationAgent, ValidationAgentInfo } from '@log/shared';
 import { api } from '@/lib/api';
 import { ValidationPanel } from '@/components/ValidationPanel';
+import { ValidationAgentsPanel } from '@/components/ValidationAgentsPanel';
 
 const REFRESH_MS = 30_000;
 
@@ -17,6 +18,7 @@ export function ValidationView() {
   const [appFilter, setAppFilter] = useState<string>('all');
   const [active, setActive] = useState<ValidationAgent[]>([]);
   const [history, setHistory] = useState<ValidationAgent[]>([]);
+  const [agentInfo, setAgentInfo] = useState<ValidationAgentInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [validating, setValidating] = useState(false);
@@ -29,6 +31,14 @@ export function ValidationView() {
       setHistory(v.history);
     } catch (e) {
       setError(String(e));
+    }
+    // Agent config is a separate, best-effort call: it is descriptive, so failing to
+    // read it must never blank out the validation results themselves.
+    try {
+      const c = await api.validationAgentConfig();
+      setAgentInfo(c.agents);
+    } catch {
+      setAgentInfo([]);
     }
   }, []);
 
@@ -151,6 +161,13 @@ export function ValidationView() {
         <p className="mb-4 text-red-400">
           Could not reach API ({error}). Is <code>@log/api</code> running?
         </p>
+      )}
+
+      {!loading && (
+        <ValidationAgentsPanel
+          agents={appFilter === 'all' ? agentInfo : agentInfo.filter((a) => a.application === appFilter)}
+          rows={[...shownActive, ...shownHistory]}
+        />
       )}
 
       {!loading && (

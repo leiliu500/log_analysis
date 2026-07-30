@@ -10,6 +10,7 @@ import type {
   ReconciliationResult,
   Severity,
   ValidationAgent,
+  ValidationAgentInfo,
   ValidationClaim,
   ValidationReasoner,
 } from '@log/shared';
@@ -239,6 +240,35 @@ async function pool<T>(
   });
   await Promise.all(workers);
   return started;
+}
+
+/**
+ * Report each application's validation AI agent as this process has it configured —
+ * registry declaration AND the env that gates it. Read from the same constants the stage
+ * itself uses, so the UI can never show an agent as enabled while the runtime has it off
+ * (the API and the Lambda are separately configured, and have drifted before).
+ */
+export function validationAgentInfo(registry?: ApplicationRegistry): ValidationAgentInfo[] {
+  return (registry?.all() ?? []).map((app) => {
+    const declared = app.validation?.validationAgent != null;
+    return {
+      application: app.id,
+      displayName: app.displayName,
+      enabled: declared && AI_ENABLED && AI_MAX_PER_POLL > 0,
+      disabledReason: !declared
+        ? 'this application declares no validation agent'
+        : !AI_ENABLED
+          ? 'VALIDATION_AI_ENABLED=false in this runtime'
+          : AI_MAX_PER_POLL <= 0
+            ? 'VALIDATION_AI_MAX_PER_POLL is 0'
+            : undefined,
+      promptPath: app.validation?.agentPromptPath,
+      scope: AI_SCOPE,
+      maxPerPoll: AI_MAX_PER_POLL,
+      deadlineMs: AI_DEADLINE_MS,
+      reviewEpoch: AI_REVIEW_EPOCH,
+    };
+  });
 }
 
 /** Compare one regular agent against the anomalies + its app rules → a validation agent. */
