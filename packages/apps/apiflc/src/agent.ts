@@ -2,6 +2,7 @@ import type { AgentPromptContext, IngestionAgent, ParsedLog } from '@log/shared'
 import { decideFromSpec } from '@log/shared';
 import { apiflcRelatedLogs } from './join.js';
 import { apiflcTransactionProtocol } from './transactionProtocol.js';
+import { apiflcGatewayStatus } from './httpOutcomes.js';
 
 /** The API-Gateway HTTP status line — apiflc's decisive outcome, and the ONLY thing that
  *  should re-open reasoning for an already-awaiting agent. It carries no correlationID and
@@ -59,6 +60,53 @@ function apiflcEvidence(ctx: AgentPromptContext): string {
   ].join('\n');
 }
 
+/**
+ * apiflc's DETERMINISTIC fast path — deliberately narrower than SCP's, because apiflc's
+ * decisive fact is NOT on a protocol event. The outcome is the API-Gateway HTTP status,
+ * which lives only in the execution log keyed by the gateway requestId. So:
+ *
+ *   a gateway HTTP status is present  ⇒ 2xx/3xx completed, 4xx/5xx failed (high)
+ *   no status yet                     ⇒ awaiting — the phases alone prove nothing
+ *
+ * The crucial asymmetry versus SCP: a handler RESPONSE line is NOT a completion here. A
+ * 500 logs a RESPONSE too, so treating the completing phase as success — which the
+ * generic rule would do — is precisely the mis-recorded outcome (`a 500 recorded as
+ * completed`) that the validation engine's status-vs-reality check exists to catch. Only
+ * the status decides, and until it lands this returns `awaiting` rather than guessing.
+ *
+ * It reuses {@link apiflcDeriveOutcome} — the same reading the validator uses — over the
+ * joined call. Where that returns `unknown`, the transaction stays awaiting and
+ * `apiflcPendingSignals` re-schedules it once the status appears.
+ */
+function apiflcFastPath(ctx: AgentPromptContext) {
+  const related = apiflcRelatedLogs(ctx.messageId, ctx.window);
+  if (!related.length) return null; // nothing joined yet — let the model look at the events
+
+  // ONLY the gateway status decides. Deliberately stricter than apiflcDeriveOutcome,
+  // which also accepts a bare handler RESPONSE as `completed` — a documented open gap in
+  // the gold corpus. A validator may be lenient there because it is only comparing two
+  // readings; the code that RECORDS the outcome may not, or it would mark an unproven
+  // call successful and the validator would then agree with itself.
+  const http = apiflcGatewayStatus(related);
+  if (http) {
+    return http.status >= 400
+      ? { status: 'failed' as const, severity: 'high' as const, detail: `API Gateway returned HTTP ${http.status}` }
+      : { status: 'completed' as const, detail: `HTTP ${http.status} status observed in gateway logs` };
+  }
+
+  // No status yet. Keep waiting rather than inventing an outcome — the wall-clock timeout
+  // is the backstop, and apiflcPendingSignals re-opens this the moment the status lands.
+  const seen = new Set([...Object.keys(ctx.phaseTs), ...ctx.phasesThisCycle]);
+  if (!seen.size) return null;
+  const proto = apiflcTransactionProtocol;
+  return {
+    status: 'awaiting' as const,
+    waitingFor: proto.phases[proto.phases.length - 1] ?? 'RESPONSE',
+    detail: 'Awaiting the API-Gateway HTTP status that decides this transaction',
+  };
+}
+
 export const apiflcIngestionAgent: IngestionAgent = {
+  fastPath: apiflcFastPath,
   decide: (ctx, reason) => decideFromSpec('apps/apiflc/transaction.md', apiflcEvidence(ctx), reason),
 };

@@ -2,8 +2,17 @@ import type { DerivedOutcome, ParsedLog } from '@log/shared';
 import { apiflcJoin } from './join.js';
 import { apiflcTransactionProtocol } from './transactionProtocol.js';
 
-/** The gateway HTTP status carried in an apiflc call's logs, if any. */
-function httpStatusOf(logs: readonly ParsedLog[]): { status: number; logId: string } | undefined {
+/**
+ * The gateway HTTP status carried in an apiflc call's logs, if any — apiflc's ONLY
+ * conclusive outcome evidence. Exported because the ingestion fast path must decide on
+ * this and nothing else: {@link apiflcDeriveOutcome} additionally treats a bare handler
+ * RESPONSE as `completed`, which is a documented open gap in the gold corpus ("require
+ * confirmed gateway HTTP status"). That leniency is tolerable in a VALIDATOR, which only
+ * ever compares two readings; it is not tolerable in the code that RECORDS the outcome,
+ * where it would mark an unproven call as successful and leave the validator agreeing
+ * with itself.
+ */
+export function apiflcGatewayStatus(logs: readonly ParsedLog[]): { status: number; logId: string } | undefined {
   for (const l of logs) {
     const s =
       l.raw.match(/received response\.\s*status:\s*(\d{3})/i)?.[1] ??
@@ -38,7 +47,7 @@ export function apiflcDeriveOutcome(_messageId: string, relatedLogs: readonly Pa
       evidence.add(l.id);
     }
   }
-  const http = httpStatusOf(relatedLogs);
+  const http = apiflcGatewayStatus(relatedLogs);
   if (http) {
     evidence.add(http.logId);
     phases.add('RESPONSE'); // a logged HTTP response IS the completing RESPONSE
