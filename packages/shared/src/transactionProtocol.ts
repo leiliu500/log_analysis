@@ -38,4 +38,20 @@ export interface TransactionProtocol {
   eventOf(log: ParsedLog): TxEvent | undefined;
   /** True when an ackCode denotes success. No/undefined ackCode is treated as success. */
   isSuccess(ackCode?: string): boolean;
+  /**
+   * Does this record BEGIN a protocol message, rather than continue the one above it?
+   *
+   * CloudWatch stores one event per physical line, so a multi-line message arrives as
+   * several records and no single one carries every field {@link eventOf} needs. The
+   * engine therefore coalesces records into entries before extracting events — but the
+   * generic continuation heuristic recognises AWS Lambda / API-Gateway line starts only.
+   * A format it does not know (SCP's `<ns2:cashMessage>` XML) looks like a continuation
+   * throughout, so two consecutive messages in one stream would silently merge into one
+   * entry and the second would vanish.
+   *
+   * Declaring this makes each message start its own entry. It may only FORCE a start,
+   * never force a continuation, so an over-eager implementation costs nothing worse than
+   * the un-coalesced behaviour. Apps whose logs are plain AWS format (apiflc) can omit it.
+   */
+  startsEntry?(log: ParsedLog): boolean;
 }
