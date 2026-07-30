@@ -493,6 +493,19 @@ export async function getActiveValidationAgentRuns(now: number, staleMs = 10 * 6
   return rows.map(rawRowToValidationAgentRun);
 }
 
+/**
+ * The most recently FINISHED agent runs. An active-only panel is a mystery when it is
+ * empty — "no agent is running" reads identically whether the stage is working perfectly
+ * or silently broken. Showing the last completed run per application makes the difference
+ * visible without keeping a card up after the work is done.
+ */
+export async function getRecentValidationAgentRuns(limit = 10): Promise<ValidationAgentRun[]> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT * FROM validation_agent_runs
+    WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT ${limit}`;
+  return rows.map(rawRowToValidationAgentRun);
+}
+
 /** Close abandoned rows (see {@link getActiveValidationAgentRuns}) and drop old history. */
 export async function reapValidationAgentRuns(now: number, staleMs = 10 * 60_000, ttlMs = 24 * 60 * 60_000): Promise<void> {
   const sqlc = getSql();

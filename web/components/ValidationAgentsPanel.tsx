@@ -1,6 +1,6 @@
 'use client';
 
-import type { ValidationAgentInfo, ValidationAgentRun } from '@log/shared';
+import type { ValidationAgent, ValidationAgentInfo, ValidationAgentRun } from '@log/shared';
 
 /**
  * The per-application VALIDATION AI AGENTS, shown as a LIFECYCLE rather than a permanent
@@ -69,20 +69,41 @@ function RunningAgentCard({ run, info, now }: { run: ValidationAgentRun; info?: 
   );
 }
 
+/**
+ * Why no transaction is currently eligible, derived from the rows already on the page.
+ * Each bucket is one reason the residual gate excludes a transaction, so an empty panel
+ * explains itself instead of looking broken.
+ */
+function eligibilityOf(rows: ValidationAgent[]) {
+  return {
+    pending: rows.filter((v) => v.active).length,
+    reviewed: rows.filter((v) => !v.active && v.aiReviewedAt != null).length,
+    notCompleted: rows.filter((v) => !v.active && v.agentStatus !== 'completed').length,
+    issues: rows.filter((v) => v.result === 'completed_with_issues').length,
+  };
+}
+
 export function ValidationAgentsPanel({
   agents,
   activeRuns,
+  recentRuns = [],
+  rows = [],
   /** True while a "Validate now" request is in flight, before any run row exists yet. */
   starting = false,
   now,
 }: {
   agents: ValidationAgentInfo[];
   activeRuns: ValidationAgentRun[];
+  /** Most recently finished runs — proof the stage works even when nothing is running. */
+  recentRuns?: ValidationAgentRun[];
+  /** Every validation row on the page, used only to explain an empty panel. */
+  rows?: ValidationAgent[];
   starting?: boolean;
   now: number;
 }) {
   const enabled = agents.filter((a) => a.enabled);
   const byApp = new Map(agents.map((a) => [a.application, a]));
+  const eligibility = rows.length ? eligibilityOf(rows) : null;
 
   return (
     <section className="mb-8">
@@ -107,23 +128,58 @@ export function ValidationAgentsPanel({
       ) : starting ? (
         <p className="text-sm text-violet-300">Starting validation — agents will appear here while they review…</p>
       ) : (
-        <p className="text-sm text-slate-500">
-          No validation agent is running. One is spawned per application when a validation pass has residual
-          transactions to review — deterministically clean, but with an outcome the logs never proved — and closed as
-          soon as the pass finishes.
-          {enabled.length > 0 ? (
-            <span className="text-slate-600">
-              {' '}
-              Configured: {enabled.map((a) => a.displayName).join(', ')}.
-            </span>
+        <div className="rounded-xl border border-edge bg-panel p-3 text-sm text-slate-400">
+          <p className="mb-2">
+            No validation agent is running. One is spawned per application only when a pass has{' '}
+            <b>residual</b> transactions — closed, recorded <b>completed</b>, every deterministic check passed, and the
+            outcome never proved from the logs — and is closed as soon as that pass finishes.
+          </p>
+
+          {/* WHY nothing is eligible right now, from the rows already on this page. An
+              empty panel with no explanation is what made this look broken. */}
+          {eligibility && (
+            <ul className="mb-2 space-y-0.5 text-xs text-slate-500">
+              <li>
+                <span className="text-slate-300">{eligibility.pending}</span> still in flight — reviewed only once they
+                close
+              </li>
+              <li>
+                <span className="text-slate-300">{eligibility.reviewed}</span> already reviewed — a review is one-shot,
+                so a second pass has nothing to redo
+              </li>
+              <li>
+                <span className="text-slate-300">{eligibility.notCompleted}</span> failed or timed out — excluded, they
+                were already flagged
+              </li>
+              <li>
+                <span className="text-slate-300">{eligibility.issues}</span> completed with issues — excluded, they
+                already carry a signal
+              </li>
+            </ul>
+          )}
+
+          {recentRuns.length > 0 ? (
+            <p className="text-xs text-slate-500">
+              Last run:{' '}
+              {recentRuns.slice(0, 2).map((r, i) => (
+                <span key={r.id}>
+                  {i > 0 ? ' · ' : ''}
+                  <span className="text-slate-300">{r.application}</span> {r.reviewed} reviewed, {r.suspected} suspected,{' '}
+                  {r.discarded} discarded{r.failed ? `, ${r.failed} failed` : ''} ({secs(now - (r.finishedAt ?? now))} ago)
+                </span>
+              ))}
+            </p>
+          ) : enabled.length > 0 ? (
+            <p className="text-xs text-slate-600">
+              Configured: {enabled.map((a) => a.displayName).join(', ')} — no run recorded yet.
+            </p>
           ) : (
-            <span className="text-amber-300/80">
-              {' '}
+            <p className="text-xs text-amber-300/80">
               No application currently has an enabled validation agent
               {agents[0]?.disabledReason ? ` (${agents[0].disabledReason})` : ''}.
-            </span>
+            </p>
           )}
-        </p>
+        </div>
       )}
     </section>
   );
