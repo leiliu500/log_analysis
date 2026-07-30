@@ -74,6 +74,21 @@ for (const app of applicationRegistry.all()) {
     }
   });
 
+  /**
+   * The admission gate can prove a cited FACT is real; it cannot prove that a real fact
+   * is a DEFECT. That gap produced four false positives in prod — an ACK whose messageId
+   * differs from its REQUEST, a sender that changes between phases, an authorizer Allow
+   * on a call that later 5xx'd — all of them the protocol behaving exactly as specified.
+   * The only fix for that class is the spec itself, so every app's agent prompt must
+   * carry an explicit list of by-design facts it may never claim. Locked here so a future
+   * prompt edit cannot quietly drop it and reopen the same false positives.
+   */
+  test(`${app.id}: validation.agent.md lists the by-design facts the agent must never claim`, () => {
+    const body = loadPrompt(v.agentPromptPath!);
+    assert.match(body, /BY DESIGN/, 'prompt needs an explicit "by design — never claim these" section');
+    assert.match(body, /NEVER CLAIM/i, 'the section must be phrased as a prohibition');
+  });
+
   test(`${app.id}: validation.agent.md tells the agent to cite evidence and not invent it`, () => {
     // The safety of the AI stage is enforced by the admission gate in code, but the
     // prompt must not fight it: an agent told to speculate just burns discarded claims.

@@ -53,6 +53,10 @@ locals {
     # timeout below: deterministic results are persisted AFTER the stage, so the stage
     # must never be able to run the Lambda out of time.
     VALIDATION_AI_DEADLINE_MS = tostring(var.validation_ai_deadline_ms)
+    # Bump when an app's validation.agent.md changes: reviews older than this epoch are
+    # redone, so a false positive corrected in the prompt is actually cleared off the
+    # board instead of being frozen there by the one-shot dedup.
+    VALIDATION_AI_REVIEW_EPOCH = tostring(var.validation_ai_review_epoch)
   }
 }
 

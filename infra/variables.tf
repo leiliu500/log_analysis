@@ -153,6 +153,20 @@ variable "validation_ai_max_per_poll" {
   default     = 10
 }
 
+variable "validation_ai_review_epoch" {
+  description = <<-EOT
+    Epoch milliseconds. AI reviews recorded BEFORE this instant no longer count as done,
+    so those transactions are reviewed again. Bump it (to `date +%s000`) whenever an
+    app's validation.agent.md changes — a claim is only as good as the spec that produced
+    it, and without this the one-shot dedup would freeze verdicts from a superseded
+    prompt on the board permanently. 0 = never re-review.
+    Current value set 2026-07-30, when the SCP/apiflc agent prompts gained their
+    by-design "never claim these" lists after four false positives in prod.
+  EOT
+  type        = number
+  default     = 1785376800000
+}
+
 variable "validation_ai_deadline_ms" {
   description = "Wall-clock budget for the whole validation AI stage. Must stay well under the validation Lambda timeout, since deterministic results are persisted after the stage."
   type        = number

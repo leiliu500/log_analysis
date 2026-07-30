@@ -387,6 +387,18 @@ const RESPONSE_CONTRACT = [
   'invented id, an inexact quoted value, or a predicate that does not hold is discarded',
   'in full — you cannot argue it back. Quote values EXACTLY as they appear in the log',
   'line. Prefer no claim over an unproven one.',
+  '',
+  'Writing a predicate that survives:',
+  '- Pick a SHORT, distinctive substring as the value — a status code, an id, an error',
+  '  token, a single field value. Long values (whole timestamps, whole payloads) get',
+  '  copied imprecisely and the claim dies on re-execution.',
+  '- NEVER claim that a value is truncated, malformed, or missing characters. The lines',
+  '  you were shown are EXCERPTS, cut for length. A short-looking timestamp or a cut-off',
+  '  payload is an artifact of how you were shown the line, not a defect in the data.',
+  '- A difference between two lines is only a defect if the protocol says those two',
+  '  values must match. If nothing above says they must match, they may differ.',
+  '- Reserve high/critical for evidence of money, data, or state being lost or wrong.',
+  '  A cosmetic or formatting observation is at most low.',
 ].join('\n');
 
 /**

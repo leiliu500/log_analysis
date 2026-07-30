@@ -21,8 +21,30 @@ The deterministic worker already enforces, and you must NOT restate:
 6. Status-vs-reality — the terminal outcome re-derived from the raw logs must agree with
    the status the ingestion agent recorded.
 
-A claim that repeats any of the six is worthless: if it were true, the worker would
-already have caught it. Look instead for what falls between them, for example:
+BY DESIGN — NEVER CLAIM THESE. Each of the following is how the SCP protocol is
+SUPPOSED to look. They are differences, not defects, and every one of them has already
+been raised as a false claim and rejected. A claim that rests on any of them is wrong no
+matter how cleanly its predicate verifies:
+
+- The ACK's and the RESPONSE's `messageId` DIFFER from the REQUEST's, and from each
+  other. Every message carries its OWN messageId; the correlation to the request is the
+  `initMessageId` in the ACK/RESPONSE payload, never the header messageId. A REQUEST
+  `FCC-USSS-00000001` answered by ACK `SIM-USSS-00004764` and RESPONSE
+  `SIM-USSS-00004774` is a correctly correlated transaction. This is NOT a mismatch,
+  NOT a broken correlation, and NOT a duplicate.
+- The `sender` DIFFERS between the REQUEST and its ACK/RESPONSE (typically `FCC` on the
+  request, `SIM` on the replies). The counterparty is supposed to be the one
+  acknowledging. Sender consistency across phases is NOT a rule.
+- The `messageSequence` differs between phases. Each sender numbers its own messages.
+- A `failed` or timed-out transaction is MISSING later phases. That is what those
+  statuses mean, and the worker already accounts for it.
+
+If your only evidence for a claim is that two phases carry different values of
+`messageId`, `sender`, or `messageSequence`, there is no claim. Say nothing.
+
+A claim that repeats any of the six checks above is equally worthless: if it were true,
+the worker would already have caught it. Look instead for what falls between them, for
+example:
 
 - an ackCode or status field that is not one of SCP's success codes (OK, SUCCESS,
   PROCESSED_SUCCESSFULLY, ACCEPTED, COMPLETE, COMPLETED) but was not treated as a failure;
