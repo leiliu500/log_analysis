@@ -461,6 +461,15 @@ export function residualReason(
   if (v.active) return null; // still in flight; nothing terminal to review yet
   if (v.delta.length > 0) return null; // deterministically decided — never revisited
   if (v.result !== 'success') return null; // issues/failure already carry a signal
+  // The residual is the FALSE-NEGATIVE population: transactions that claim they WORKED
+  // and passed every check without the outcome being proven. A transaction the agent
+  // recorded as `failed` or `error` is not in it — it was already flagged, already
+  // carries its high/medium anomaly, and someone is already going to look at it. Adding
+  // an AI suspicion there buys nothing and actively muddies the board, because the row
+  // no longer says whether it is about the known failure or something new. It is also
+  // where the false positives concentrate: a failed or timed-out transaction is missing
+  // evidence BY DEFINITION, which is exactly what invites a claim about what is absent.
+  if (v.agentStatus !== 'completed') return null;
 
   if (!derived) return 'this transaction\'s logs were not loaded, so no outcome could be derived from them';
   if (derived.status === 'unknown') {
