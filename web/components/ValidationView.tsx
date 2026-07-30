@@ -71,7 +71,7 @@ export function ValidationView() {
   return (
     <div className="p-8">
       <div className="mb-1 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-white">Validation Workers</h1>
+        <h1 className="text-2xl font-semibold text-white">Validation</h1>
         <button
           onClick={() => void validateNow()}
           disabled={validating || loading}
