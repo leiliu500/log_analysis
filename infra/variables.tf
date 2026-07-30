@@ -160,11 +160,12 @@ variable "validation_ai_review_epoch" {
     app's validation.agent.md changes — a claim is only as good as the spec that produced
     it, and without this the one-shot dedup would freeze verdicts from a superseded
     prompt on the board permanently. 0 = never re-review.
-    Current value set 2026-07-30, when the SCP/apiflc agent prompts gained their
-    by-design "never claim these" lists after four false positives in prod.
+    Bumped 2026-07-30T03:25Z, when both agent prompts gained the "same message on more
+    than one log line is re-logging, not a duplicate" rule. The prior bump (02:00Z) added
+    the by-design lists that cleared the messageId / sender / authorizer false positives.
   EOT
   type        = number
-  default     = 1785376800000
+  default     = 1785381933000
 }
 
 variable "validation_ai_deadline_ms" {

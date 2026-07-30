@@ -43,6 +43,11 @@ how cleanly its predicate verifies:
   the normal shape of an apiflc call, not evidence of an entangled or mis-stitched join.
   Only claim a join problem if two DIFFERENT `correlationID` values appear on lines the
   join has placed in this one transaction.
+- The SAME event appearing on MORE THAN ONE log line. Two identical handler or gateway
+  lines are one event re-logged — the same request written to the log twice, not two
+  invocations. Repetition of an identical line is NEVER evidence of a duplicate call, a
+  double invocation, or a retry storm. Only claim a duplicate if the lines carry
+  DIFFERENT identifiers or DIFFERENT timestamps that prove two separate events.
 - Retries, warm-up lines, and duplicated log lines that repeat an identical message.
 
 If your only evidence for a claim is that two log groups use different identifiers, or
