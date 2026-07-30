@@ -341,7 +341,7 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
         (message_id, application, agent_status, active, result, expected_anomaly, expected_severity,
          actual_anomaly, actual_severity, delta, missing_phases, sla_breached, sla_budget_minutes,
          sla_from_phase, response_latency_ms, quality_anomalies, max_quality_severity,
-         ai_findings, ai_rejected, ai_reviewed_at,
+         ai_findings, ai_rejected, ai_reviewed_at, ai_error,
          phases, phase_ts, detail, spawned_at, updated_at, closed_at)
         VALUES (${v.messageId}, ${v.application ?? null}, ${v.agentStatus}, ${v.active}, ${v.result},
                 ${v.expectedAnomaly}, ${v.expectedSeverity ?? null}, ${v.actualAnomaly}, ${v.actualSeverity ?? null},
@@ -349,6 +349,7 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
                 ${v.slaBudgetMinutes ?? null}, ${v.slaFromPhase ?? null}, ${v.responseLatencyMs ?? null},
                 ${JSON.stringify(v.qualityAnomalies)}::jsonb, ${v.maxQualitySeverity ?? null},
                 ${JSON.stringify(v.aiFindings ?? [])}::jsonb, ${v.aiRejected ?? null}, ${v.aiReviewedAt ?? null},
+                ${v.aiError ?? null},
                 ${JSON.stringify(v.phases)}::jsonb, ${JSON.stringify(v.phaseTs)}::jsonb,
                 ${v.detail ?? null}, ${v.spawnedAt}, ${v.updatedAt}, ${v.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
@@ -367,6 +368,9 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
           ai_findings = CASE WHEN EXCLUDED.ai_reviewed_at IS NULL THEN validation_agents.ai_findings ELSE EXCLUDED.ai_findings END,
           ai_rejected = COALESCE(EXCLUDED.ai_rejected, validation_agents.ai_rejected),
           ai_reviewed_at = COALESCE(EXCLUDED.ai_reviewed_at, validation_agents.ai_reviewed_at),
+          -- Always take the latest: a retry that succeeds must CLEAR the stored error,
+          -- and a retry that fails again must keep it visible.
+          ai_error = EXCLUDED.ai_error,
           -- Same reason for the verdict: a stored 'ai_suspected' survives a later
           -- deterministic re-pass, but ONLY while that re-pass is still a clean success —
           -- if the deterministic engine now has something to say (failure, issues), its
@@ -448,6 +452,7 @@ function rawRowToValidationAgent(r: Record<string, unknown>): ValidationAgent {
     maxQualitySeverity: (r.max_quality_severity ?? undefined) as ValidationAgent['maxQualitySeverity'],
     aiFindings: jsonbField<ValidationAgent['aiFindings']>(r.ai_findings, []),
     aiRejected: num(r.ai_rejected),
+    aiError: (r.ai_error ?? undefined) as string | undefined,
     aiReviewedAt: num(r.ai_reviewed_at),
     phases: jsonbField<string[]>(r.phases, []),
     phaseTs: jsonbField<Record<string, number>>(r.phase_ts, {}),

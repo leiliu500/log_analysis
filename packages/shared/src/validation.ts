@@ -106,7 +106,13 @@ export interface ValidationAgent {
    * hallucination rate is an observable production number rather than an assumption.
    */
   aiRejected?: number;
-  /** When the AI review ran (absent ⇒ this transaction was never residual). */
+  /**
+   * Why the AI review could not be completed (model error, throttling, a reply too
+   * mangled to recover). When set with no findings, {@link aiReviewedAt} stays UNSET —
+   * a failed review must never read as "reviewed and clean", and the next poll retries it.
+   */
+  aiError?: string;
+  /** When the AI review ran (absent ⇒ this transaction was never residual, or it failed). */
   aiReviewedAt?: number;
   /** Human note on the validation outcome. */
   detail?: string;

@@ -23,6 +23,21 @@ variable "az_count" {
   default = 2
 }
 
+variable "bedrock_max_tokens" {
+  description = <<-EOT
+    Output-token ceiling every agent inherits (ingestion reasoner, validation AI agent,
+    analysis reasoning, simulator, Log Assistant). A CAP, not a reservation: cost and
+    latency follow the tokens actually emitted, so a generous value is free on short
+    replies. Set generously on purpose — the configured reasoning model charges its
+    hidden reasoning tokens against this same budget, so a tight ceiling gets eaten by
+    reasoning and the visible reply arrives truncated or empty. Verified: the deployed
+    model accepts ceilings up to its full context window. Individual call sites can still
+    bound themselves (INGEST_DYNAMIC_MAXTOKENS, VALIDATION_AI_MAXTOKENS).
+  EOT
+  type        = number
+  default     = 32000
+}
+
 variable "bedrock_model_arn" {
   description = "Foundation model ARN the agents use (Claude on Bedrock)."
   type        = string
