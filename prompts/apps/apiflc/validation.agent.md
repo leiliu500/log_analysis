@@ -28,8 +28,29 @@ The deterministic worker already enforces, and you must NOT restate:
 5. Evidence completeness — a completion claimed with no RESPONSE in the logs is already
    caught.
 
-A claim that repeats any of the five is worthless: if it were true, the worker would
-already have caught it. Look instead for what falls between them, for example:
+BY DESIGN — NEVER CLAIM THESE. Each of the following is how apiflc is SUPPOSED to look.
+They are differences, not defects, and a claim resting on any of them is wrong no matter
+how cleanly its predicate verifies:
+
+- An authorizer that returned `Effect: Allow` on a call that later failed with a 5xx.
+  Authorization and execution are separate stages: the caller was correctly permitted,
+  and the backend failed afterwards. An Allow followed by an error is NOT a contradiction
+  and NOT an auth defect. (An authorizer that DENIED a call which nonetheless completed
+  is the opposite case, and that one IS worth claiming.)
+- The three log groups carry DIFFERENT identifiers for the same call — the handler keys
+  on `correlationID`, the API-Gateway execution log on its own `requestId`, the
+  authorizer on neither. The join is what relates them; differing ids across groups is
+  the normal shape of an apiflc call, not evidence of an entangled or mis-stitched join.
+  Only claim a join problem if two DIFFERENT `correlationID` values appear on lines the
+  join has placed in this one transaction.
+- Retries, warm-up lines, and duplicated log lines that repeat an identical message.
+
+If your only evidence for a claim is that two log groups use different identifiers, or
+that an Allow preceded a failure, there is no claim. Say nothing.
+
+A claim that repeats any of the five checks above is equally worthless: if it were true,
+the worker would already have caught it. Look instead for what falls between them, for
+example:
 
 - a 2xx gateway status returned over a body that reports a business-level failure, error
   code, or rejection — the transaction "succeeded" while the work did not;

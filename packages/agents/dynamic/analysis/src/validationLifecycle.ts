@@ -197,6 +197,15 @@ const AI_MAX_TOKENS = process.env.VALIDATION_AI_MAXTOKENS ? Number(process.env.V
 const AI_SCOPE = (process.env.VALIDATION_AI_SCOPE ?? 'clean').toLowerCase() === 'unproven' ? 'unproven' : 'clean';
 
 /**
+ * Reviews older than this epoch (ms) no longer count as done, so the transaction is
+ * reviewed again. Bump it whenever an app's `validation.agent.md` changes: a claim is
+ * only as good as the spec that produced it, and a corrected spec must be able to
+ * supersede the verdicts the old one left behind — otherwise a false positive fixed in
+ * the prompt stays on the board forever, because the one-shot dedup never revisits it.
+ */
+const AI_REVIEW_EPOCH = Number(process.env.VALIDATION_AI_REVIEW_EPOCH ?? 0);
+
+/**
  * The default validation reasoner — a Bedrock call at temperature 0, injected into each
  * app's validation agent so the app packages never depend on Bedrock or on this engine.
  * It returns RAW TEXT: parsing lives beside the admission gate in `@log/shared`, so a
@@ -733,7 +742,7 @@ export async function validateAgents(
     // one-shot; its stored result is sticky (see upsertValidationAgents).
     let alreadyReviewed = new Set<string>();
     try {
-      alreadyReviewed = await getAiReviewedMessageIds(recentClosed.map((a) => a.messageId));
+      alreadyReviewed = await getAiReviewedMessageIds(recentClosed.map((a) => a.messageId), AI_REVIEW_EPOCH);
     } catch (err) {
       console.error('validation: could not read prior AI reviews, skipping the AI stage', (err as Error).message);
       alreadyReviewed = new Set(recentClosed.map((a) => a.messageId)); // fail closed — never re-review blindly

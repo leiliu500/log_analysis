@@ -410,11 +410,15 @@ export async function getValidationHistory(limit = 200): Promise<ValidationAgent
  * every one of them — the review is one-shot by design, and its stored result is sticky
  * (see the ON CONFLICT clause in {@link upsertValidationAgents}).
  */
-export async function getAiReviewedMessageIds(messageIds: string[]): Promise<Set<string>> {
+export async function getAiReviewedMessageIds(messageIds: string[], since = 0): Promise<Set<string>> {
   if (!messageIds.length) return new Set();
   const sqlc = getSql();
+  // `since` is the review EPOCH: a review older than it no longer counts as done, so
+  // bumping the epoch re-opens every transaction for review. That is the operational
+  // handle for a prompt change — the agent's verdicts are only as good as the spec it
+  // was given, so a corrected spec has to be able to supersede what the old one produced.
   const rows = await sqlc`SELECT message_id FROM validation_agents
-    WHERE message_id = ANY(${messageIds}) AND ai_reviewed_at IS NOT NULL`;
+    WHERE message_id = ANY(${messageIds}) AND ai_reviewed_at IS NOT NULL AND ai_reviewed_at >= ${since}`;
   return new Set(rows.map((r) => r.message_id as string));
 }
 
