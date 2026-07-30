@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ParsedLog } from '@log/shared';
-import { apiflcRelatedLogs, apiflcIdsOf } from './join.js';
+import { apiflcRelatedLogs, apiflcIdsOf, apiflcJoin } from './join.js';
 import { apiflcHttpOutcomes, apiflcDeriveOutcome } from './httpOutcomes.js';
 
 const HANDLER = '/aws/lambda/adt-fca-d1-api_gateway_handler';
@@ -164,4 +164,40 @@ test('deriveOutcome: an id with no logs is unknown, never a guess', () => {
   const d = apiflcDeriveOutcome('nope', apiflcRelatedLogs('nope', LOGS2));
   assert.equal(d.status, 'unknown');
   assert.deepEqual(d.evidenceLogIds, []);
+});
+
+// ---------------------------------------------------------------------------
+// Per-window memoization. The join is O(window) with fresh allocations, and the
+// ingestion fast path calls it once per transaction — so without a cache the
+// cost is O(transactions x window). Every caller in a poll is handed the same
+// window array, so identity keying collapses it to once per poll.
+// ---------------------------------------------------------------------------
+
+test('the join is computed ONCE per window array, not per call', () => {
+  const first = apiflcJoin(LOGS);
+  const second = apiflcJoin(LOGS);
+  assert.equal(first, second, 'same window array must reuse the same join');
+});
+
+test('a DIFFERENT window array gets its own join', () => {
+  const other = apiflcJoin([...LOGS]);
+  assert.notEqual(other, apiflcJoin(LOGS), 'a distinct array is a distinct window');
+});
+
+test('a window that GROWS is rebuilt rather than served stale', () => {
+  const growing = [...LOGS];
+  const before = apiflcJoin(growing);
+  growing.push(mk(GW, `(${GW_REQ}) Method completed with status: 500`));
+  const after = apiflcJoin(growing);
+  assert.notEqual(before, after, 'an appended line must invalidate the cached join');
+});
+
+test('memoization does not change what the join returns', () => {
+  // Same inputs, cached or not, must resolve the same call.
+  const viaCache = apiflcRelatedLogs(CORR, LOGS);
+  const viaFresh = apiflcRelatedLogs(CORR, [...LOGS]);
+  assert.deepEqual(
+    viaCache.map((l) => l.raw),
+    viaFresh.map((l) => l.raw),
+  );
 });
