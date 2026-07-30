@@ -61,7 +61,36 @@ export interface ApiflcJoin {
  * distinct transactions. Without this, one bad line collapses every apiflc call into a
  * single blob and no agent can read its own HTTP status.
  */
+/**
+ * Per-window memoization of {@link buildApiflcJoin}.
+ *
+ * The join rebuilds a whole union-find over EVERY log in the window and re-coalesces the
+ * entries, so it is O(window) with fresh Map allocations each call. That was affordable
+ * while only the handful of transactions being reasoned about called it. It stopped being
+ * affordable when the ingestion fast path started calling it once per apiflc transaction:
+ * the cost became O(transactions x window) — 1,000 transactions over a 10,000-line window
+ * is ten million line-scans and a thousand union-find rebuilds in a single poll.
+ *
+ * Every caller in a poll is handed the SAME window array, so keying on the array identity
+ * collapses that back to O(window) once per poll. It is a WeakMap, so a window is
+ * collected with the poll that made it.
+ *
+ * ASSUMPTION: a window array is treated as immutable once built (it is — the engine
+ * assembles it, then only reads). The length check catches the one mutation that would
+ * realistically happen, an append, so a grown array is rebuilt rather than served stale.
+ */
+const joinCache = new WeakMap<object, { size: number; join: ApiflcJoin }>();
+
 export function apiflcJoin(logs: readonly ParsedLog[]): ApiflcJoin {
+  const key = logs as unknown as object;
+  const hit = joinCache.get(key);
+  if (hit && hit.size === logs.length) return hit.join;
+  const join = buildApiflcJoin(logs);
+  joinCache.set(key, { size: logs.length, join });
+  return join;
+}
+
+function buildApiflcJoin(logs: readonly ParsedLog[]): ApiflcJoin {
   const parent = new Map<string, string>();
   const corrOf = new Map<string, string>(); // component root -> its business correlationID
   const find = (x: string): string => {
