@@ -282,8 +282,11 @@ export function ValidationPanel({
                             {v.aiFindings.length} verified
                           </span>
                         ) : (
-                          <span className="text-slate-500" title="Reviewed; no claim survived re-verification.">
-                            no claim
+                          <span
+                            className="whitespace-nowrap rounded border border-emerald-600/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-400/80"
+                            title="The AI agent reviewed this transaction and raised nothing that survived re-verification. This is a completed review with a clean outcome — the expected answer for most transactions — not a skipped or failed one."
+                          >
+                            reviewed · clean
                           </span>
                         )}
                         {v.aiRejected ? (

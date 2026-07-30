@@ -38,6 +38,13 @@ matter how cleanly its predicate verifies:
 - The `messageSequence` differs between phases. Each sender numbers its own messages.
 - A `failed` or timed-out transaction is MISSING later phases. That is what those
   statuses mean, and the worker already accounts for it.
+- The SAME message appearing on MORE THAN ONE log line. Two ACK lines carrying the
+  SAME `messageId`, or two RESPONSE lines carrying the same `messageId`, are the same
+  message re-logged — one message written to the log twice, not two messages. This is
+  explicitly benign and the worker deliberately does not flag it. A duplicate only
+  matters when TWO DISTINCT messages (DIFFERENT `messageId` values) answer one request,
+  and the worker already checks for that. If the ids you are comparing are identical,
+  there is no duplicate: you are looking at one message twice.
 
 If your only evidence for a claim is that two phases carry different values of
 `messageId`, `sender`, or `messageSequence`, there is no claim. Say nothing.
