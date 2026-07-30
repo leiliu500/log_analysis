@@ -285,6 +285,21 @@ export function admitClaim(
     }
   }
 
+  // CO-OCCURRENCE IS NOT A DEFECT. If every predicate is the same field/op/value and
+  // differs only in which line it runs against, the claim proves exactly one thing: that
+  // N lines share a value. That is what a correlation id, a request id, or a trace id is
+  // FOR — one call is logged across many lines under one identifier — so it can never be
+  // evidence on its own. Observed in prod as "Duplicate API Gateway requestId across
+  // invocations", witnessed by the same `contains <requestId>` on two lines of a single
+  // call. A real claim needs at least one predicate that says something DIFFERENT.
+  if (preds.length > 1) {
+    const shape = (p: ClaimPredicate): string => `${p?.field}|${p?.op}|${String(p?.value ?? '').toLowerCase()}`;
+    const first = shape(preds[0]!);
+    if (preds.every((p) => shape(p) === first)) {
+      return { ok: false, reason: 'co-occurrence only — every predicate asserts the same value on a different line' };
+    }
+  }
+
   const cited = new Set(ids);
   for (const p of preds) {
     if (!p || typeof p.logId !== 'string') return { ok: false, reason: 'predicate has no logId' };

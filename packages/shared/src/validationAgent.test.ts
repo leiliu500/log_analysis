@@ -263,3 +263,54 @@ test('a claim citing the id AND something substantive is still admitted', () => 
   );
   assert.equal(out.findings.length, 1, 'membership may accompany a real witness, it just may not be the whole one');
 });
+
+/**
+ * CO-OCCURRENCE IS NOT A DEFECT. Observed in prod on 1234: "Duplicate API Gateway
+ * requestId across invocations", witnessed by the identical `contains <requestId>` on two
+ * lines — which is simply what a request id does, one call logged across many lines. The
+ * earlier membership guard missed it because the value was a full UUID that merely
+ * embedded the correlation id, so it did not look membership-only.
+ */
+test('discards a claim whose predicates are the same value on different lines', () => {
+  const logs = [
+    makeParsedLog('apiflc-gw', 1_000, 'Extended Request Id: 68f54c61-3e54-4e02-8ccf-000000001234 start', 'gw-a'),
+    makeParsedLog('apiflc-gw', 1_400, 'Extended Request Id: 68f54c61-3e54-4e02-8ccf-000000001234 end', 'gw-b'),
+  ];
+  const out = admitClaims(
+    [
+      claim({
+        title: 'Duplicate API Gateway requestId across invocations',
+        evidenceLogIds: ['gw-a', 'gw-b'],
+        predicates: [
+          { logId: 'gw-a', field: 'message', op: 'contains', value: '68f54c61-3e54-4e02-8ccf-000000001234' },
+          { logId: 'gw-b', field: 'message', op: 'contains', value: '68f54c61-3e54-4e02-8ccf-000000001234' },
+        ],
+      }),
+    ],
+    logs,
+    '1234',
+  );
+  assert.equal(out.findings.length, 0);
+  assert.match(out.rejected[0]!.reason, /co-occurrence only/);
+});
+
+test('a claim comparing DIFFERENT values across lines is still admitted', () => {
+  const logs = [
+    makeParsedLog('apiflc-gw', 1_000, 'correlationID: 1234 Method completed with status: 200', 'gw-c'),
+    makeParsedLog('apiflc-handler', 900, 'correlationID: 1234 response body {"error":"DECLINED"}', 'h-c'),
+  ];
+  const out = admitClaims(
+    [
+      claim({
+        evidenceLogIds: ['gw-c', 'h-c'],
+        predicates: [
+          { logId: 'gw-c', field: 'raw', op: 'contains', value: 'status: 200' },
+          { logId: 'h-c', field: 'raw', op: 'contains', value: '"error":"DECLINED"' },
+        ],
+      }),
+    ],
+    logs,
+    '1234',
+  );
+  assert.equal(out.findings.length, 1, 'a 200 over a DECLINED body is a real contradiction');
+});
