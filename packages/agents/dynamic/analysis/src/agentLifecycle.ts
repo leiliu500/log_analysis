@@ -112,8 +112,12 @@ async function mapPool<T>(items: T[], limit: number, fn: (item: T, index: number
  *  model whose hidden reasoning tokens count against maxTokens. A tight budget (e.g. 400)
  *  gets consumed by reasoning on large prompts, leaving NO final text — the reply comes back
  *  empty, decideFromSpec returns null, and every transaction times out instead of
- *  transitioning. The JSON answer itself is tiny; the budget is headroom for reasoning. */
-const REASONER_MAX_TOKENS = Number(process.env.INGEST_DYNAMIC_MAXTOKENS ?? 2000);
+ *  transitioning. The JSON answer itself is tiny; the budget is headroom for reasoning.
+ *  So it inherits the platform-wide ceiling (`BEDROCK_MAX_TOKENS`, see bedrock.ts) rather
+ *  than carrying its own number; INGEST_DYNAMIC_MAXTOKENS still overrides it per-site. */
+const REASONER_MAX_TOKENS = process.env.INGEST_DYNAMIC_MAXTOKENS
+  ? Number(process.env.INGEST_DYNAMIC_MAXTOKENS)
+  : undefined;
 const defaultReasoner: TransitionReasoner = (system, user) =>
   converseJson<Partial<TransitionDecision>>(user, { system, temperature: 0, maxTokens: REASONER_MAX_TOKENS });
 
@@ -177,7 +181,8 @@ export async function stepAgentsDynamic(
         phaseTs: {},
         source: evs[0]!.source,
         logGroup: evs[0]!.logGroup,
-        spawnedAt: evs[0]!.ts,
+        spawnedAt: evs[0]!.ts, // DATA time — the initiating log line's timestamp
+        firstSeenAt: now, // WALL-CLOCK — when we first saw it; never moved again
         updatedAt: now,
       };
       agents.set(id, a);
@@ -272,7 +277,22 @@ export async function stepAgentsDynamic(
     const tsVals = Object.values(a.phaseTs);
     const last = tsVals.length ? Math.max(...tsVals) : a.spawnedAt;
     const appTimeoutMs = lifecycleTimeoutMs(registry.byId(a.application), timeoutMs);
-    if (now - last > appTimeoutMs) {
+    // TWO clocks, and both must agree before a transaction is called timed out:
+    //   (1) DATA time — nothing new has arrived for this transaction in `appTimeoutMs`.
+    //   (2) WALL-CLOCK — we have actually WATCHED it that long (`firstSeenAt`).
+    // (1) alone was the bug: `last` comes from log timestamps while `now` is wall-clock,
+    // so a transaction ingested from logs already older than its timeout — a simulation,
+    // a back-fill, a catch-up after the poller was down, or simply delivery latency —
+    // was closed as "timed out" by the first poll that ever saw it. It never got to be
+    // an active agent, so nothing could observe it in flight and no validation worker
+    // could shadow it as pending. Requiring (2) guarantees every transaction gets a full
+    // timeout window of real observation, which is what "inactivity" always meant.
+    // `firstSeenAt` is used rather than `updatedAt` deliberately: `updatedAt` is bumped
+    // whenever a poll re-matches this agent's events, and the poll window overlaps, so a
+    // still-visible log line would keep pushing it forward and the agent would never
+    // time out at all.
+    const observedMs = now - (a.firstSeenAt ?? a.spawnedAt);
+    if (now - last > appTimeoutMs && observedMs > appTimeoutMs) {
       const wf = a.waitingFor;
       a.status = 'error';
       a.active = false;

@@ -5,6 +5,7 @@ import { apiflcRelatedLogs } from './join.js';
 import { apiflcDeriveOutcome } from './httpOutcomes.js';
 import { apiflcIngestionAgent, apiflcPendingSignals } from './agent.js';
 import { apiflcReconcile } from './reconcile.js';
+import { apiflcValidationAgent } from './validationAgent.js';
 import { APIFLC_SAMPLE } from './samples.js';
 import { synthesizeApiflcFromRequest } from './simulateApiflc.js';
 
@@ -58,5 +59,12 @@ export const apiflcApplication: ApplicationDef = {
     // System-of-record cross-check against Data Services (env-configured; disabled
     // until APIFLC_RECONCILE_URL is set).
     reconcile: apiflcReconcile,
+    // Validation AI agent: reviews ONLY the residual — transactions the deterministic
+    // checks passed while the gateway HTTP status was absent, so the outcome could not
+    // be proven. Its claims must cite real apiflc log ids and carry predicates that are
+    // re-executed before admission, and they surface as `ai_suspected`, never as a
+    // delta — so it can only reduce false negatives, never overturn a proven verdict.
+    agentPromptPath: 'apps/apiflc/validation.agent.md',
+    validationAgent: apiflcValidationAgent,
   },
 };

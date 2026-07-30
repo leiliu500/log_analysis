@@ -19,7 +19,7 @@ import {
   deleteAllPollerRuns,
 } from '@log/db';
 import { simulate, handleSimulatePrompt } from '@log/simulator';
-import { analyzeAllSources, routeRequest, validateAgents, applicationRegistry } from '@log/agents';
+import { analyzeAllSources, routeRequest, validateAgents, applicationRegistry, type ValidationRunResult } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
 import { runBacktest, corpus, toSummary } from '@log/backtest';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
@@ -91,7 +91,21 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
       return await validateAgents(applicationRegistry);
     } catch (err) {
       req.log.error(err, 'validation pass failed');
-      return { checked: 0, passed: 0, issues: 0, failed: 0, pending: 0, suppressed: 0, byApplication: {} };
+      const empty: ValidationRunResult = {
+        checked: 0,
+        passed: 0,
+        issues: 0,
+        failed: 0,
+        pending: 0,
+        aiReviewed: 0,
+        aiSuspected: 0,
+        aiRejected: 0,
+        aiFailed: 0,
+        suppressed: 0,
+        byApplication: {},
+        ruleCandidates: [],
+      };
+      return empty;
     }
   });
 

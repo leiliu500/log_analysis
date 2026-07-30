@@ -89,6 +89,15 @@ export function ValidationView() {
         discrepancy is a colour-coded delta below. Runs in a separate poller from ingestion; this
         view auto-refreshes every {REFRESH_MS / 1000}s.
       </p>
+      <p className="mb-4 text-sm text-slate-400">
+        On top of that, each application's <b>validation AI agent</b> reviews only the{' '}
+        <b>residual</b> — transactions the deterministic checks passed while the logs never proved
+        the outcome, i.e. the set that previously passed on absence of evidence. It cannot produce a
+        verdict: every claim it makes must cite real log ids and carry predicates the platform
+        re-executes against those rows, and anything that fails is discarded and counted. Surviving
+        claims appear as their own <span className="text-violet-300">AI-suspected</span> result,
+        never as a delta, so a deterministic verdict is never overturned by a model.
+      </p>
 
       {/* Result summary + application filter */}
       <div className="mb-6 flex items-center justify-between border-b border-edge pb-3">

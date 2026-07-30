@@ -11,6 +11,23 @@ const MODEL_ID =
 const EMBED_MODEL_ID =
   process.env.BEDROCK_EMBED_MODEL_ID ?? 'amazon.titan-embed-text-v2:0';
 
+/**
+ * The output-token ceiling EVERY agent inherits, in one place.
+ *
+ * `maxTokens` is a CAP, not a reservation: billing and latency follow the tokens the
+ * model actually emits, so a generous ceiling costs nothing on a short reply. A tight one
+ * is what actually hurts — the configured foundation model (openai.gpt-oss-120b) is a
+ * REASONING model whose hidden reasoning tokens are charged against this same budget, so
+ * a low ceiling gets consumed by reasoning and the reply is truncated mid-JSON or comes
+ * back empty. That produced silently-failed validation reviews in prod at 2000, and
+ * timed-out ingest transitions at 400 before that.
+ *
+ * Verified against the deployed model: it accepts ceilings up to the full context window
+ * without a ValidationException. Individual call sites may still pass a smaller
+ * `maxTokens` when they genuinely want a short answer; they inherit this otherwise.
+ */
+const MAX_TOKENS = Number(process.env.BEDROCK_MAX_TOKENS ?? 32000);
+
 let _client: BedrockRuntimeClient | undefined;
 function client(): BedrockRuntimeClient {
   if (!_client) _client = new BedrockRuntimeClient({ region });
@@ -35,7 +52,7 @@ export async function converse(
       messages,
       system: opts.system ? [{ text: opts.system }] : undefined,
       inferenceConfig: {
-        maxTokens: opts.maxTokens ?? 1500,
+        maxTokens: opts.maxTokens ?? MAX_TOKENS,
         temperature: opts.temperature ?? 0.1,
       },
     }),
@@ -85,3 +102,5 @@ export async function embed(text: string): Promise<number[]> {
 }
 
 export const modelIds = { MODEL_ID, EMBED_MODEL_ID };
+/** The inherited output ceiling — exported so a call site can log what it actually got. */
+export const maxTokens = MAX_TOKENS;

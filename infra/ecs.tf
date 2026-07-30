@@ -104,6 +104,10 @@ resource "aws_ecs_task_definition" "api" {
       { name = "CLOUDWATCH_LOG_GROUPS", value = join(",", concat(var.cloudwatch_log_groups, var.application_log_groups)) },
       { name = "BEDROCK_MODEL_ID", value = local.foundation_model },
       { name = "BEDROCK_EMBED_MODEL_ID", value = "amazon.titan-embed-text-v2:0" },
+      # Output-token ceiling inherited by every agent in the API container (Log
+      # Assistant, chat, simulator, on-demand analysis). Kept identical to the Lambdas'
+      # so the same question answered by either half gets the same budget.
+      { name = "BEDROCK_MAX_TOKENS", value = tostring(var.bedrock_max_tokens) },
       { name = "BEDROCK_SUPERVISOR_AGENT_ID", value = aws_bedrockagent_agent.supervisor.agent_id },
       { name = "BEDROCK_SUPERVISOR_AGENT_ALIAS_ID", value = aws_bedrockagent_agent_alias.supervisor.agent_alias_id }
     ]

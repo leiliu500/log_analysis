@@ -23,6 +23,21 @@ variable "az_count" {
   default = 2
 }
 
+variable "bedrock_max_tokens" {
+  description = <<-EOT
+    Output-token ceiling every agent inherits (ingestion reasoner, validation AI agent,
+    analysis reasoning, simulator, Log Assistant). A CAP, not a reservation: cost and
+    latency follow the tokens actually emitted, so a generous value is free on short
+    replies. Set generously on purpose — the configured reasoning model charges its
+    hidden reasoning tokens against this same budget, so a tight ceiling gets eaten by
+    reasoning and the visible reply arrives truncated or empty. Verified: the deployed
+    model accepts ceilings up to its full context window. Individual call sites can still
+    bound themselves (INGEST_DYNAMIC_MAXTOKENS, VALIDATION_AI_MAXTOKENS).
+  EOT
+  type        = number
+  default     = 32000
+}
+
 variable "bedrock_model_arn" {
   description = "Foundation model ARN the agents use (Claude on Bedrock)."
   type        = string
@@ -117,4 +132,50 @@ variable "flow_revision" {
   description = "Bump to force the Bedrock flow to re-prepare, re-version, and re-point its alias."
   type        = number
   default     = 1
+}
+
+# --- Validation AI agent (the per-application residual reviewer) --------------
+# The only model in the validation path. It is invoked ONLY for transactions the
+# deterministic worker passed while the logs never proved the outcome, and every claim
+# it makes is re-executed against the real log rows before being recorded — so it can
+# add a suspicion to the unproven set but can never overturn a proven verdict. These
+# knobs exist so the stage can be switched off or re-bounded without a code deploy.
+
+variable "validation_ai_enabled" {
+  description = "Run each application's validation AI agent over the residual set. false = deterministic validation only."
+  type        = bool
+  default     = true
+}
+
+variable "validation_ai_max_per_poll" {
+  description = "Hard cap on validation AI model calls per poll. Bounds cost; a truncated run is logged, never silent."
+  type        = number
+  default     = 10
+}
+
+variable "validation_ai_review_epoch" {
+  description = <<-EOT
+    Epoch milliseconds. AI reviews recorded BEFORE this instant no longer count as done,
+    so those transactions are reviewed again. Bump it (to `date +%s000`) whenever an
+    app's validation.agent.md changes — a claim is only as good as the spec that produced
+    it, and without this the one-shot dedup would freeze verdicts from a superseded
+    prompt on the board permanently. 0 = never re-review.
+    History of bumps, each one a correction that had to supersede earlier verdicts:
+      02:00Z - by-design lists added; cleared the messageId / sender / authorizer FPs.
+      03:25Z - "same message on two log lines is re-logging, not a duplicate".
+      03:39Z - gate rejects absence-only claims (predicates that are all
+               `not_contains`), which is what let "lacks a terminal status line" and
+               "sendTime missing seconds" through as verified findings.
+      04:27Z - residual narrowed to COMPLETED transactions only (a failed/timed-out one
+               was already flagged, so it is not part of the false-negative population),
+               and the gate now rejects vacuous membership-only witnesses.
+  EOT
+  type        = number
+  default     = 1785385628000
+}
+
+variable "validation_ai_deadline_ms" {
+  description = "Wall-clock budget for the whole validation AI stage. Must stay well under the validation Lambda timeout, since deterministic results are persisted after the stage."
+  type        = number
+  default     = 60000
 }

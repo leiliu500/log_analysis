@@ -445,8 +445,9 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
 
   const raw = await converse(
     `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}${rawBlock ? `\n\n${rawBlock}` : ''}`,
-    // A response body can be several KB; 2500 tokens would truncate it mid-JSON.
-    { system, temperature: 0, maxTokens: rawBlock ? 8000 : 2500 },
+    // No per-site ceiling: a response body can be several KB and the old 2500/8000 split
+    // truncated answers mid-JSON. Inherits the platform-wide BEDROCK_MAX_TOKENS.
+    { system, temperature: 0 },
   );
   // Guard the one free-form LLM output: flag any transaction id it cited that does
   // not actually appear in the retrieved logs, so a fabricated id is never trusted.

@@ -196,11 +196,11 @@ export async function upsertAgents(agents: Agent[]): Promise<void> {
     for (const a of agents) {
       await tx`INSERT INTO agents
         (message_id, application, status, active, waiting_for, phases, phase_ts, source, log_group,
-         ack_code, severity, detail, spawned_at, updated_at, closed_at)
+         ack_code, severity, detail, spawned_at, first_seen_at, updated_at, closed_at)
         VALUES (${a.messageId}, ${a.application ?? null}, ${a.status}, ${a.active}, ${a.waitingFor ?? null},
                 ${JSON.stringify(a.phases)}::jsonb, ${JSON.stringify(a.phaseTs)}::jsonb, ${a.source ?? null}, ${a.logGroup ?? null},
                 ${a.ackCode ?? null}, ${a.severity ?? null}, ${a.detail ?? null},
-                ${a.spawnedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
+                ${a.spawnedAt}, ${a.firstSeenAt ?? a.updatedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
           application = COALESCE(agents.application, EXCLUDED.application),
           status = EXCLUDED.status, active = EXCLUDED.active,
@@ -210,6 +210,10 @@ export async function upsertAgents(agents: Agent[]): Promise<void> {
           log_group = COALESCE(agents.log_group, EXCLUDED.log_group),
           ack_code = COALESCE(EXCLUDED.ack_code, agents.ack_code),
           severity = EXCLUDED.severity, detail = EXCLUDED.detail,
+          -- NEVER moved after the first insert: it is the anchor the inactivity timeout
+          -- measures real observation from, so letting a later poll push it forward would
+          -- mean an agent whose logs stay in the poll window could never time out at all.
+          first_seen_at = COALESCE(agents.first_seen_at, EXCLUDED.first_seen_at),
           updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
     }
   });
@@ -288,6 +292,7 @@ function rawRowToAgent(r: Record<string, unknown>): Agent {
     severity: (r.severity ?? undefined) as string | undefined,
     detail: (r.detail ?? undefined) as string | undefined,
     spawnedAt: Number(r.spawned_at),
+    firstSeenAt: num(r.first_seen_at),
     updatedAt: Number(r.updated_at),
     closedAt: num(r.closed_at),
   };
@@ -332,7 +337,15 @@ export async function getNonTransactionAnomaliesSince(since: number, limit = 200
   return rows.map(rawRowToAnomaly);
 }
 
-export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<void> {
+/**
+ * @param reviewEpoch Only a stored AI review recorded at or after this instant is still
+ *   CURRENT and worth preserving when the incoming row carries no review of its own.
+ *   Without it the stickiness below is a ratchet: once a transaction has been marked
+ *   `ai_suspected` it keeps that verdict forever, even after the agent stops reviewing it
+ *   (a narrowed residual gate) or after a corrected prompt supersedes the old claim —
+ *   the incoming row has no review, so the stale one is resurrected on every poll.
+ */
+export async function upsertValidationAgents(vas: ValidationAgent[], reviewEpoch = 0): Promise<void> {
   if (!vas.length) return;
   const sqlc = getSql();
   await sqlc.begin(async (tx) => {
@@ -341,25 +354,60 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
         (message_id, application, agent_status, active, result, expected_anomaly, expected_severity,
          actual_anomaly, actual_severity, delta, missing_phases, sla_breached, sla_budget_minutes,
          sla_from_phase, response_latency_ms, quality_anomalies, max_quality_severity,
+         ai_findings, ai_rejected, ai_reviewed_at, ai_error,
          phases, phase_ts, detail, spawned_at, updated_at, closed_at)
         VALUES (${v.messageId}, ${v.application ?? null}, ${v.agentStatus}, ${v.active}, ${v.result},
                 ${v.expectedAnomaly}, ${v.expectedSeverity ?? null}, ${v.actualAnomaly}, ${v.actualSeverity ?? null},
                 ${JSON.stringify(v.delta)}::jsonb, ${JSON.stringify(v.missingPhases)}::jsonb, ${v.slaBreached},
                 ${v.slaBudgetMinutes ?? null}, ${v.slaFromPhase ?? null}, ${v.responseLatencyMs ?? null},
                 ${JSON.stringify(v.qualityAnomalies)}::jsonb, ${v.maxQualitySeverity ?? null},
+                ${JSON.stringify(v.aiFindings ?? [])}::jsonb, ${v.aiRejected ?? null}, ${v.aiReviewedAt ?? null},
+                ${v.aiError ?? null},
                 ${JSON.stringify(v.phases)}::jsonb, ${JSON.stringify(v.phaseTs)}::jsonb,
                 ${v.detail ?? null}, ${v.spawnedAt}, ${v.updatedAt}, ${v.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
           application = COALESCE(validation_agents.application, EXCLUDED.application),
-          agent_status = EXCLUDED.agent_status, active = EXCLUDED.active, result = EXCLUDED.result,
+          agent_status = EXCLUDED.agent_status, active = EXCLUDED.active,
           expected_anomaly = EXCLUDED.expected_anomaly, expected_severity = EXCLUDED.expected_severity,
           actual_anomaly = EXCLUDED.actual_anomaly, actual_severity = EXCLUDED.actual_severity,
           delta = EXCLUDED.delta, missing_phases = EXCLUDED.missing_phases, sla_breached = EXCLUDED.sla_breached,
           sla_budget_minutes = EXCLUDED.sla_budget_minutes, sla_from_phase = EXCLUDED.sla_from_phase,
           response_latency_ms = EXCLUDED.response_latency_ms,
           quality_anomalies = EXCLUDED.quality_anomalies, max_quality_severity = EXCLUDED.max_quality_severity,
+          -- The AI review is one-shot: it runs only while a closed transaction is inside
+          -- the log-backed window, so later polls re-validate it deterministically and
+          -- carry no review (ai_reviewed_at NULL). Treat that as "no new information" and
+          -- keep the stored review rather than wiping a result that cost a model call.
+          ai_findings = CASE
+            WHEN EXCLUDED.ai_reviewed_at IS NOT NULL THEN EXCLUDED.ai_findings
+            WHEN validation_agents.ai_reviewed_at >= ${reviewEpoch} THEN validation_agents.ai_findings
+            ELSE '[]'::jsonb END,
+          ai_rejected = CASE
+            WHEN EXCLUDED.ai_rejected IS NOT NULL THEN EXCLUDED.ai_rejected
+            WHEN validation_agents.ai_reviewed_at >= ${reviewEpoch} THEN validation_agents.ai_rejected
+            ELSE NULL END,
+          ai_reviewed_at = CASE
+            WHEN EXCLUDED.ai_reviewed_at IS NOT NULL THEN EXCLUDED.ai_reviewed_at
+            WHEN validation_agents.ai_reviewed_at >= ${reviewEpoch} THEN validation_agents.ai_reviewed_at
+            ELSE NULL END,
+          -- Always take the latest: a retry that succeeds must CLEAR the stored error,
+          -- and a retry that fails again must keep it visible.
+          ai_error = EXCLUDED.ai_error,
+          -- Same reason for the verdict: a stored 'ai_suspected' survives a later
+          -- deterministic re-pass, but ONLY while that re-pass is still a clean success —
+          -- if the deterministic engine now has something to say (failure, issues), its
+          -- verdict wins, exactly as it does everywhere else.
+          result = CASE
+            WHEN EXCLUDED.ai_reviewed_at IS NULL AND EXCLUDED.result = 'success'
+                 AND validation_agents.ai_reviewed_at >= ${reviewEpoch}
+                 AND jsonb_array_length(validation_agents.ai_findings) > 0 THEN 'ai_suspected'
+            ELSE EXCLUDED.result END,
           phases = EXCLUDED.phases, phase_ts = EXCLUDED.phase_ts,
-          detail = EXCLUDED.detail, updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
+          detail = CASE
+            WHEN EXCLUDED.ai_reviewed_at IS NULL AND EXCLUDED.result = 'success'
+                 AND jsonb_array_length(validation_agents.ai_findings) > 0 THEN validation_agents.detail
+            ELSE EXCLUDED.detail END,
+          updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
     }
   });
 }
@@ -376,6 +424,25 @@ export async function getValidationHistory(limit = 200): Promise<ValidationAgent
   const sqlc = getSql();
   const rows = await sqlc`SELECT * FROM validation_agents WHERE active = FALSE ORDER BY closed_at DESC NULLS LAST LIMIT ${limit}`;
   return rows.map(rawRowToValidationAgent);
+}
+
+/**
+ * Of `messageIds`, those whose validation agent has ALREADY been reviewed by the app's
+ * validation AI agent. A residual transaction stays inside the log-backed window for
+ * several polls, so without this the same transaction would be re-sent to the model on
+ * every one of them — the review is one-shot by design, and its stored result is sticky
+ * (see the ON CONFLICT clause in {@link upsertValidationAgents}).
+ */
+export async function getAiReviewedMessageIds(messageIds: string[], since = 0): Promise<Set<string>> {
+  if (!messageIds.length) return new Set();
+  const sqlc = getSql();
+  // `since` is the review EPOCH: a review older than it no longer counts as done, so
+  // bumping the epoch re-opens every transaction for review. That is the operational
+  // handle for a prompt change — the agent's verdicts are only as good as the spec it
+  // was given, so a corrected spec has to be able to supersede what the old one produced.
+  const rows = await sqlc`SELECT message_id FROM validation_agents
+    WHERE message_id = ANY(${messageIds}) AND ai_reviewed_at IS NOT NULL AND ai_reviewed_at >= ${since}`;
+  return new Set(rows.map((r) => r.message_id as string));
 }
 
 export async function pruneClosedValidationAgentsOlderThan(cutoff: number): Promise<number> {
@@ -410,6 +477,10 @@ function rawRowToValidationAgent(r: Record<string, unknown>): ValidationAgent {
     responseLatencyMs: num(r.response_latency_ms),
     qualityAnomalies: jsonbField<ValidationAgent['qualityAnomalies']>(r.quality_anomalies, []),
     maxQualitySeverity: (r.max_quality_severity ?? undefined) as ValidationAgent['maxQualitySeverity'],
+    aiFindings: jsonbField<ValidationAgent['aiFindings']>(r.ai_findings, []),
+    aiRejected: num(r.ai_rejected),
+    aiError: (r.ai_error ?? undefined) as string | undefined,
+    aiReviewedAt: num(r.ai_reviewed_at),
     phases: jsonbField<string[]>(r.phases, []),
     phaseTs: jsonbField<Record<string, number>>(r.phase_ts, {}),
     detail: (r.detail ?? undefined) as string | undefined,

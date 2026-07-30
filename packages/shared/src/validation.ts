@@ -1,5 +1,6 @@
 import type { Agent } from './agentLifecycle.js';
 import type { Severity } from './anomalies.js';
+import type { AiValidationFinding } from './validationAgent.js';
 
 /**
  * A validation agent — an autonomous shadow of a regular ingestion {@link Agent},
@@ -18,8 +19,14 @@ import type { Severity } from './anomalies.js';
  *                            latency anomaly on a 200 response) — surfaced, not a failure     (inactive)
  *   failure                → a lifecycle delta was found (missing / unexpected / wrong-level
  *                            anomaly, missing phase, or SLA breach)                           (inactive)
+ *   ai_suspected           → the DETERMINISTIC engine found no delta but could not PROVE the
+ *                            outcome from the logs (the residual), and the app's validation AI
+ *                            agent raised a claim that re-verified against the real log rows.
+ *                            A distinct, non-authoritative population: it is never produced by
+ *                            the deterministic checks and never overrides one of their verdicts
+ *                            — see {@link ValidationAgent.aiFindings}                (inactive)
  */
-export type ValidationResult = 'pending' | 'success' | 'completed_with_issues' | 'failure';
+export type ValidationResult = 'pending' | 'success' | 'completed_with_issues' | 'failure' | 'ai_suspected';
 
 /**
  * An analysis anomaly (anomaly/correlation/…, NOT a `tx:` lifecycle anomaly) that
@@ -84,6 +91,29 @@ export interface ValidationAgent {
   phases: string[];
   /** Phase name → timestamp (copied from the agent). */
   phaseTs: Record<string, number>;
+  /**
+   * Claims the app's validation AI agent raised for this transaction that SURVIVED
+   * deterministic re-verification (every cited logId real, every predicate re-executed
+   * true — see {@link admitClaim}). Only ever populated for a residual transaction: one
+   * the deterministic engine passed without being able to prove the outcome from its
+   * logs. These are suspicions, not verdicts — they never change `delta`, and they never
+   * turn a deterministic `failure` or `completed_with_issues` into anything else.
+   */
+  aiFindings: AiValidationFinding[];
+  /**
+   * How many of the agent's claims the admission gate DISCARDED this review (fabricated
+   * log id, predicate that did not hold, no witness). Persisted so the model's
+   * hallucination rate is an observable production number rather than an assumption.
+   */
+  aiRejected?: number;
+  /**
+   * Why the AI review could not be completed (model error, throttling, a reply too
+   * mangled to recover). When set with no findings, {@link aiReviewedAt} stays UNSET —
+   * a failed review must never read as "reviewed and clean", and the next poll retries it.
+   */
+  aiError?: string;
+  /** When the AI review ran (absent ⇒ this transaction was never residual, or it failed). */
+  aiReviewedAt?: number;
   /** Human note on the validation outcome. */
   detail?: string;
   spawnedAt: number;

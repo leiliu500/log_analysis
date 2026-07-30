@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAgent, type AppValidationContext } from './validationLifecycle.js';
+import type { DerivedOutcome } from '@log/shared';
+import { applyAiReview, residualReason, validateAgent, type AppValidationContext } from './validationLifecycle.js';
 
 // SCP-shaped context: REQUEST→ACK→RESPONSE, RESPONSE within 30 min of ACK.
 const SCP: AppValidationContext = {
@@ -187,4 +188,130 @@ test('failed agent ignores quality anomalies (result unaffected)', () => {
   );
   assert.equal(v.result, 'success'); // failed+high anomaly = correct; quality not applied
   assert.deepEqual(v.qualityAnomalies, []);
+});
+
+// ---------------------------------------------------------------------------
+// The validation AI stage. These lock the two properties that make an LLM safe
+// here: it is only ever consulted about transactions nothing was proven for, and
+// what it says can never overturn something that was.
+// ---------------------------------------------------------------------------
+
+const closedClean = { ...base, messageId: 'r1', status: 'completed' as const, active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN, RESPONSE: 2 * MIN } };
+const unknownOutcome: DerivedOutcome = { status: 'unknown', evidenceLogIds: ['l1'], phasesSeen: ['REQUEST'], detail: 'no RESPONSE phase in logs' };
+const provenOutcome: DerivedOutcome = { status: 'completed', evidenceLogIds: ['l1'], phasesSeen: ['REQUEST', 'ACK', 'RESPONSE'], detail: 'RESPONSE present with a success code' };
+
+test('residual: a clean success whose outcome the logs do NOT prove is reviewable', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  assert.equal(v.result, 'success');
+  assert.match(residualReason(v, unknownOutcome) ?? '', /do not prove a terminal outcome/);
+});
+
+test('residual: a proven-outcome clean pass is still reviewable under the default scope', () => {
+  // Superseded by the explicit scope tests below: a positively-derived outcome only ends
+  // the review under scope='unproven'. The default reviews every deterministically-clean
+  // transaction, because that is where a business failure behind a 200 actually lives.
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], provenOutcome);
+  assert.match(residualReason(v, provenOutcome, 'clean') ?? '', /every deterministic check passed/);
+});
+
+test('not residual: a transaction with a deterministic delta is never reopened by the AI', () => {
+  // Logs show a failure the agent recorded as completed → a hard deterministic failure.
+  const failedByLogs: DerivedOutcome = { status: 'failed', evidenceLogIds: ['l1'], phasesSeen: ['REQUEST'], detail: 'a phase carried a failure ackCode' };
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], failedByLogs);
+  assert.equal(v.result, 'failure');
+  assert.equal(residualReason(v, failedByLogs), null, 'the AI is never asked about a proven verdict');
+});
+
+test('not residual: an active (pending) transaction is never reviewed', () => {
+  const v = validateAgent(
+    { ...base, messageId: 'r2', status: 'awaiting', active: true, waitingFor: 'RESPONSE', phaseTs: { REQUEST: 0, ACK: 1 * MIN } },
+    undefined,
+    5 * MIN,
+    SCP,
+  );
+  assert.equal(residualReason(v, undefined), null);
+});
+
+test('applyAiReview relabels a residual success without touching the deterministic delta', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  applyAiReview(
+    v,
+    {
+      findings: [
+        { kind: 'business-failure', title: 'gateway 200 over an ACCOUNT_FROZEN body', severity: 'high', evidenceLogIds: ['l1'], verifiedPredicates: 2, predicates: [{ logId: 'l1', field: 'raw', op: 'contains', value: 'x' }] },
+      ],
+      rejected: [{ title: 'fabricated', reason: 'cites unknown logId l9' }],
+    },
+    99 * MIN,
+  );
+  assert.equal(v.result, 'ai_suspected', 'surfaced as its own population, never as a failure');
+  assert.deepEqual(v.delta, [], 'the deterministic evidence trail is untouched');
+  assert.equal(v.aiFindings.length, 1);
+  assert.equal(v.aiRejected, 1, 'discarded claims stay countable');
+  assert.equal(v.aiReviewedAt, 99 * MIN);
+});
+
+test('applyAiReview with no admitted findings leaves the deterministic result intact', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  applyAiReview(v, { findings: [], rejected: [{ title: 'hallucinated', reason: 'predicate failed' }] }, 99 * MIN);
+  assert.equal(v.result, 'success');
+  assert.equal(v.aiRejected, 1, 'a review that produced only hallucinations is still visible');
+});
+
+test('scope=clean: a proven-outcome clean pass IS reviewed (business failures live here)', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], provenOutcome);
+  assert.equal(v.result, 'success');
+  assert.match(residualReason(v, provenOutcome, 'clean') ?? '', /outcome was derived as completed/);
+});
+
+test('scope=unproven: the narrow gate still skips a proven outcome', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], provenOutcome);
+  assert.equal(residualReason(v, provenOutcome, 'unproven'), null);
+});
+
+test('neither scope ever shows the agent a transaction carrying a delta', () => {
+  const failedByLogs: DerivedOutcome = { status: 'failed', evidenceLogIds: ['l1'], phasesSeen: ['REQUEST'], detail: 'a phase carried a failure ackCode' };
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], failedByLogs);
+  assert.equal(v.result, 'failure');
+  for (const scope of ['clean', 'unproven'] as const) {
+    assert.equal(residualReason(v, failedByLogs, scope), null, `scope=${scope} must not reopen a proven verdict`);
+  }
+});
+
+test('a FAILED review is not marked reviewed — it stays retryable and is not clean', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  applyAiReview(v, { findings: [], rejected: [], error: 'model returned an empty reply' }, 99 * MIN);
+  assert.equal(v.aiReviewedAt, undefined, 'not marked reviewed, so the next poll retries it');
+  assert.match(v.aiError ?? '', /empty reply/);
+  assert.equal(v.result, 'success', 'a failed review never changes the deterministic result');
+});
+
+test('a review that salvaged findings despite an error is still recorded', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  applyAiReview(
+    v,
+    { findings: [{ kind: 'k', title: 'partial but verified', severity: 'high', evidenceLogIds: ['l1'], verifiedPredicates: 1, predicates: [{ logId: 'l1', field: 'raw', op: 'contains', value: 'x' }] }], rejected: [], error: 'reply truncated' },
+    99 * MIN,
+  );
+  assert.equal(v.aiReviewedAt, 99 * MIN);
+  assert.equal(v.result, 'ai_suspected');
+});
+
+test('a FAILED transaction is never reviewed — it was already flagged, not passed', () => {
+  const failedAgent = { ...base, messageId: 'f1', status: 'failed' as const, active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN } };
+  const v = validateAgent(failedAgent, 'high', 50 * MIN, SCP, [], unknownOutcome);
+  assert.equal(v.result, 'success', 'the worker correctly validated a failed agent carrying its high anomaly');
+  assert.equal(residualReason(v, unknownOutcome, 'clean'), null, 'but it is not part of the false-negative population');
+});
+
+test('a TIMED-OUT transaction is never reviewed either', () => {
+  const timedOut = { ...base, messageId: 'f2', status: 'error' as const, active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN } };
+  const v = validateAgent(timedOut, 'medium', 50 * MIN, SCP, [], unknownOutcome);
+  assert.equal(v.result, 'success');
+  assert.equal(residualReason(v, unknownOutcome, 'clean'), null);
+});
+
+test('a COMPLETED transaction that passed without proof is still reviewed', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  assert.ok(residualReason(v, unknownOutcome, 'clean'), 'the false-negative population is transactions that claim they worked');
 });
