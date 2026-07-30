@@ -13,7 +13,7 @@ import { BacktestView } from '@/components/BacktestView';
  * in the background.
  */
 const TABS = [
-  { key: 'dashboard', label: 'Ingestion Agents' },
+  { key: 'dashboard', label: 'Signal' },
   { key: 'validation', label: 'Validation' },
   { key: 'backtest', label: 'Backtest' },
 ] as const;
