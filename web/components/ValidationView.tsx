@@ -26,6 +26,7 @@ export function ValidationView() {
   const [history, setHistory] = useState<ValidationAgent[]>([]);
   const [agentInfo, setAgentInfo] = useState<ValidationAgentInfo[]>([]);
   const [activeRuns, setActiveRuns] = useState<ValidationAgentRun[]>([]);
+  const [recentRuns, setRecentRuns] = useState<ValidationAgentRun[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,9 +47,11 @@ export function ValidationView() {
       const c = await api.validationAgentConfig();
       setAgentInfo(c.agents);
       setActiveRuns(c.activeRuns ?? []);
+      setRecentRuns(c.recentRuns ?? []);
     } catch {
       setAgentInfo([]);
       setActiveRuns([]);
+      setRecentRuns([]);
     }
     setNow(Date.now());
   }, []);
@@ -181,6 +184,8 @@ export function ValidationView() {
         <ValidationAgentsPanel
           agents={appFilter === 'all' ? agentInfo : agentInfo.filter((a) => a.application === appFilter)}
           activeRuns={appFilter === 'all' ? activeRuns : activeRuns.filter((r) => r.application === appFilter)}
+          recentRuns={appFilter === 'all' ? recentRuns : recentRuns.filter((r) => r.application === appFilter)}
+          rows={[...shownActive, ...shownHistory]}
           starting={validating}
           now={now}
         />

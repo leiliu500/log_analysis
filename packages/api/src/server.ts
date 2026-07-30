@@ -15,6 +15,7 @@ import {
   getActiveValidationAgents,
   getValidationHistory,
   getActiveValidationAgentRuns,
+  getRecentValidationAgentRuns,
   deleteAllValidationAgents,
   recentPollerRuns,
   deleteAllPollerRuns,
@@ -93,6 +94,10 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     // validation pass starts and disappears when it ends — the agent as a lifecycle, not
     // a permanent fixture.
     activeRuns: await getActiveValidationAgentRuns(Date.now()),
+    // The last few FINISHED runs. Without them an empty panel is ambiguous: "no agent is
+    // running" looks the same whether the stage just worked perfectly or is silently
+    // broken. This shows the difference without keeping a card up after the work is done.
+    recentRuns: await getRecentValidationAgentRuns(10),
   }));
 
   // On-demand validation pass (the scheduled validation Lambda runs this

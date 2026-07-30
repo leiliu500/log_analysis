@@ -63,7 +63,7 @@ export const api = {
    * switched off or capped to zero cannot be rendered as a healthy one.
    */
   validationAgentConfig: () =>
-    req<{ agents: ValidationAgentInfo[]; activeRuns: ValidationAgentRun[] }>('/validation-agents/config'),
+    req<{ agents: ValidationAgentInfo[]; activeRuns: ValidationAgentRun[]; recentRuns: ValidationAgentRun[] }>('/validation-agents/config'),
   /** On-demand "Validate now" — the scheduled validation Lambda runs this autonomously. */
   validateNow: () =>
     req<{
