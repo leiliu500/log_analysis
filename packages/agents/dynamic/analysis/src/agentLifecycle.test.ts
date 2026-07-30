@@ -304,3 +304,58 @@ test('an agent persisted before firstSeenAt existed still times out (falls back 
   const r = await step([], [legacy], NOW);
   assert.equal(r.agents.get('legacy')!.status, 'error', 'no firstSeenAt ⇒ old behaviour, never a stuck-forever agent');
 });
+
+// ---------------------------------------------------------------------------
+// SCHEDULER. One poll, many applications, a bounded model budget. Two failures
+// follow from having no policy: a busy app starves a quiet one, and a
+// transaction deferred because WE were over budget is eventually closed as a
+// timeout — our contention recorded as the transaction's fault.
+// ---------------------------------------------------------------------------
+
+/** Two apps sharing one poll, neither with a fast path, so everything needs the model. */
+const twoApps = new ApplicationRegistry()
+  .register({ id: 'scp', displayName: 'SCP', logGroups: [], transactionPromptPath: 'apps/scp/transaction.md', protocol: testProtocol, ingestionAgent: { decide: async () => ({ status: 'awaiting', waitingFor: 'ACK', detail: 'stub' }) } })
+  .register({ id: 'apiflc', displayName: 'apiflc', logGroups: [], transactionPromptPath: 'apps/apiflc/transaction.md', protocol: testProtocol, ingestionAgent: { decide: async () => ({ status: 'awaiting', waitingFor: 'ACK', detail: 'stub' }) } });
+
+const known = (id: string, application: string, lastTs: number): Agent => ({
+  messageId: id, application, status: 'awaiting', active: true, waitingFor: 'ACK',
+  phases: ['REQUEST', 'ACK', 'RESPONSE'], phaseTs: { REQUEST: lastTs },
+  spawnedAt: lastTs, firstSeenAt: NOW - 60_000, updatedAt: lastTs,
+});
+
+test('fair share: a busy application cannot consume the whole model budget', async () => {
+  // 8 scp transactions arrive before 2 apiflc ones; the budget only allows 4.
+  const evs: AgentEvent[] = [];
+  const agents: Agent[] = [];
+  for (let i = 0; i < 8; i++) {
+    evs.push({ ...ev('ACK', `scp-${i}`, NOW - 60_000, 'OK'), application: 'scp' });
+    agents.push(known(`scp-${i}`, 'scp', NOW - 60_000));
+  }
+  for (let i = 0; i < 2; i++) {
+    evs.push({ ...ev('ACK', `api-${i}`, NOW - 60_000, 'OK'), application: 'apiflc' });
+    agents.push(known(`api-${i}`, 'apiflc', NOW - 60_000));
+  }
+  const r = await stepAgentsDynamic(evs, agents, { now: NOW, timeoutMs: TIMEOUT, registry: twoApps, maxLlm: 4 });
+  assert.equal(r.reasoned, 4, 'only the budget is spent');
+  // Round-robin means apiflc is reached despite arriving last and being outnumbered 4:1.
+  assert.ok((r.byApp.apiflc?.advanced ?? 0) > 0, 'the quiet app must not be starved');
+  assert.ok((r.byApp.scp?.advanced ?? 0) > 0, 'the busy app still progresses');
+});
+
+test('deadline first: the transaction closest to timing out is worked before a fresh one', async () => {
+  // `urgent` has been idle nearly the whole 30-minute timeout; `fresh` just started.
+  const evs: AgentEvent[] = [
+    { ...ev('ACK', 'fresh', NOW - 1_000, 'OK'), application: 'scp' },
+    { ...ev('ACK', 'urgent', NOW - 29 * 60_000, 'OK'), application: 'scp' },
+  ];
+  const agents = [known('fresh', 'scp', NOW - 1_000), known('urgent', 'scp', NOW - 29 * 60_000)];
+  // Budget of exactly 1 — whichever is scheduled first is the only one advanced.
+  const r = await stepAgentsDynamic(evs, agents, { now: NOW, timeoutMs: TIMEOUT, registry: twoApps, maxLlm: 1 });
+  assert.equal(r.reasoned, 1);
+  // `changed` contains BOTH (each recorded a new phase), so it cannot distinguish who was
+  // reasoned. Only the transaction the model actually decided carries the stub's detail.
+  assert.equal(r.agents.get('urgent')!.detail, 'stub', 'the at-risk transaction got the budget');
+  assert.notEqual(r.agents.get('fresh')!.detail, 'stub', 'the fresh one was deferred, not decided');
+  assert.equal(r.deferredOverCap, 1);
+  assert.equal(r.backlogByApp.scp, 1, 'the deferral is reported per application');
+});
