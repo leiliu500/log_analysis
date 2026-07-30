@@ -100,6 +100,7 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
         aiReviewed: 0,
         aiSuspected: 0,
         aiRejected: 0,
+        aiFailed: 0,
         suppressed: 0,
         byApplication: {},
         ruleCandidates: [],

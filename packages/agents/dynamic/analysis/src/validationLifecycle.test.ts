@@ -206,9 +206,12 @@ test('residual: a clean success whose outcome the logs do NOT prove is reviewabl
   assert.match(residualReason(v, unknownOutcome) ?? '', /do not prove a terminal outcome/);
 });
 
-test('not residual: an outcome positively derived from the logs is proven, not reviewed', () => {
+test('residual: a proven-outcome clean pass is still reviewable under the default scope', () => {
+  // Superseded by the explicit scope tests below: a positively-derived outcome only ends
+  // the review under scope='unproven'. The default reviews every deterministically-clean
+  // transaction, because that is where a business failure behind a 200 actually lives.
   const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], provenOutcome);
-  assert.equal(residualReason(v, provenOutcome), null);
+  assert.match(residualReason(v, provenOutcome, 'clean') ?? '', /every deterministic check passed/);
 });
 
 test('not residual: a transaction with a deterministic delta is never reopened by the AI', () => {
@@ -253,4 +256,43 @@ test('applyAiReview with no admitted findings leaves the deterministic result in
   applyAiReview(v, { findings: [], rejected: [{ title: 'hallucinated', reason: 'predicate failed' }] }, 99 * MIN);
   assert.equal(v.result, 'success');
   assert.equal(v.aiRejected, 1, 'a review that produced only hallucinations is still visible');
+});
+
+test('scope=clean: a proven-outcome clean pass IS reviewed (business failures live here)', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], provenOutcome);
+  assert.equal(v.result, 'success');
+  assert.match(residualReason(v, provenOutcome, 'clean') ?? '', /outcome was derived as completed/);
+});
+
+test('scope=unproven: the narrow gate still skips a proven outcome', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], provenOutcome);
+  assert.equal(residualReason(v, provenOutcome, 'unproven'), null);
+});
+
+test('neither scope ever shows the agent a transaction carrying a delta', () => {
+  const failedByLogs: DerivedOutcome = { status: 'failed', evidenceLogIds: ['l1'], phasesSeen: ['REQUEST'], detail: 'a phase carried a failure ackCode' };
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], failedByLogs);
+  assert.equal(v.result, 'failure');
+  for (const scope of ['clean', 'unproven'] as const) {
+    assert.equal(residualReason(v, failedByLogs, scope), null, `scope=${scope} must not reopen a proven verdict`);
+  }
+});
+
+test('a FAILED review is not marked reviewed — it stays retryable and is not clean', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  applyAiReview(v, { findings: [], rejected: [], error: 'model returned an empty reply' }, 99 * MIN);
+  assert.equal(v.aiReviewedAt, undefined, 'not marked reviewed, so the next poll retries it');
+  assert.match(v.aiError ?? '', /empty reply/);
+  assert.equal(v.result, 'success', 'a failed review never changes the deterministic result');
+});
+
+test('a review that salvaged findings despite an error is still recorded', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  applyAiReview(
+    v,
+    { findings: [{ kind: 'k', title: 'partial but verified', severity: 'high', evidenceLogIds: ['l1'], verifiedPredicates: 1 }], rejected: [], error: 'reply truncated' },
+    99 * MIN,
+  );
+  assert.equal(v.aiReviewedAt, 99 * MIN);
+  assert.equal(v.result, 'ai_suspected');
 });

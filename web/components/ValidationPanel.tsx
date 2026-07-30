@@ -128,6 +128,7 @@ export function ValidationPanel({
   const suppressed = history.filter((v) => v.result === 'success' && v.qualityAnomalies.length > 0).length;
   const aiSuspected = history.filter((v) => v.result === 'ai_suspected').length;
   const aiDiscarded = history.reduce((n, v) => n + (v.aiRejected ?? 0), 0);
+  const aiFailed = history.filter((v) => v.aiError).length;
 
   return (
     <section className="mb-8">
@@ -182,6 +183,14 @@ export function ValidationPanel({
             title="Deterministically clean, but the outcome was never proven from the logs and the app's validation AI agent raised a claim that re-verified against those logs. A suspicion to triage, not a proven failure."
           >
             {aiSuspected} AI-suspected
+          </span>
+        ) : null}
+        {aiFailed > 0 ? (
+          <span
+            className="rounded-full bg-orange-500/20 px-2 py-0.5 text-xs text-orange-300"
+            title="AI reviews that did not complete (model error, throttling, or a truncated reply). These transactions were NOT reviewed — they are retried on the next poll, and must not be read as clean."
+          >
+            {aiFailed} review{aiFailed === 1 ? '' : 's'} failed
           </span>
         ) : null}
         {aiDiscarded > 0 ? (
@@ -250,8 +259,15 @@ export function ValidationPanel({
                     )}
                   </td>
                   <td className="px-3 py-1.5 font-sans">
-                    {v.aiReviewedAt == null ? (
-                      <span className="text-slate-600" title="Not residual — the deterministic checks proved this transaction's outcome, so no AI review was run.">
+                    {v.aiError ? (
+                      <span
+                        className="cursor-help whitespace-nowrap rounded border border-orange-500/40 bg-orange-500/20 px-1.5 py-0.5 text-[10px] text-orange-300"
+                        title={`The AI review did NOT complete — this is not a clean result: ${v.aiError}. The next validation poll retries it.`}
+                      >
+                        review failed
+                      </span>
+                    ) : v.aiReviewedAt == null ? (
+                      <span className="text-slate-600" title="Not reviewed — this transaction carries a deterministic verdict (a delta or issues), so the AI agent is never shown it.">
                         —
                       </span>
                     ) : (

@@ -93,10 +93,24 @@ export interface AiReviewOutcome {
   findings: AiValidationFinding[];
   /** Claims the admission gate discarded, with the reason (hallucination observability). */
   rejected: Array<{ title: string; reason: string }>;
+  /**
+   * Set when the review could not be completed at all — the model errored, was throttled,
+   * or returned a reply too mangled to recover claims from. CRITICALLY DIFFERENT from an
+   * empty `findings`: "the agent looked and found nothing" and "the agent never answered"
+   * must never render the same way, or a broken model reads as a clean bill of health.
+   * A transaction whose review errored is NOT marked reviewed, so the next poll retries it.
+   */
+  error?: string;
 }
 
-/** The structured-output model call, injected by the engine (Bedrock there). */
-export type ValidationReasoner = (system: string, user: string) => Promise<{ claims?: ValidationClaim[] }>;
+/**
+ * The model call, injected by the engine (Bedrock there). It returns the reply as RAW
+ * TEXT rather than parsed JSON on purpose: the reasoning model's replies can arrive
+ * truncated, and parsing them here — beside the admission gate — lets a truncated reply
+ * be salvaged for its complete claims ({@link salvageClaims}) instead of being thrown
+ * away wholesale by a strict parse in the transport layer.
+ */
+export type ValidationReasoner = (system: string, user: string) => Promise<string>;
 
 /**
  * Everything an app's validation agent is given about ONE residual transaction. The
@@ -134,8 +148,13 @@ export interface ValidationAgentDef {
 // The admission gate — the deterministic half of the design.
 // ---------------------------------------------------------------------------
 
-/** Cap the work a single reply can create (a runaway reply must not stall the poller). */
-const MAX_CLAIMS = 8;
+/**
+ * Cap the work a single reply can create. Kept SMALL on purpose: the configured
+ * foundation model is a reasoning model whose hidden tokens share the output budget, and
+ * a long claim list is what pushes the JSON past it and gets the whole reply truncated.
+ * Three well-evidenced claims are worth more than eight truncated ones.
+ */
+const MAX_CLAIMS = 3;
 const MAX_PREDICATES = 10;
 /** Bound regex work: model-supplied patterns run against bounded strings only. */
 const MAX_PATTERN_LEN = 200;
@@ -266,6 +285,57 @@ export function admitClaim(
   };
 }
 
+/**
+ * Recover the complete claim objects from a TRUNCATED reply. The reasoning model shares
+ * its output budget with hidden reasoning tokens, so a long reply can be cut mid-string —
+ * and one unterminated claim would otherwise throw away the complete claims in front of
+ * it. This scans the raw text for balanced `{...}` objects (string- and escape-aware) and
+ * keeps the ones that parse, dropping any incomplete tail.
+ *
+ * Salvaging is safe here for the same reason the whole design is: a recovered claim is
+ * still just a proposal, and it must still pass {@link admitClaim} against the real log
+ * rows. A half-written claim loses its predicates and is discarded by the gate. This can
+ * only recover evidence that was fully stated, never invent it.
+ */
+export function salvageClaims(text: string): ValidationClaim[] {
+  const out: ValidationClaim[] = [];
+  // A STACK of open-brace positions, not a single depth counter: the object that gets
+  // truncated is the OUTER one, so waiting for depth to return to zero recovers nothing.
+  // Every balanced object is parsed at whatever depth it closes, and the incomplete
+  // ancestors are simply never closed and never parsed.
+  const starts: number[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') starts.push(i);
+    else if (ch === '}') {
+      const start = starts.pop();
+      if (start === undefined) continue;
+      try {
+        const obj = JSON.parse(text.slice(start, i + 1)) as ValidationClaim & { claims?: ValidationClaim[] };
+        if (Array.isArray(obj?.claims)) out.push(...obj.claims);
+        // Only claim-SHAPED objects. Nested objects (predicates, and proposedRule — which
+        // also has a `title`) close first and would otherwise be mistaken for claims, so
+        // require the evidence array that only a claim carries.
+        else if (obj && typeof obj === 'object' && typeof obj.title === 'string' && Array.isArray(obj.evidenceLogIds)) {
+          out.push(obj);
+        }
+      } catch {
+        // not parseable at this level; keep scanning
+      }
+    }
+  }
+  return out;
+}
+
 /** Run the gate over a whole reply. Nothing that fails is repaired, retried, or partially kept. */
 export function admitClaims(
   claims: readonly ValidationClaim[] | undefined,
@@ -287,20 +357,29 @@ export function admitClaims(
 // The generic driver an app agent calls.
 // ---------------------------------------------------------------------------
 
-/** The JSON response contract every app's validation agent shares. */
+/**
+ * The JSON response contract every app's validation agent shares. Kept DELIBERATELY
+ * terse: the reply shares its token budget with the model's hidden reasoning, and a
+ * verbose schema is what pushes the JSON past the budget and gets it truncated mid-claim.
+ * Short fields, at most three claims, no prose outside the JSON.
+ */
 const RESPONSE_CONTRACT = [
-  'Respond ONLY with JSON of this exact shape (an empty list is the correct and expected',
-  'answer whenever the logs do not PROVE a problem):',
-  '{ "claims": [ {',
-  '    "kind": "<short-kebab-case-class>",',
-  '    "title": "<one sentence stating the suspected problem>",',
-  '    "severity": "info" | "low" | "medium" | "high" | "critical",',
-  '    "detail": "<why the cited logs show this>",',
-  '    "evidenceLogIds": ["<logId from the LOGS list above>", ...],',
-  '    "predicates": [ { "logId": "<one of evidenceLogIds>", "field": "raw" | "message" | "level" | "stream" | "source" | "timestamp",',
-  '                      "op": "contains" | "not_contains" | "equals" | "matches" | "lt" | "gt", "value": "<literal>" } ],',
-  '    "proposedRule": { "id": "<kebab-case-rule-id>", "title": "<the general rule>", "rationale": "<why it generalizes>" }',
-  '} ] }',
+  'Answer with JSON ONLY — no prose, no explanation, no markdown fence around it.',
+  'Emit AT MOST 3 claims. An empty list is the correct and expected answer whenever the',
+  'logs do not PROVE a problem, and costs you nothing.',
+  '',
+  '{"claims":[{',
+  '  "kind":"<short-kebab-case>",',
+  '  "title":"<one sentence, max 20 words>",',
+  '  "severity":"info|low|medium|high|critical",',
+  '  "detail":"<max 25 words>",',
+  '  "evidenceLogIds":["<logId from the LOGS list>"],',
+  '  "predicates":[{"logId":"<one of evidenceLogIds>","field":"raw|message|level|stream|source|timestamp",',
+  '                 "op":"contains|not_contains|equals|matches|lt|gt","value":"<literal>"}],',
+  '  "proposedRule":{"id":"<kebab-case>","title":"<the general rule, max 15 words>","rationale":"<max 20 words>"}',
+  '}]}',
+  '',
+  'Keep every string short. Do not restate the log lines; cite them by id.',
   '',
   'Every claim is RE-EXECUTED against the real log rows before it is recorded: each',
   'evidenceLogId must be one of the ids listed above, every predicate must reference one',
@@ -333,16 +412,55 @@ export async function reviewFromSpec(
   if (!spec) return EMPTY;
 
   const user = `${evidence}\n\n${RESPONSE_CONTRACT}`;
+  let text: string;
   try {
-    const out = await reason(spec, user);
-    return admitClaims(out?.claims, input.relatedLogs);
+    text = await reason(spec, user);
   } catch (err) {
-    console.error(
-      `validation AI agent: model failed for ${input.messageId}, no review this poll`,
-      (err as Error).message,
-    );
-    return EMPTY;
+    const error = `model call failed: ${(err as Error).message}`;
+    console.error(`validation AI agent: ${error} for ${input.messageId}`);
+    return { findings: [], rejected: [], error };
   }
+
+  if (!text.trim()) {
+    // An empty reply is the reasoning model spending its whole budget on hidden
+    // reasoning. It is a FAILED review, not a clean one — say so.
+    const error = 'model returned an empty reply (output budget likely exhausted)';
+    console.error(`validation AI agent: ${error} for ${input.messageId}`);
+    return { findings: [], rejected: [], error };
+  }
+
+  let claims: ValidationClaim[] | undefined;
+  let truncated = false;
+  try {
+    claims = (JSON.parse(stripFence(text)) as { claims?: ValidationClaim[] }).claims;
+  } catch {
+    claims = salvageClaims(text);
+    truncated = true;
+  }
+
+  if (!Array.isArray(claims)) {
+    const error = 'model reply contained no recoverable claims';
+    console.error(`validation AI agent: ${error} for ${input.messageId}`);
+    return { findings: [], rejected: [], error };
+  }
+
+  const outcome = admitClaims(claims, input.relatedLogs);
+  if (truncated) {
+    // Salvage succeeded, but the reply WAS cut off — so "no claims" cannot be trusted as
+    // a clean result. Flag it as partial rather than let it pass for a completed review.
+    const note = `model reply was truncated; recovered ${claims.length} complete claim(s)`;
+    console.warn(`validation AI agent: ${note} for ${input.messageId}`);
+    if (!outcome.findings.length) return { ...outcome, error: note };
+  }
+  return outcome;
+}
+
+/** Unwrap a ```json fenced reply, if the model wrapped one. */
+function stripFence(text: string): string {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1]! : text;
+  const from = body.indexOf('{');
+  return from === -1 ? body : body.slice(from);
 }
 
 /**

@@ -112,8 +112,12 @@ async function mapPool<T>(items: T[], limit: number, fn: (item: T, index: number
  *  model whose hidden reasoning tokens count against maxTokens. A tight budget (e.g. 400)
  *  gets consumed by reasoning on large prompts, leaving NO final text — the reply comes back
  *  empty, decideFromSpec returns null, and every transaction times out instead of
- *  transitioning. The JSON answer itself is tiny; the budget is headroom for reasoning. */
-const REASONER_MAX_TOKENS = Number(process.env.INGEST_DYNAMIC_MAXTOKENS ?? 2000);
+ *  transitioning. The JSON answer itself is tiny; the budget is headroom for reasoning.
+ *  So it inherits the platform-wide ceiling (`BEDROCK_MAX_TOKENS`, see bedrock.ts) rather
+ *  than carrying its own number; INGEST_DYNAMIC_MAXTOKENS still overrides it per-site. */
+const REASONER_MAX_TOKENS = process.env.INGEST_DYNAMIC_MAXTOKENS
+  ? Number(process.env.INGEST_DYNAMIC_MAXTOKENS)
+  : undefined;
 const defaultReasoner: TransitionReasoner = (system, user) =>
   converseJson<Partial<TransitionDecision>>(user, { system, temperature: 0, maxTokens: REASONER_MAX_TOKENS });
 

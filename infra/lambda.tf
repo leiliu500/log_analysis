@@ -27,6 +27,12 @@ locals {
     # AWS_REGION is auto-set by the Lambda runtime; do not override it here.
     BEDROCK_MODEL_ID       = local.foundation_model
     BEDROCK_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
+    # The output-token ceiling EVERY agent inherits (ingestion reasoner, validation AI
+    # agent, analysis reasoning, simulator, Log Assistant). It is a cap, not a
+    # reservation — cost and latency follow the tokens actually emitted — so it is set
+    # generously. A tight ceiling is the failure mode that bites: the reasoning model
+    # spends hidden tokens from this same budget and the visible reply arrives truncated.
+    BEDROCK_MAX_TOKENS = tostring(var.bedrock_max_tokens)
     CLOUDWATCH_LOG_GROUPS  = join(",", concat(var.cloudwatch_log_groups, var.application_log_groups))
     APP_ENDPOINTS_JSON     = var.app_endpoints_json
     # System-of-record reconciliation endpoints for the validation worker. Empty by

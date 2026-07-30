@@ -14,7 +14,7 @@ import type {
   ValidationReasoner,
 } from '@log/shared';
 import { expectedAnomalyFor } from '@log/shared';
-import { converseJson } from './bedrock.js';
+import { converse } from './bedrock.js';
 import {
   getActiveAgents,
   getAgentHistory,
@@ -94,6 +94,13 @@ export interface ValidationCounts {
    */
   aiRejected: number;
   /**
+   * Reviews that could NOT be completed — model error, throttling, or a reply too mangled
+   * to recover claims from. Counted separately from `aiReviewed` because a failed review
+   * is not a clean one: if this is non-zero the AI stage is degraded, and treating those
+   * transactions as reviewed-and-clean would be the worst possible false negative.
+   */
+  aiFailed: number;
+  /**
    * Completed transactions that carried an associated analysis anomaly BELOW the
    * app's `qualityIssueSeverity` threshold — recorded but not surfaced as `issues`.
    * Counted so the by-design suppression is observable per app, never invisible.
@@ -163,20 +170,42 @@ const AI_CONCURRENCY = Number(process.env.VALIDATION_AI_CONCURRENCY ?? 3);
  */
 const AI_DEADLINE_MS = Number(process.env.VALIDATION_AI_DEADLINE_MS ?? 60_000);
 /**
- * Generous, for the same reason as the ingestion reasoner: the configured foundation
- * model spends hidden reasoning tokens against this budget, and a starved reply comes
- * back empty. An empty reply is safe here (no claims ⇒ no findings) but wastes the call.
+ * Must be GENEROUS. The configured foundation model (GPT-OSS) is a reasoning model whose
+ * hidden reasoning tokens are charged against this same budget, so the visible JSON gets
+ * whatever is left. Set too low, the reply is cut off mid-claim and arrives as
+ * unparseable JSON — observed in prod at 2000, which truncated every review with
+ * "Unterminated string in JSON". The claims themselves are tiny; this is headroom.
+ * Inherits the platform-wide ceiling (`BEDROCK_MAX_TOKENS`, see bedrock.ts) unless
+ * VALIDATION_AI_MAXTOKENS is set to bound this site specifically.
  */
-const AI_MAX_TOKENS = Number(process.env.VALIDATION_AI_MAXTOKENS ?? 2000);
+const AI_MAX_TOKENS = process.env.VALIDATION_AI_MAXTOKENS ? Number(process.env.VALIDATION_AI_MAXTOKENS) : undefined;
 
 /**
- * The default validation reasoner — a Bedrock structured-output call at temperature 0,
- * injected into each app's validation agent so the app packages never depend on Bedrock
- * or on this engine. Temperature 0 is for reproducibility of the *proposal*, not for
- * correctness: correctness comes from the admission gate re-executing every claim.
+ * How much of the deterministically-clean population the agent reviews:
+ *   'clean'    (default) — every transaction the deterministic checks passed with no
+ *                          delta. This is where the value is: a business failure behind
+ *                          a 200, a denied authorizer on a completed call, are all
+ *                          transactions whose outcome WAS positively derived, so the
+ *                          narrower scope below never shows them to the agent at all.
+ *   'unproven'           — only those the checks passed WITHOUT proving the outcome.
+ *                          Fewer model calls, but it only ever sees missing-evidence
+ *                          cases (mostly timeouts), where there is little to find.
+ * Either way the hard invariant is identical and enforced elsewhere: the agent is never
+ * given a transaction that carries a delta, and its output can only ever produce
+ * `ai_suspected` — so it can neither silence a failure nor manufacture one.
+ */
+const AI_SCOPE = (process.env.VALIDATION_AI_SCOPE ?? 'clean').toLowerCase() === 'unproven' ? 'unproven' : 'clean';
+
+/**
+ * The default validation reasoner — a Bedrock call at temperature 0, injected into each
+ * app's validation agent so the app packages never depend on Bedrock or on this engine.
+ * It returns RAW TEXT: parsing lives beside the admission gate in `@log/shared`, so a
+ * truncated reply can be salvaged for its complete claims rather than thrown away by a
+ * strict parse here. Temperature 0 is for reproducibility of the *proposal*, not for
+ * correctness — correctness comes from the gate re-executing every claim.
  */
 const defaultValidationReasoner: ValidationReasoner = (system, user) =>
-  converseJson<{ claims?: ValidationClaim[] }>(user, { system, temperature: 0, maxTokens: AI_MAX_TOKENS });
+  converse(user, { system, temperature: 0, maxTokens: AI_MAX_TOKENS });
 
 /**
  * Run `fn` over `items` with bounded concurrency, stopping early once `deadline` passes.
@@ -412,15 +441,27 @@ export function validateAgent(
  * a proven verdict — it cannot contradict one — and the population it does see is
  * exactly the one that previously passed on absence of evidence.
  */
-export function residualReason(v: ValidationAgent, derived?: DerivedOutcome): string | null {
+export function residualReason(
+  v: ValidationAgent,
+  derived?: DerivedOutcome,
+  scope: 'clean' | 'unproven' = AI_SCOPE,
+): string | null {
+  // The hard invariant, independent of scope: the agent is only ever shown a transaction
+  // that carries NO deterministic delta and passed clean. It is never asked about a
+  // failure or a completed-with-issues, so it has no verdict available to contradict.
   if (v.active) return null; // still in flight; nothing terminal to review yet
   if (v.delta.length > 0) return null; // deterministically decided — never revisited
   if (v.result !== 'success') return null; // issues/failure already carry a signal
+
   if (!derived) return 'this transaction\'s logs were not loaded, so no outcome could be derived from them';
   if (derived.status === 'unknown') {
     return `the logs do not prove a terminal outcome (${derived.detail ?? 'no decisive evidence found'})`;
   }
-  return null; // the outcome was positively derived — this transaction is proven, not residual
+  // The outcome WAS positively derived. Under the narrow scope that ends the review;
+  // under the default it does not, because the interesting failures live exactly here —
+  // a transaction whose outcome is provably 'completed' while its payload says otherwise.
+  if (scope === 'unproven') return null;
+  return `the outcome was derived as ${derived.status} (${derived.detail ?? 'from the logs'}) and every deterministic check passed — nothing beyond those checks has been examined`;
 }
 
 /**
@@ -431,9 +472,15 @@ export function residualReason(v: ValidationAgent, derived?: DerivedOutcome): st
  * still visible rather than indistinguishable from one that found nothing.
  */
 export function applyAiReview(v: ValidationAgent, outcome: AiReviewOutcome, now: number): void {
-  v.aiReviewedAt = now;
   v.aiRejected = outcome.rejected.length;
   v.aiFindings = outcome.findings;
+  v.aiError = outcome.error;
+  // A FAILED review is not a review. Leaving `aiReviewedAt` unset keeps the transaction
+  // out of the one-shot dedup so the next poll retries it, and keeps the UI from showing
+  // a broken model as "reviewed, nothing found" — the exact false reassurance this whole
+  // design exists to prevent.
+  if (outcome.error && !outcome.findings.length) return;
+  v.aiReviewedAt = now;
   if (!outcome.findings.length) return;
   const worst = outcome.findings.reduce((a, b) => (rank(b.severity) > rank(a.severity) ? b : a));
   v.result = 'ai_suspected';
@@ -764,6 +811,7 @@ export async function validateAgents(
     aiReviewed: 0,
     aiSuspected: 0,
     aiRejected: 0,
+    aiFailed: 0,
     suppressed: 0,
   });
   const byApplication: Record<string, ValidationCounts> = {};
@@ -786,6 +834,7 @@ export async function validateAgents(
     // legible next to the deterministic numbers instead of folded into them.
     if (v.aiReviewedAt != null) bump('aiReviewed');
     if (v.aiRejected) bump('aiRejected', v.aiRejected);
+    if (v.aiError) bump('aiFailed');
     // (5-surfacing) A clean success that still carried an associated anomaly means
     // the anomaly was below the app's threshold and suppressed — count it so the
     // by-design suppression is observable per app rather than silently invisible.

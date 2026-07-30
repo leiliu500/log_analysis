@@ -110,32 +110,73 @@ const input = (): ValidationAgentInput => ({
   phaseTs: { REQUEST: 1_000, RESPONSE: 5_000 },
 });
 
+const reply = (claims: ValidationClaim[]): string => JSON.stringify({ claims });
+
 test('reviewFromSpec sends the app spec as the system prompt and gates the reply', async () => {
   let sawSystem = '';
   let sawUser = '';
   const out = await reviewFromSpec('apps/apiflc/validation.agent.md', 'EVIDENCE-MARKER', input(), async (system, user) => {
     sawSystem = system;
     sawUser = user;
-    return { claims: [claim()] };
+    return reply([claim()]);
   });
   assert.ok(sawSystem.length > 0, "the app's validation.agent.md is the system prompt");
   assert.match(sawUser, /EVIDENCE-MARKER/, 'the app-built evidence is passed through');
   assert.match(sawUser, /RE-EXECUTED/, 'the reply contract tells the model its claims are re-verified');
   assert.equal(out.findings.length, 1);
+  assert.equal(out.error, undefined);
 });
 
-test('reviewFromSpec never throws — a model error yields no findings, not a bad verdict', async () => {
+/**
+ * The failure modes observed in production. Each one must be DISTINGUISHABLE from a clean
+ * review: a model that never answered is not a model that found nothing, and recording it
+ * as the latter is a false negative wearing the costume of reassurance.
+ */
+
+test('a model error is reported as an error, not as a clean review', async () => {
   const out = await reviewFromSpec('apps/apiflc/validation.agent.md', 'e', input(), async () => {
     throw new Error('bedrock exploded');
   });
-  assert.deepEqual(out, { findings: [], rejected: [] });
+  assert.equal(out.findings.length, 0);
+  assert.match(out.error ?? '', /bedrock exploded/);
+});
+
+test('an empty reply (reasoning burned the whole budget) is an error, not a clean review', async () => {
+  const out = await reviewFromSpec('apps/apiflc/validation.agent.md', 'e', input(), async () => '   ');
+  assert.match(out.error ?? '', /empty reply/);
+});
+
+test('a TRUNCATED reply still yields its complete claims (the prod failure)', async () => {
+  // Exactly the shape that failed in prod: valid JSON cut off mid-string in the last claim.
+  const truncated = `{"claims":[${JSON.stringify(claim())},{"kind":"other","title":"cut off here`;
+  const out = await reviewFromSpec('apps/apiflc/validation.agent.md', 'e', input(), async () => truncated);
+  assert.equal(out.findings.length, 1, 'the complete claim ahead of the cut is recovered');
+  assert.equal(out.error, undefined, 'a salvage that produced findings is not an error');
+});
+
+test('a truncated reply that yields NOTHING is flagged, not passed off as clean', async () => {
+  const out = await reviewFromSpec('apps/apiflc/validation.agent.md', 'e', input(), async () => '{"claims":[{"title":"cut');
+  assert.equal(out.findings.length, 0);
+  assert.match(out.error ?? '', /truncated/);
+});
+
+test('salvaged claims are still gated — truncation cannot smuggle one past re-verification', async () => {
+  const bad = claim({ evidenceLogIds: ['log-fabricated'], predicates: [{ logId: 'log-fabricated', field: 'raw', op: 'contains', value: 'x' }] });
+  const out = await reviewFromSpec('apps/apiflc/validation.agent.md', 'e', input(), async () => `{"claims":[${JSON.stringify(bad)},{"title":"cut`);
+  assert.equal(out.findings.length, 0);
+  assert.equal(out.rejected.length, 1);
+});
+
+test('a fenced reply is unwrapped rather than treated as unparseable', async () => {
+  const out = await reviewFromSpec('apps/apiflc/validation.agent.md', 'e', input(), async () => '```json\n' + reply([claim()]) + '\n```');
+  assert.equal(out.findings.length, 1);
 });
 
 test('reviewFromSpec with a missing spec reviews nothing rather than improvising', async () => {
   let called = false;
   const out = await reviewFromSpec('apps/nope/validation.agent.md', 'e', input(), async () => {
     called = true;
-    return { claims: [claim()] };
+    return reply([claim()]);
   });
   assert.equal(called, false);
   assert.equal(out.findings.length, 0);
