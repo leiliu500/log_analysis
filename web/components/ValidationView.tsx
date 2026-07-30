@@ -1,12 +1,18 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ValidationAgent, ValidationAgentInfo } from '@log/shared';
+import type { ValidationAgent, ValidationAgentInfo, ValidationAgentRun } from '@log/shared';
 import { api } from '@/lib/api';
 import { ValidationPanel } from '@/components/ValidationPanel';
 import { ValidationAgentsPanel } from '@/components/ValidationAgentsPanel';
 
 const REFRESH_MS = 30_000;
+/**
+ * While an agent is actually reviewing, poll fast: a pass is bounded by the stage's
+ * 60-second budget, so a 30s cadence would routinely miss the whole thing and the panel
+ * would look permanently empty.
+ */
+const ACTIVE_REFRESH_MS = 3_000;
 
 /** Applications known to the platform (shown even before they have data). */
 const KNOWN_APPS = ['scp', 'apiflc'] as const;
@@ -19,6 +25,8 @@ export function ValidationView() {
   const [active, setActive] = useState<ValidationAgent[]>([]);
   const [history, setHistory] = useState<ValidationAgent[]>([]);
   const [agentInfo, setAgentInfo] = useState<ValidationAgentInfo[]>([]);
+  const [activeRuns, setActiveRuns] = useState<ValidationAgentRun[]>([]);
+  const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [validating, setValidating] = useState(false);
@@ -37,16 +45,22 @@ export function ValidationView() {
     try {
       const c = await api.validationAgentConfig();
       setAgentInfo(c.agents);
+      setActiveRuns(c.activeRuns ?? []);
     } catch {
       setAgentInfo([]);
+      setActiveRuns([]);
     }
+    setNow(Date.now());
   }, []);
 
+  // Cadence follows activity: fast while an agent is mid-review (or a manual pass is
+  // starting), idle otherwise, so a short-lived run is actually observable.
+  const live = activeRuns.length > 0 || validating;
   useEffect(() => {
     void refresh().finally(() => setLoading(false));
-    const id = setInterval(() => void refresh(), REFRESH_MS);
+    const id = setInterval(() => void refresh(), live ? ACTIVE_REFRESH_MS : REFRESH_MS);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, live]);
 
   async function validateNow() {
     if (validating) return;
@@ -166,7 +180,9 @@ export function ValidationView() {
       {!loading && (
         <ValidationAgentsPanel
           agents={appFilter === 'all' ? agentInfo : agentInfo.filter((a) => a.application === appFilter)}
-          rows={[...shownActive, ...shownHistory]}
+          activeRuns={appFilter === 'all' ? activeRuns : activeRuns.filter((r) => r.application === appFilter)}
+          starting={validating}
+          now={now}
         />
       )}
 

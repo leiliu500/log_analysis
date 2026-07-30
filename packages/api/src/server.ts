@@ -14,6 +14,7 @@ import {
   deleteAllAgents,
   getActiveValidationAgents,
   getValidationHistory,
+  getActiveValidationAgentRuns,
   deleteAllValidationAgents,
   recentPollerRuns,
   deleteAllPollerRuns,
@@ -86,14 +87,20 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
   // Each application's VALIDATION AI AGENT as THIS process has it configured — registry
   // declaration plus the env that gates it. Served from the runtime rather than hardcoded
   // in the UI so a disabled or misconfigured agent can never render as a healthy one.
-  api.get('/validation-agents/config', async () => ({ agents: validationAgentInfo(applicationRegistry) }));
+  api.get('/validation-agents/config', async () => ({
+    agents: validationAgentInfo(applicationRegistry),
+    // Agents RUNNING right now. The dashboard renders these, so a card appears when a
+    // validation pass starts and disappears when it ends — the agent as a lifecycle, not
+    // a permanent fixture.
+    activeRuns: await getActiveValidationAgentRuns(Date.now()),
+  }));
 
   // On-demand validation pass (the scheduled validation Lambda runs this
   // autonomously; this is the manual "Validate now" trigger). Isolated from
   // ingestion — only reads agents+anomalies and writes validation_agents.
   api.post('/validate', async (req) => {
     try {
-      return await validateAgents(applicationRegistry);
+      return await validateAgents(applicationRegistry, { trigger: 'manual' });
     } catch (err) {
       req.log.error(err, 'validation pass failed');
       const empty: ValidationRunResult = {
