@@ -512,15 +512,39 @@ export async function advanceAgents(
   // a protocol event) would otherwise never share a window with its call. Correlate over
   // recent STORED logs spanning an agent's active lifetime, merged with this poll's logs
   // (which may not be persisted yet), so app joins (`relatedLogs`) see the whole call.
-  // Span the LARGEST per-app inactivity timeout so no app's active lifetime is
-  // under-covered (SCP's 30-min window must still load even while apiflc's is 2 min).
-  const windowSpanMs = Math.max(
-    timeoutMs,
-    ...registry.all().map((app) => lifecycleTimeoutMs(app, timeoutMs)),
-  );
+  //
+  // The span covers ONLY the applications that actually need history — those declaring a
+  // cross-log-group join (`relatedLogs`) or a non-event signal hook (`pendingSignals`).
+  // Taking the max across ALL apps made every poll load SCP's 30 minutes even though SCP
+  // needs none of it: its evidence rides on the protocol events, which are already
+  // accumulated on the agent. Loading three times more history than any app can use is
+  // what pushes this query into its row cap, and the cap discards the WRONG END (see
+  // below), so an over-wide span directly causes lost correlations.
+  const joinApps = registry.all().filter((app) => app.relatedLogs != null || app.pendingSignals != null);
+  const windowSpanMs = joinApps.length
+    ? Math.max(...joinApps.map((app) => lifecycleTimeoutMs(app, timeoutMs)))
+    : timeoutMs;
+
+  // The row cap, and why hitting it is dangerous rather than merely lossy: queryLogs
+  // orders by timestamp DESC, so truncation keeps the NEWEST rows and drops the OLDEST —
+  // exactly backwards for reassembling an in-flight call. The lines at risk are a
+  // transaction's earliest ones (apiflc seeds its join on the handler line carrying the
+  // correlationID); the newest need no help, they just arrived. Lose the seed and the
+  // join returns nothing, the gateway status is never attributed, and the transaction
+  // sits until it is timed out — a throughput problem recorded as the transaction's
+  // fault. So this is tunable, and reaching it is reported loudly instead of silently
+  // degrading correlation.
+  const windowLogLimit = Number(process.env.INGEST_WINDOW_LOG_LIMIT ?? 20000);
   let windowLogs = parsed;
   try {
-    const stored = await queryLogs({ from: now - windowSpanMs, to: now, limit: 10000 });
+    const stored = await queryLogs({ from: now - windowSpanMs, to: now, limit: windowLogLimit });
+    if (stored.length >= windowLogLimit) {
+      console.error(
+        `ingest: correlation window hit the ${windowLogLimit}-row cap over ${Math.round(windowSpanMs / 60_000)}m — ` +
+          'the OLDEST logs were dropped, so in-flight transactions may lose the lines their join seeds on ' +
+          'and time out spuriously. Raise INGEST_WINDOW_LOG_LIMIT.',
+      );
+    }
     const byId = new Map<string, ParsedLog>();
     for (const l of [...stored, ...parsed]) byId.set(l.id, l);
     windowLogs = [...byId.values()];
