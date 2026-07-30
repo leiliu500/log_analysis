@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, Anomaly, ApplicationDef, AgentPromptContext, LogSourceType, ParsedLog, Severity, ApplicationRegistry, TransitionDecision, TransitionReasoner } from '@log/shared';
-import { lifecycleTimeoutMs } from '@log/shared';
+import { coalesceEntries, lifecycleTimeoutMs } from '@log/shared';
 import { converseJson } from './bedrock.js';
 import {
   getActiveAgents,
@@ -42,23 +42,62 @@ export interface AgentEvent {
   raw?: string;
 }
 
-/** Pull the ordered transaction events out of a parsed window, across all apps. */
-export function agentEvents(parsed: ParsedLog[], registry: ApplicationRegistry): AgentEvent[] {
+/**
+ * Pull the ordered transaction events out of a window, across all apps.
+ *
+ * Events are extracted from COALESCED ENTRIES, not from raw records. CloudWatch stores one
+ * event per physical line, so a multi-line message arrives as several records and no single
+ * one carries every field `eventOf` needs — for SCP, `<messageType>` and `<messageId>` can
+ * land in different records, in which case `eventOf` sees neither a complete message nor a
+ * partial one: it returns undefined and the transaction is never seen AT ALL. Not partially
+ * ingested — invisible, with no agent and nothing downstream to notice the absence.
+ *
+ * Each app decides where its own messages begin ({@link TransactionProtocol.startsEntry});
+ * a record that is already a complete message coalesces to itself, so single-record
+ * delivery behaves exactly as before.
+ *
+ * `freshLogIds` bounds the work: only entries this poll actually touched are emitted, so a
+ * transaction completed long ago is not re-extracted every cycle. Re-emitting IS harmless
+ * — `phaseTs` only records a phase it has not seen — but it would burn the reasoning
+ * budget on transactions with nothing new.
+ */
+export function agentEvents(
+  logs: ParsedLog[],
+  registry: ApplicationRegistry,
+  freshLogIds?: ReadonlySet<string>,
+): AgentEvent[] {
   const out: AgentEvent[] = [];
-  for (const l of parsed) {
-    const app = registry.forLog(l);
+  // A record starts its own entry when the app says so, OR when it already parses as a
+  // COMPLETE event on its own. That default is the safety net: without it, an app that
+  // declares no `startsEntry` and whose logs are not AWS-format (the generic heuristic
+  // recognises only that) has every line read as a continuation, so consecutive complete
+  // messages merge into one entry and all but the first are silently lost. Forcing a
+  // start can only ever split entries, never merge them, so it cannot break an app that
+  // was working — single-record delivery keeps behaving exactly as it did.
+  const startsEntry = (log: ParsedLog): boolean => {
+    const app = registry.forLog(log);
+    if (!app) return false;
+    if (app.protocol.startsEntry?.(log) === true) return true;
+    return app.protocol.eventOf(log) !== undefined;
+  };
+  for (const entry of coalesceEntries(logs, startsEntry)) {
+    if (freshLogIds && !entry.lines.some((l) => freshLogIds.has(l.id))) continue;
+    const head = entry.head;
+    const app = registry.forLog(head);
     if (!app) continue;
-    const e = app.protocol.eventOf(l);
+    // Read the WHOLE entry, so a message split across records is still recognised.
+    const whole = entry.lines.length > 1 ? ({ ...head, raw: entry.raw, message: entry.raw } as ParsedLog) : head;
+    const e = app.protocol.eventOf(whole);
     if (!e) continue;
     out.push({
       type: e.type,
       corrId: e.corrId,
-      ts: l.timestamp,
+      ts: head.timestamp,
       ackCode: e.ackCode,
-      source: l.source,
-      logGroup: l.stream,
+      source: head.source,
+      logGroup: head.stream,
       application: app.id,
-      raw: l.raw ?? l.message,
+      raw: entry.raw,
     });
   }
   return out.sort((a, b) => a.ts - b.ts);
@@ -485,27 +524,6 @@ export async function advanceAgents(
   const anomaliesTtlMs =
     opts.anomaliesTtlMs ?? Number(process.env.FINDINGS_HISTORY_TTL_MINUTES ?? 1440) * 60_000;
 
-  const events = agentEvents(parsed, registry);
-  const ids = [...new Set(events.map((e) => e.corrId))];
-  // The active-agent load is CAPPED, and hitting the cap is the sharpest scaling cliff in
-  // the poller: agents beyond it are never loaded, so they are never advanced, so they sit
-  // until their inactivity timeout closes them as `error` — and the validation worker then
-  // passes that as consistent, because a timeout carrying its medium anomaly satisfies the
-  // invariant. Thousands of transactions can be silently mis-recorded that way. Raise it
-  // with INGEST_ACTIVE_AGENT_LIMIT, and never let reaching it pass unreported.
-  const activeLimit = Number(process.env.INGEST_ACTIVE_AGENT_LIMIT ?? 5000);
-  const [active, matching] = await Promise.all([
-    getActiveAgents(activeLimit),
-    ids.length ? getAgentsByMessageIds(ids) : Promise.resolve([] as Agent[]),
-  ]);
-  if (active.length >= activeLimit) {
-    console.error(
-      `ingest: active-agent load hit the ${activeLimit} cap — agents beyond it are NOT being advanced and will time out spuriously. Raise INGEST_ACTIVE_AGENT_LIMIT.`,
-    );
-  }
-  const known = new Map<string, Agent>();
-  for (const a of [...active, ...matching]) known.set(a.messageId, a);
-
   // Cross-poll correlation window. The connector pulls INCREMENTALLY — each log lands in
   // exactly one poll — so a transaction's later-arriving cross-group signal (apiflc's
   // gateway HTTP status is ingested in a different poll than the handler logs, and is not
@@ -551,6 +569,32 @@ export async function advanceAgents(
   } catch (err) {
     console.error('advanceAgents: correlation-window query failed, using this poll only', (err as Error).message);
   }
+
+  // Events come from the COALESCED WINDOW, not this poll's raw records: a multi-line
+  // message is split across records, and its lines can straddle a poll boundary, so
+  // extracting per-record per-poll can never see a whole message. `freshLogIds` keeps the
+  // work bounded to entries this poll actually touched.
+  const freshLogIds = new Set(parsed.map((l) => l.id));
+  const events = agentEvents(windowLogs, registry, freshLogIds);
+  const ids = [...new Set(events.map((e) => e.corrId))];
+  // The active-agent load is CAPPED, and hitting the cap is the sharpest scaling cliff in
+  // the poller: agents beyond it are never loaded, so they are never advanced, so they sit
+  // until their inactivity timeout closes them as `error` — and the validation worker then
+  // passes that as consistent, because a timeout carrying its medium anomaly satisfies the
+  // invariant. Thousands of transactions can be silently mis-recorded that way. Raise it
+  // with INGEST_ACTIVE_AGENT_LIMIT, and never let reaching it pass unreported.
+  const activeLimit = Number(process.env.INGEST_ACTIVE_AGENT_LIMIT ?? 5000);
+  const [active, matching] = await Promise.all([
+    getActiveAgents(activeLimit),
+    ids.length ? getAgentsByMessageIds(ids) : Promise.resolve([] as Agent[]),
+  ]);
+  if (active.length >= activeLimit) {
+    console.error(
+      `ingest: active-agent load hit the ${activeLimit} cap — agents beyond it are NOT being advanced and will time out spuriously. Raise INGEST_ACTIVE_AGENT_LIMIT.`,
+    );
+  }
+  const known = new Map<string, Agent>();
+  for (const a of [...active, ...matching]) known.set(a.messageId, a);
 
   const step = await stepAgentsDynamic(events, [...known.values()], { now, timeoutMs, registry, windowLogs });
 

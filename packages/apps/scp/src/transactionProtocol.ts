@@ -67,4 +67,20 @@ export const scpTransactionProtocol: TransactionProtocol = {
     return { type: m.type, corrId, ackCode: m.ackCode };
   },
   isSuccess: isScpAckSuccess,
+  /**
+   * An SCP entry begins at a `cashMessage` OPENING TAG — and only there.
+   *
+   * A bare `<messageType>REQUEST</messageType>` line must NOT start an entry: it is a
+   * continuation inside the envelope, and treating it as a start splits one message into
+   * two entries so neither half carries both the type and the id. The self-contained
+   * single-record case needs no clause here — the engine already forces a start for any
+   * record that resolves to a complete event on its own.
+   *
+   * Without this hook every cashMessage line looks like a continuation to the generic AWS
+   * heuristic, so a whole stream would coalesce into ONE entry and every message after the
+   * first would be lost.
+   */
+  startsEntry(log: ParsedLog): boolean {
+    return /<[\w.-]*:?cashMessage[\s>]/i.test(log.raw ?? '');
+  },
 };
