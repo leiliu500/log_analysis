@@ -218,3 +218,48 @@ test('reviewFromSpec with a missing spec reviews nothing rather than improvising
   assert.equal(called, false);
   assert.equal(out.findings.length, 0);
 });
+
+/**
+ * A VACUOUS witness. Observed in prod on 5678: the claim "Same correlationID used for
+ * multiple distinct requests" was carried by three predicates that all checked
+ * `contains "correlationID: 5678"`. Every one verified — and proved only that the lines
+ * belong to the transaction, which the join established before the agent saw them. A
+ * witness must say something the join did not.
+ */
+test('discards a claim whose predicates only assert the line belongs to this transaction', () => {
+  const logs = [makeParsedLog('apiflc-handler', 1_000, 'REQUEST correlationID: 5678 start', 'log-a'), makeParsedLog('apiflc-handler', 2_000, 'RESPONSE correlationID: 5678 done', 'log-b')];
+  const out = admitClaims(
+    [
+      claim({
+        title: 'Same correlationID used for multiple distinct requests',
+        evidenceLogIds: ['log-a', 'log-b'],
+        predicates: [
+          { logId: 'log-a', field: 'raw', op: 'contains', value: 'correlationID: 5678' },
+          { logId: 'log-b', field: 'raw', op: 'contains', value: 'correlationID: 5678' },
+        ],
+      }),
+    ],
+    logs,
+    '5678',
+  );
+  assert.equal(out.findings.length, 0);
+  assert.match(out.rejected[0]!.reason, /vacuous witness/);
+});
+
+test('a claim citing the id AND something substantive is still admitted', () => {
+  const logs = [makeParsedLog('apiflc-gw', 2_000, 'correlationID: 5678 Method completed with status: 200 body={"error":"DECLINED"}', 'log-c')];
+  const out = admitClaims(
+    [
+      claim({
+        evidenceLogIds: ['log-c'],
+        predicates: [
+          { logId: 'log-c', field: 'raw', op: 'contains', value: 'correlationID: 5678' },
+          { logId: 'log-c', field: 'raw', op: 'contains', value: '"error":"DECLINED"' },
+        ],
+      }),
+    ],
+    logs,
+    '5678',
+  );
+  assert.equal(out.findings.length, 1, 'membership may accompany a real witness, it just may not be the whole one');
+});

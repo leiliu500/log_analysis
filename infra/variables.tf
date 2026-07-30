@@ -163,12 +163,15 @@ variable "validation_ai_review_epoch" {
     History of bumps, each one a correction that had to supersede earlier verdicts:
       02:00Z - by-design lists added; cleared the messageId / sender / authorizer FPs.
       03:25Z - "same message on two log lines is re-logging, not a duplicate".
-      03:39Z - gate now REJECTS absence-only claims (predicates that are all
+      03:39Z - gate rejects absence-only claims (predicates that are all
                `not_contains`), which is what let "lacks a terminal status line" and
                "sendTime missing seconds" through as verified findings.
+      04:27Z - residual narrowed to COMPLETED transactions only (a failed/timed-out one
+               was already flagged, so it is not part of the false-negative population),
+               and the gate now rejects vacuous membership-only witnesses.
   EOT
   type        = number
-  default     = 1785382768000
+  default     = 1785385628000
 }
 
 variable "validation_ai_deadline_ms" {

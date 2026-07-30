@@ -296,3 +296,22 @@ test('a review that salvaged findings despite an error is still recorded', () =>
   assert.equal(v.aiReviewedAt, 99 * MIN);
   assert.equal(v.result, 'ai_suspected');
 });
+
+test('a FAILED transaction is never reviewed — it was already flagged, not passed', () => {
+  const failedAgent = { ...base, messageId: 'f1', status: 'failed' as const, active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN } };
+  const v = validateAgent(failedAgent, 'high', 50 * MIN, SCP, [], unknownOutcome);
+  assert.equal(v.result, 'success', 'the worker correctly validated a failed agent carrying its high anomaly');
+  assert.equal(residualReason(v, unknownOutcome, 'clean'), null, 'but it is not part of the false-negative population');
+});
+
+test('a TIMED-OUT transaction is never reviewed either', () => {
+  const timedOut = { ...base, messageId: 'f2', status: 'error' as const, active: false, phaseTs: { REQUEST: 0, ACK: 1 * MIN } };
+  const v = validateAgent(timedOut, 'medium', 50 * MIN, SCP, [], unknownOutcome);
+  assert.equal(v.result, 'success');
+  assert.equal(residualReason(v, unknownOutcome, 'clean'), null);
+});
+
+test('a COMPLETED transaction that passed without proof is still reviewed', () => {
+  const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
+  assert.ok(residualReason(v, unknownOutcome, 'clean'), 'the false-negative population is transactions that claim they worked');
+});

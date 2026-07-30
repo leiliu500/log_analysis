@@ -238,6 +238,8 @@ const KIND_RE = /[^a-z0-9-]+/g;
 export function admitClaim(
   claim: ValidationClaim,
   byId: ReadonlyMap<string, ParsedLog>,
+  /** The transaction's correlation id, so membership-only witnesses can be rejected. */
+  correlationId?: string,
 ): { ok: true; finding: AiValidationFinding } | { ok: false; reason: string } {
   const title = typeof claim?.title === 'string' ? claim.title.trim() : '';
   if (!title) return { ok: false, reason: 'no title' };
@@ -262,6 +264,25 @@ export function admitClaim(
   // rest on at least one thing a log line positively SAYS.
   if (preds.every((p) => p?.op === 'not_contains')) {
     return { ok: false, reason: 'no positive evidence — supported only by what a line does not say' };
+  }
+
+  // A VACUOUS witness: every predicate only asserts that the line carries this
+  // transaction's own correlation id, i.e. that it belongs to the transaction — which
+  // the join already established before the agent ever saw it. Such predicates verify
+  // perfectly and support nothing. Observed in prod: "Same correlationID used for
+  // multiple distinct requests", witnessed by three predicates all checking
+  // `contains "correlationID: 5678"`. A witness has to say something the join did not.
+  if (correlationId) {
+    const id = correlationId.toLowerCase();
+    const saysOnlyMembership = (p: ClaimPredicate): boolean => {
+      const v = String(p?.value ?? '').toLowerCase();
+      // The value carries the id and nothing else of substance (a label like
+      // "correlationID: 5678" or "messageId=001" still only asserts membership).
+      return v.includes(id) && v.replace(id, '').replace(/[^a-z0-9]/g, '').length <= 14;
+    };
+    if (preds.every(saysOnlyMembership)) {
+      return { ok: false, reason: 'vacuous witness — every predicate only asserts the line belongs to this transaction' };
+    }
   }
 
   const cited = new Set(ids);
@@ -359,13 +380,14 @@ export function salvageClaims(text: string): ValidationClaim[] {
 export function admitClaims(
   claims: readonly ValidationClaim[] | undefined,
   relatedLogs: readonly ParsedLog[],
+  correlationId?: string,
 ): AiReviewOutcome {
   if (!Array.isArray(claims) || !claims.length) return EMPTY;
   const byId = new Map(relatedLogs.map((l) => [l.id, l]));
   const findings: AiValidationFinding[] = [];
   const rejected: Array<{ title: string; reason: string }> = [];
   for (const c of claims.slice(0, MAX_CLAIMS)) {
-    const verdict = admitClaim(c, byId);
+    const verdict = admitClaim(c, byId, correlationId);
     if (verdict.ok) findings.push(verdict.finding);
     else rejected.push({ title: (c?.title ?? '(untitled)').toString().slice(0, 120), reason: verdict.reason });
   }
@@ -479,7 +501,7 @@ export async function reviewFromSpec(
     return { findings: [], rejected: [], error };
   }
 
-  const outcome = admitClaims(claims, input.relatedLogs);
+  const outcome = admitClaims(claims, input.relatedLogs, input.messageId);
   if (truncated) {
     // Salvage succeeded, but the reply WAS cut off — so "no claims" cannot be trusted as
     // a clean result. Flag it as partial rather than let it pass for a completed review.
