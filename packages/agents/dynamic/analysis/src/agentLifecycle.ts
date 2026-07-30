@@ -99,6 +99,11 @@ export interface StepResult {
   reasoned: number;
   /** Transitions left undecided this poll because the reasoning cap was hit. */
   deferredOverCap: number;
+  /**
+   * Per-application backlog carried to the next poll. A backlog concentrated in one app
+   * means that app is slow or noisy; one spread evenly means the cap is simply too low.
+   */
+  backlogByApp: Record<string, number>;
   /** Per-application agent counts (application id → counts). */
   byApp: Record<string, AgentCounts>;
 }
@@ -164,6 +169,7 @@ export async function stepAgentsDynamic(
   let fastPathed = 0;
   let reasoned = 0;
   let deferredOverCap = 0;
+  const backlogByApp: Record<string, number> = {};
   const byApp: Record<string, AgentCounts> = {};
   const bump = (app: string | undefined, k: keyof AgentCounts): void => {
     (byApp[app ?? 'unknown'] ??= { spawned: 0, advanced: 0, closed: 0 })[k] += 1;
@@ -251,6 +257,63 @@ export async function stepAgentsDynamic(
   // reasoning budget, which is what actually bounds ingestion throughput — see
   // IngestionAgent.fastPath. Anything an app does not claim still goes to the model, so
   // this narrows the model's role without removing it.
+  // ---------------------------------------------------------------------------
+  // SCHEDULER. One poll, many applications, a bounded number of concurrent model
+  // calls. Without an explicit policy the engine processed `decisions` in map order
+  // with a single global cap, which produces two failures on a shared platform:
+  //
+  //   STARVATION — one busy application's transactions arrive first and consume the
+  //   whole budget every poll, so a quiet application is never looked at.
+  //
+  //   SELF-INFLICTED TIMEOUTS — a transaction deferred because WE were over budget
+  //   keeps being deferred, and is eventually closed as `error` for inactivity. The
+  //   validation worker then passes that as consistent (a timeout carrying its medium
+  //   anomaly satisfies the invariant), so our own contention is recorded as the
+  //   transaction's fault.
+  //
+  // The policy is therefore: deadline first, then fair share.
+  // ---------------------------------------------------------------------------
+
+  /** Absolute instant this transaction will be timed out if nothing advances it. */
+  const deadlineOf = (dec: (typeof decisions)[number]): number => {
+    const ts = Object.values(dec.a.phaseTs);
+    const last = ts.length ? Math.max(...ts) : dec.a.spawnedAt;
+    return last + lifecycleTimeoutMs(dec.app, timeoutMs);
+  };
+
+  // (1) DEADLINE FIRST — the transaction closest to being timed out is worked first, so
+  // a budget shortfall delays the transactions that can best afford the wait rather than
+  // the ones about to be written off.
+  decisions.sort((a, b) => deadlineOf(a) - deadlineOf(b));
+
+  /**
+   * (2) FAIR SHARE — interleave applications round-robin. Each app's queue is already
+   * deadline-ordered, so this takes every app's most urgent transaction before any app's
+   * second, and a bounded budget is split evenly no matter how lopsided the arrival mix.
+   */
+  const fairShare = (items: typeof decisions): typeof decisions => {
+    const queues = new Map<string, typeof decisions>();
+    for (const it of items) {
+      const q = queues.get(it.app.id);
+      if (q) q.push(it);
+      else queues.set(it.app.id, [it]);
+    }
+    if (queues.size <= 1) return items; // single app — nothing to interleave
+    const out: typeof decisions = [];
+    let picked = true;
+    while (picked) {
+      picked = false;
+      for (const q of queues.values()) {
+        const next = q.shift();
+        if (next) {
+          out.push(next);
+          picked = true;
+        }
+      }
+    }
+    return out;
+  };
+
   const fastPathEnabled = (process.env.INGEST_FASTPATH_ENABLED ?? 'true').toLowerCase() !== 'false';
 
   /** Apply one decided transition. Identical for a fast-path and a reasoned decision. */
@@ -309,10 +372,12 @@ export async function stepAgentsDynamic(
     }
   }
 
-  await mapPool(deferred, 6, async (dec, idx) => {
+  const modelQueue = fairShare(deferred);
+  await mapPool(modelQueue, 6, async (dec, idx) => {
     if (idx >= maxLlm) {
       deferredOverCap += 1;
-      return; // over the per-poll cap — defer to next poll
+      backlogByApp[dec.app.id] = (backlogByApp[dec.app.id] ?? 0) + 1;
+      return; // over the per-poll cap — carried to the next poll, most urgent first
     }
     const agent = dec.app.ingestionAgent;
     if (!agent) return; // app declares no dynamic agent — only its timeouts fire
@@ -324,9 +389,14 @@ export async function stepAgentsDynamic(
 
   if (deferredOverCap > 0) {
     // Never silent: this is the back-pressure that, left unchecked, turns into agents
-    // tripping their inactivity timeout and being recorded as legitimate timeouts.
+    // tripping their inactivity timeout and being recorded as legitimate timeouts. The
+    // per-app split matters — a backlog concentrated in one application is a different
+    // problem (that app is slow or noisy) from one spread evenly (the cap is too low).
+    const split = Object.entries(backlogByApp)
+      .map(([app, n]) => `${app}=${n}`)
+      .join(' ');
     console.warn(
-      `ingest: ${deferredOverCap} transition(s) over the ${maxLlm}-per-poll reasoning cap; deferred to the next poll`,
+      `ingest: ${deferredOverCap} transition(s) over the ${maxLlm}-per-poll reasoning cap; carried to the next poll (${split})`,
     );
   }
 
@@ -368,7 +438,7 @@ export async function stepAgentsDynamic(
     }
   }
 
-  return { agents, changed, spawned, advanced, closed, fastPathed, reasoned, deferredOverCap, byApp };
+  return { agents, changed, spawned, advanced, closed, fastPathed, reasoned, deferredOverCap, backlogByApp, byApp };
 }
 
 export interface AdvanceResult {
