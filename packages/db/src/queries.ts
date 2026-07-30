@@ -337,7 +337,15 @@ export async function getNonTransactionAnomaliesSince(since: number, limit = 200
   return rows.map(rawRowToAnomaly);
 }
 
-export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<void> {
+/**
+ * @param reviewEpoch Only a stored AI review recorded at or after this instant is still
+ *   CURRENT and worth preserving when the incoming row carries no review of its own.
+ *   Without it the stickiness below is a ratchet: once a transaction has been marked
+ *   `ai_suspected` it keeps that verdict forever, even after the agent stops reviewing it
+ *   (a narrowed residual gate) or after a corrected prompt supersedes the old claim —
+ *   the incoming row has no review, so the stale one is resurrected on every poll.
+ */
+export async function upsertValidationAgents(vas: ValidationAgent[], reviewEpoch = 0): Promise<void> {
   if (!vas.length) return;
   const sqlc = getSql();
   await sqlc.begin(async (tx) => {
@@ -370,9 +378,18 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
           -- the log-backed window, so later polls re-validate it deterministically and
           -- carry no review (ai_reviewed_at NULL). Treat that as "no new information" and
           -- keep the stored review rather than wiping a result that cost a model call.
-          ai_findings = CASE WHEN EXCLUDED.ai_reviewed_at IS NULL THEN validation_agents.ai_findings ELSE EXCLUDED.ai_findings END,
-          ai_rejected = COALESCE(EXCLUDED.ai_rejected, validation_agents.ai_rejected),
-          ai_reviewed_at = COALESCE(EXCLUDED.ai_reviewed_at, validation_agents.ai_reviewed_at),
+          ai_findings = CASE
+            WHEN EXCLUDED.ai_reviewed_at IS NOT NULL THEN EXCLUDED.ai_findings
+            WHEN validation_agents.ai_reviewed_at >= ${reviewEpoch} THEN validation_agents.ai_findings
+            ELSE '[]'::jsonb END,
+          ai_rejected = CASE
+            WHEN EXCLUDED.ai_rejected IS NOT NULL THEN EXCLUDED.ai_rejected
+            WHEN validation_agents.ai_reviewed_at >= ${reviewEpoch} THEN validation_agents.ai_rejected
+            ELSE NULL END,
+          ai_reviewed_at = CASE
+            WHEN EXCLUDED.ai_reviewed_at IS NOT NULL THEN EXCLUDED.ai_reviewed_at
+            WHEN validation_agents.ai_reviewed_at >= ${reviewEpoch} THEN validation_agents.ai_reviewed_at
+            ELSE NULL END,
           -- Always take the latest: a retry that succeeds must CLEAR the stored error,
           -- and a retry that fails again must keep it visible.
           ai_error = EXCLUDED.ai_error,
@@ -382,6 +399,7 @@ export async function upsertValidationAgents(vas: ValidationAgent[]): Promise<vo
           -- verdict wins, exactly as it does everywhere else.
           result = CASE
             WHEN EXCLUDED.ai_reviewed_at IS NULL AND EXCLUDED.result = 'success'
+                 AND validation_agents.ai_reviewed_at >= ${reviewEpoch}
                  AND jsonb_array_length(validation_agents.ai_findings) > 0 THEN 'ai_suspected'
             ELSE EXCLUDED.result END,
           phases = EXCLUDED.phases, phase_ts = EXCLUDED.phase_ts,

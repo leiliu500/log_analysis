@@ -817,7 +817,10 @@ export async function validateAgents(
     }
   }
 
-  await upsertValidationAgents(validations);
+  // The epoch is passed so a STORED review older than it is not resurrected onto a row
+  // that no longer carries one — otherwise `ai_suspected` is a ratchet that survives both
+  // a corrected prompt and a narrowed residual gate.
+  await upsertValidationAgents(validations, AI_REVIEW_EPOCH);
   await pruneClosedValidationAgentsOlderThan(now - historyTtlMs);
 
   const empty = (): ValidationCounts => ({
