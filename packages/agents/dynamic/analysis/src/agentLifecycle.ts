@@ -89,6 +89,16 @@ export interface StepResult {
   spawned: number;
   advanced: number;
   closed: number;
+  /**
+   * Transitions decided DETERMINISTICALLY by an app's fastPath, costing no model call.
+   * Reported next to `reasoned` so the model's share of ingestion is an observable
+   * number: if this collapses toward zero the throughput ceiling is back.
+   */
+  fastPathed: number;
+  /** Transitions that required a model call (these consume INGEST_DYNAMIC_MAX). */
+  reasoned: number;
+  /** Transitions left undecided this poll because the reasoning cap was hit. */
+  deferredOverCap: number;
   /** Per-application agent counts (application id → counts). */
   byApp: Record<string, AgentCounts>;
 }
@@ -151,6 +161,9 @@ export async function stepAgentsDynamic(
   let spawned = 0;
   let advanced = 0;
   let closed = 0;
+  let fastPathed = 0;
+  let reasoned = 0;
+  let deferredOverCap = 0;
   const byApp: Record<string, AgentCounts> = {};
   const bump = (app: string | undefined, k: keyof AgentCounts): void => {
     (byApp[app ?? 'unknown'] ??= { spawned: 0, advanced: 0, closed: 0 })[k] += 1;
@@ -231,22 +244,17 @@ export async function stepAgentsDynamic(
   // Lambda timeout — beyond it (or on a null/no-transition result) the agent is left
   // unchanged and retried next poll.
   const maxLlm = opts.maxLlm ?? Number(process.env.INGEST_DYNAMIC_MAX ?? 40);
-  await mapPool(decisions, 6, async (dec, idx) => {
-    if (idx >= maxLlm) return; // over the per-poll cap — defer to next poll
-    const ctx: AgentPromptContext = {
-      messageId: dec.id,
-      currentStatus: dec.a.status,
-      phaseTs: dec.a.phaseTs,
-      ackCode: dec.a.ackCode,
-      phasesThisCycle: dec.evs.map((e) => e.type),
-      eventLines: dec.evs.map((e) => e.raw ?? '').filter(Boolean),
-      window: windowLogs,
-      now,
-    };
-    const agent = dec.app.ingestionAgent;
-    if (!agent) return; // app declares no dynamic agent — only its timeouts fire
-    const d = await agent.decide(ctx, opts.reasoner ?? defaultReasoner);
-    if (!d) return; // no transition this poll (model error / no spec) — leave unchanged
+
+  // DETERMINISTIC FAST PATH first. Each app decides the transitions its own evidence makes
+  // unambiguous (SCP: the ackCode on the protocol event; apiflc: the gateway HTTP status),
+  // and defers the rest. Those transitions cost no model call and do not consume the
+  // reasoning budget, which is what actually bounds ingestion throughput — see
+  // IngestionAgent.fastPath. Anything an app does not claim still goes to the model, so
+  // this narrows the model's role without removing it.
+  const fastPathEnabled = (process.env.INGEST_FASTPATH_ENABLED ?? 'true').toLowerCase() !== 'false';
+
+  /** Apply one decided transition. Identical for a fast-path and a reasoned decision. */
+  const applyDecision = (dec: (typeof decisions)[number], d: TransitionDecision): void => {
     const a = dec.a;
     if (d.status === 'awaiting') {
       a.status = 'awaiting';
@@ -267,7 +275,60 @@ export async function stepAgentsDynamic(
       closed += 1;
       bump(dec.app.id, 'closed');
     }
+    changed.add(dec.id);
+  };
+
+  const ctxOf = (dec: (typeof decisions)[number]): AgentPromptContext => ({
+    messageId: dec.id,
+    currentStatus: dec.a.status,
+    phaseTs: dec.a.phaseTs,
+    ackCode: dec.a.ackCode,
+    phasesThisCycle: dec.evs.map((e) => e.type),
+    eventLines: dec.evs.map((e) => e.raw ?? '').filter(Boolean),
+    window: windowLogs,
+    now,
   });
+
+  const deferred: typeof decisions = [];
+  for (const dec of decisions) {
+    let d: TransitionDecision | null = null;
+    if (fastPathEnabled && dec.app.ingestionAgent?.fastPath) {
+      try {
+        d = dec.app.ingestionAgent.fastPath(ctxOf(dec));
+      } catch (err) {
+        // A broken fast path must never drop a transaction — fall back to reasoning.
+        console.error(`ingest: fastPath threw for ${dec.id}, deferring to the model`, (err as Error).message);
+        d = null;
+      }
+    }
+    if (d) {
+      applyDecision(dec, d);
+      fastPathed += 1;
+    } else {
+      deferred.push(dec);
+    }
+  }
+
+  await mapPool(deferred, 6, async (dec, idx) => {
+    if (idx >= maxLlm) {
+      deferredOverCap += 1;
+      return; // over the per-poll cap — defer to next poll
+    }
+    const agent = dec.app.ingestionAgent;
+    if (!agent) return; // app declares no dynamic agent — only its timeouts fire
+    const d = await agent.decide(ctxOf(dec), opts.reasoner ?? defaultReasoner);
+    if (!d) return; // no transition this poll (model error / no spec) — leave unchanged
+    reasoned += 1;
+    applyDecision(dec, d);
+  });
+
+  if (deferredOverCap > 0) {
+    // Never silent: this is the back-pressure that, left unchecked, turns into agents
+    // tripping their inactivity timeout and being recorded as legitimate timeouts.
+    console.warn(
+      `ingest: ${deferredOverCap} transition(s) over the ${maxLlm}-per-poll reasoning cap; deferred to the next poll`,
+    );
+  }
 
   // Deterministic timeout pass (a clock check, not reasoning) — the SLA backstop. The
   // timeout is per-app, sourced from each app's transaction.md (SCP 30 min, apiflc
@@ -307,7 +368,7 @@ export async function stepAgentsDynamic(
     }
   }
 
-  return { agents, changed, spawned, advanced, closed, byApp };
+  return { agents, changed, spawned, advanced, closed, fastPathed, reasoned, deferredOverCap, byApp };
 }
 
 export interface AdvanceResult {
@@ -356,10 +417,22 @@ export async function advanceAgents(
 
   const events = agentEvents(parsed, registry);
   const ids = [...new Set(events.map((e) => e.corrId))];
+  // The active-agent load is CAPPED, and hitting the cap is the sharpest scaling cliff in
+  // the poller: agents beyond it are never loaded, so they are never advanced, so they sit
+  // until their inactivity timeout closes them as `error` — and the validation worker then
+  // passes that as consistent, because a timeout carrying its medium anomaly satisfies the
+  // invariant. Thousands of transactions can be silently mis-recorded that way. Raise it
+  // with INGEST_ACTIVE_AGENT_LIMIT, and never let reaching it pass unreported.
+  const activeLimit = Number(process.env.INGEST_ACTIVE_AGENT_LIMIT ?? 5000);
   const [active, matching] = await Promise.all([
-    getActiveAgents(2000),
+    getActiveAgents(activeLimit),
     ids.length ? getAgentsByMessageIds(ids) : Promise.resolve([] as Agent[]),
   ]);
+  if (active.length >= activeLimit) {
+    console.error(
+      `ingest: active-agent load hit the ${activeLimit} cap — agents beyond it are NOT being advanced and will time out spuriously. Raise INGEST_ACTIVE_AGENT_LIMIT.`,
+    );
+  }
   const known = new Map<string, Agent>();
   for (const a of [...active, ...matching]) known.set(a.messageId, a);
 

@@ -71,3 +71,55 @@ test('apiflcPendingSignals re-schedules an awaiting agent once the gateway HTTP 
   // An id that doesn't correlate to anything in the window is not scheduled.
   assert.deepEqual(apiflcPendingSignals(gatewayWindow, ['9999']), []);
 });
+
+// ---------------------------------------------------------------------------
+// The DETERMINISTIC fast path. One model call per transition is what caps
+// ingestion throughput (~480/hour at the 40-per-poll reasoning limit), and
+// overload does not surface as an error — deferred agents trip their inactivity
+// timeout and are recorded as legitimate timeouts. The fast path decides what
+// apiflc's evidence makes unambiguous, and ONLY that.
+// ---------------------------------------------------------------------------
+
+const gwLogs = (status: number, corr = '1234') => {
+  const gw = '68f54c61-3e54-4e02-8ccf-2fbc14576104';
+  const lambda = '45e5ece0-7dbe-490a-880b-38670acab559';
+  return [
+    log(`2026-07-02T04:34:43.329Z ${lambda} INFO correlationID: ${corr}; FedLine Request: {...}`),
+    log(`(${gw}) Method request headers: {X-Correlation-ID=${corr}, User-Agent=x}`),
+    log(`(${gw}) Endpoint response headers: {x-amzn-RequestId=${lambda}}`),
+    log(`(${gw}) Method completed with status: ${status}`),
+  ];
+};
+
+test('fastPath: a gateway 200 completes without a model call', () => {
+  const d = apiflcIngestionAgent.fastPath!(ctx(gwLogs(200)));
+  assert.equal(d?.status, 'completed');
+});
+
+test('fastPath: a gateway 500 fails without a model call', () => {
+  const d = apiflcIngestionAgent.fastPath!(ctx(gwLogs(500)));
+  assert.equal(d?.status, 'failed');
+  assert.equal(d?.severity, 'high');
+});
+
+/**
+ * The asymmetry that makes this app-owned rather than generic. A handler RESPONSE line
+ * is NOT a completion for apiflc — a 500 logs one too. A generic "completing phase
+ * present ⇒ completed" rule would record a failed call as successful, which is exactly
+ * the mis-recorded outcome the validation engine's status-vs-reality check exists to
+ * catch. Until the gateway status lands, the only honest answer is `awaiting`.
+ */
+test('fastPath: a RESPONSE with NO gateway status must NOT be called completed', () => {
+  const lambda = '45e5ece0-7dbe-490a-880b-38670acab559';
+  const window = [
+    log(`2026-07-02T04:34:43.329Z ${lambda} INFO correlationID: 1234; FedLine Request: {...}`),
+    log(`2026-07-02T04:34:48.381Z ${lambda} INFO correlationID: 1234; Response from Data Services:`),
+  ];
+  const d = apiflcIngestionAgent.fastPath!(ctx(window, { phaseTs: { REQUEST: 0, RESPONSE: 1 }, phasesThisCycle: ['RESPONSE'] }));
+  assert.notEqual(d?.status, 'completed', 'no status means no proven outcome');
+  assert.equal(d?.status, 'awaiting');
+});
+
+test('fastPath: nothing joined yet defers to the model rather than guessing', () => {
+  assert.equal(apiflcIngestionAgent.fastPath!(ctx([])), null);
+});

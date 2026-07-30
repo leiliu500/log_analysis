@@ -31,6 +31,30 @@ export interface IngestionAgent {
    * wall-clock timeout. So a model failure only defers a transition, never forces a wrong one.
    */
   decide(ctx: AgentPromptContext, reason: TransitionReasoner): Promise<TransitionDecision | null>;
+  /**
+   * The DETERMINISTIC fast path: decide this transition without a model when — and only
+   * when — the evidence makes it unambiguous. Return `null` to defer to {@link decide},
+   * which is what genuinely ambiguous evidence must do.
+   *
+   * This exists because one model call per transition is what bounds ingestion
+   * throughput: the poll is capped at `INGEST_DYNAMIC_MAX` reasoned transitions, so at a
+   * 5-minute cadence the ceiling is ~480/hour no matter how much hardware is behind it.
+   * Worse, overload does not surface as an error — deferred agents eventually trip their
+   * inactivity timeout and are closed as `error`, which the validation worker then passes
+   * as consistent (a timeout carrying its medium anomaly satisfies the invariant). A
+   * capacity problem silently becomes thousands of "legitimately timed out" transactions.
+   *
+   * It is per-APPLICATION, not generic, because "the completing phase arrived" means
+   * different things per app: for SCP the deciding ackCode rides on the protocol event,
+   * while for apiflc the decisive HTTP status lives only in the gateway execution log and
+   * a bare RESPONSE line proves nothing. A generic rule would mark an apiflc 500 as
+   * completed — exactly the mis-recorded outcome the validation engine exists to catch.
+   *
+   * MUST be pure and synchronous: it runs for every transaction in the poll, before any
+   * concurrency limit, so it may not do I/O. Anything requiring a lookup belongs in
+   * {@link decide}. A fast-path transition does NOT consume the reasoning budget.
+   */
+  fastPath?(ctx: AgentPromptContext): TransitionDecision | null;
 }
 
 const VALID = new Set(['awaiting', 'completed', 'failed', 'error']);
