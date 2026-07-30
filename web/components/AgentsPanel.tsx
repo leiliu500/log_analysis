@@ -18,6 +18,44 @@ function ago(ts?: number): string {
   return `${Math.round(m / 60)}h ago`;
 }
 
+/**
+ * The ackCode, qualified by whether it is actually an OUTCOME.
+ *
+ * `Agent.ackCode` is "the latest code seen", which for an incomplete transaction is an
+ * INTERMEDIATE acknowledgement. Rendering it bare made `0012` — REQUEST · ACK · no
+ * RESPONSE, timed out — display `OK`, which reads as success: the ACK's "your request was
+ * accepted" was indistinguishable from the RESPONSE's "processed successfully".
+ *
+ * A code is the transaction's outcome only once the COMPLETING phase (the protocol's last)
+ * has arrived. Until then it is labelled with the phase that reported it — derived as the
+ * last phase actually received, which is by construction the one the latest code came from.
+ */
+function AckCode({ agent }: { agent: Agent }) {
+  const code = agent.ackCode;
+  if (!code) return <span className="text-slate-400">—</span>;
+
+  const phases = agent.phases ?? [];
+  const ts = agent.phaseTs ?? {};
+  const completing = phases[phases.length - 1];
+  const isOutcome = completing != null && ts[completing] !== undefined;
+  const failed = /fail|reject|error|nack/i.test(code);
+
+  if (isOutcome) {
+    return <span className={failed ? 'text-red-400' : 'text-slate-400'}>{code}</span>;
+  }
+
+  // Not final: name the phase it came from so it cannot be read as a completion.
+  const from = [...phases].reverse().find((p) => ts[p] !== undefined);
+  return (
+    <span
+      className="cursor-help whitespace-nowrap text-amber-300/90"
+      title={`Not an outcome. This is the code from the ${from ?? 'last received'} phase — an intermediate acknowledgement. ${completing ?? 'The completing phase'} never arrived, so this transaction has no outcome code.`}
+    >
+      {code} <span className="text-slate-500">({from ?? 'not final'})</span>
+    </span>
+  );
+}
+
 const HISTORY_STYLES: Record<string, string> = {
   completed: 'bg-emerald-500/20 text-emerald-300',
   failed: 'bg-red-500/20 text-red-300',
@@ -119,7 +157,12 @@ export function AgentsPanel({
                 <th className="px-3 py-2">{correlationLabel}</th>
                 <th className="px-3 py-2">final status</th>
                 <th className="px-3 py-2">phases</th>
-                <th className="px-3 py-2">ackCode</th>
+                <th
+                  className="px-3 py-2"
+                  title="The code carried by the last phase that reported one. It is the transaction's OUTCOME only when the completing phase arrived — otherwise it is an intermediate acknowledgement and is labelled with the phase it came from."
+                >
+                  ackCode
+                </th>
                 <th className="px-3 py-2">detail</th>
                 <th className="px-3 py-2">closed</th>
               </tr>
@@ -141,12 +184,8 @@ export function AgentsPanel({
                       </span>
                     ))}
                   </td>
-                  <td
-                    className={`px-3 py-1.5 ${
-                      a.ackCode && /fail|reject|error|nack/i.test(a.ackCode) ? 'text-red-400' : 'text-slate-400'
-                    }`}
-                  >
-                    {a.ackCode ?? '—'}
+                  <td className="px-3 py-1.5">
+                    <AckCode agent={a} />
                   </td>
                   <td className="px-3 py-1.5 font-sans text-slate-400">{a.detail ?? '—'}</td>
                   <td className="px-3 py-1.5 text-slate-500">{ago(a.closedAt)}</td>
