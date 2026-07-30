@@ -19,7 +19,7 @@ import {
   deleteAllPollerRuns,
 } from '@log/db';
 import { simulate, handleSimulatePrompt } from '@log/simulator';
-import { analyzeAllSources, routeRequest, validateAgents, applicationRegistry, type ValidationRunResult } from '@log/agents';
+import { analyzeAllSources, routeRequest, validateAgents, validationAgentInfo, applicationRegistry, type ValidationRunResult } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
 import { runBacktest, corpus, toSummary } from '@log/backtest';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
@@ -82,6 +82,11 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     ]);
     return { active, history };
   });
+
+  // Each application's VALIDATION AI AGENT as THIS process has it configured — registry
+  // declaration plus the env that gates it. Served from the runtime rather than hardcoded
+  // in the UI so a disabled or misconfigured agent can never render as a healthy one.
+  api.get('/validation-agents/config', async () => ({ agents: validationAgentInfo(applicationRegistry) }));
 
   // On-demand validation pass (the scheduled validation Lambda runs this
   // autonomously; this is the manual "Validate now" trigger). Isolated from
