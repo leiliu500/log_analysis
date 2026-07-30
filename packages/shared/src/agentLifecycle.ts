@@ -36,8 +36,25 @@ export interface Agent {
   severity?: string;
   /** Human note on why it closed (or what it's waiting for). */
   detail?: string;
+  /**
+   * When the transaction STARTED, read from its initiating log line — i.e. DATA time,
+   * not wall-clock. For live traffic the two are close; for replayed, back-filled, or
+   * late-delivered logs they can be hours apart. See {@link firstSeenAt}.
+   */
   spawnedAt: number;
   updatedAt: number;
+  /**
+   * WALL-CLOCK time at which the engine first observed this transaction, set once on
+   * spawn and never moved. It exists because the inactivity timeout previously compared
+   * wall-clock `now` against {@link spawnedAt}/`phaseTs`, which are LOG timestamps — so
+   * any transaction whose logs were already older than the timeout when ingested was
+   * closed as "timed out" by the very first poll that saw it, and could never exist as
+   * an active agent. That silently killed every incomplete transaction in a simulated,
+   * back-filled, or catch-up ingest. The timeout now additionally requires that the
+   * engine has actually WATCHED the transaction for a full timeout window, which is what
+   * "inactivity" was always meant to mean.
+   */
+  firstSeenAt?: number;
   closedAt?: number;
 }
 

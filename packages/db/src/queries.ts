@@ -196,11 +196,11 @@ export async function upsertAgents(agents: Agent[]): Promise<void> {
     for (const a of agents) {
       await tx`INSERT INTO agents
         (message_id, application, status, active, waiting_for, phases, phase_ts, source, log_group,
-         ack_code, severity, detail, spawned_at, updated_at, closed_at)
+         ack_code, severity, detail, spawned_at, first_seen_at, updated_at, closed_at)
         VALUES (${a.messageId}, ${a.application ?? null}, ${a.status}, ${a.active}, ${a.waitingFor ?? null},
                 ${JSON.stringify(a.phases)}::jsonb, ${JSON.stringify(a.phaseTs)}::jsonb, ${a.source ?? null}, ${a.logGroup ?? null},
                 ${a.ackCode ?? null}, ${a.severity ?? null}, ${a.detail ?? null},
-                ${a.spawnedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
+                ${a.spawnedAt}, ${a.firstSeenAt ?? a.updatedAt}, ${a.updatedAt}, ${a.closedAt ?? null})
         ON CONFLICT (message_id) DO UPDATE SET
           application = COALESCE(agents.application, EXCLUDED.application),
           status = EXCLUDED.status, active = EXCLUDED.active,
@@ -210,6 +210,10 @@ export async function upsertAgents(agents: Agent[]): Promise<void> {
           log_group = COALESCE(agents.log_group, EXCLUDED.log_group),
           ack_code = COALESCE(EXCLUDED.ack_code, agents.ack_code),
           severity = EXCLUDED.severity, detail = EXCLUDED.detail,
+          -- NEVER moved after the first insert: it is the anchor the inactivity timeout
+          -- measures real observation from, so letting a later poll push it forward would
+          -- mean an agent whose logs stay in the poll window could never time out at all.
+          first_seen_at = COALESCE(agents.first_seen_at, EXCLUDED.first_seen_at),
           updated_at = EXCLUDED.updated_at, closed_at = EXCLUDED.closed_at`;
     }
   });
@@ -288,6 +292,7 @@ function rawRowToAgent(r: Record<string, unknown>): Agent {
     severity: (r.severity ?? undefined) as string | undefined,
     detail: (r.detail ?? undefined) as string | undefined,
     spawnedAt: Number(r.spawned_at),
+    firstSeenAt: num(r.first_seen_at),
     updatedAt: Number(r.updated_at),
     closedAt: num(r.closed_at),
   };

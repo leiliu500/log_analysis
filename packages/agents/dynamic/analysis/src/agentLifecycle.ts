@@ -181,7 +181,8 @@ export async function stepAgentsDynamic(
         phaseTs: {},
         source: evs[0]!.source,
         logGroup: evs[0]!.logGroup,
-        spawnedAt: evs[0]!.ts,
+        spawnedAt: evs[0]!.ts, // DATA time — the initiating log line's timestamp
+        firstSeenAt: now, // WALL-CLOCK — when we first saw it; never moved again
         updatedAt: now,
       };
       agents.set(id, a);
@@ -276,7 +277,22 @@ export async function stepAgentsDynamic(
     const tsVals = Object.values(a.phaseTs);
     const last = tsVals.length ? Math.max(...tsVals) : a.spawnedAt;
     const appTimeoutMs = lifecycleTimeoutMs(registry.byId(a.application), timeoutMs);
-    if (now - last > appTimeoutMs) {
+    // TWO clocks, and both must agree before a transaction is called timed out:
+    //   (1) DATA time — nothing new has arrived for this transaction in `appTimeoutMs`.
+    //   (2) WALL-CLOCK — we have actually WATCHED it that long (`firstSeenAt`).
+    // (1) alone was the bug: `last` comes from log timestamps while `now` is wall-clock,
+    // so a transaction ingested from logs already older than its timeout — a simulation,
+    // a back-fill, a catch-up after the poller was down, or simply delivery latency —
+    // was closed as "timed out" by the first poll that ever saw it. It never got to be
+    // an active agent, so nothing could observe it in flight and no validation worker
+    // could shadow it as pending. Requiring (2) guarantees every transaction gets a full
+    // timeout window of real observation, which is what "inactivity" always meant.
+    // `firstSeenAt` is used rather than `updatedAt` deliberately: `updatedAt` is bumped
+    // whenever a poll re-matches this agent's events, and the poll window overlaps, so a
+    // still-visible log line would keep pushing it forward and the agent would never
+    // time out at all.
+    const observedMs = now - (a.firstSeenAt ?? a.spawnedAt);
+    if (now - last > appTimeoutMs && observedMs > appTimeoutMs) {
       const wf = a.waitingFor;
       a.status = 'error';
       a.active = false;

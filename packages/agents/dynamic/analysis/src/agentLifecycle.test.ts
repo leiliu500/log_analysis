@@ -254,3 +254,53 @@ test('agentEvents extracts ordered request/ack/response from parsed logs', () =>
   assert.equal(events[1]!.type, 'ACK');
   assert.equal(events[1]!.corrId, '001'); // via initMessageId
 });
+
+// ---------------------------------------------------------------------------
+// Two clocks. `spawnedAt`/`phaseTs` are DATA time (log timestamps); `now` is
+// wall-clock. The inactivity timeout used to compare one against the other, so
+// a transaction ingested from logs already older than its timeout was closed as
+// "timed out" by the very first poll that saw it — it never existed as an
+// active agent. Observed in prod: a simulated batch stamped 03:08, ingested at
+// 03:56, closed every incomplete transaction instantly.
+// ---------------------------------------------------------------------------
+
+test('spawning records firstSeenAt as WALL-CLOCK, not the log timestamp', async () => {
+  const logTs = NOW - 48 * 60_000;
+  const r = await step([ev('REQUEST', 'old-1', logTs)], [], NOW);
+  const a = r.agents.get('old-1')!;
+  assert.equal(a.spawnedAt, logTs, 'spawnedAt stays data time');
+  assert.equal(a.firstSeenAt, NOW, 'firstSeenAt is when WE saw it');
+});
+
+test('a just-ingested transaction with OLD logs stays ACTIVE, not instantly timed out', async () => {
+  // 48 minutes of log age against a 30-minute timeout — the exact prod case.
+  const logTs = NOW - 48 * 60_000;
+  const r = await step([ev('REQUEST', 'old-2', logTs)], [], NOW);
+  const a = r.agents.get('old-2')!;
+  assert.equal(a.active, true, 'must not be closed by the poll that first saw it');
+  assert.equal(a.status, 'awaiting');
+  assert.equal(r.closed, 0);
+});
+
+test('the same transaction DOES time out once actually observed for a full window', async () => {
+  const logTs = NOW - 48 * 60_000;
+  const first = await step([ev('REQUEST', 'old-3', logTs)], [], NOW);
+  const spawned = first.agents.get('old-3')!;
+  assert.equal(spawned.active, true);
+
+  // A later poll, now that the engine has genuinely watched it past the timeout.
+  const later = await step([], [structuredClone(spawned)], NOW + TIMEOUT + 60_000);
+  const a = later.agents.get('old-3')!;
+  assert.equal(a.status, 'error', 'inactivity is real once we have actually watched it');
+  assert.match(a.detail ?? '', /Timed out/);
+});
+
+test('an agent persisted before firstSeenAt existed still times out (falls back to spawnedAt)', async () => {
+  const legacy = agent({
+    messageId: 'legacy', status: 'awaiting', active: true, waitingFor: 'RESPONSE',
+    phaseTs: { REQUEST: NOW - 90 * 60_000 }, spawnedAt: NOW - 90 * 60_000, updatedAt: NOW - 90 * 60_000,
+  });
+  delete (legacy as { firstSeenAt?: number }).firstSeenAt;
+  const r = await step([], [legacy], NOW);
+  assert.equal(r.agents.get('legacy')!.status, 'error', 'no firstSeenAt ⇒ old behaviour, never a stuck-forever agent');
+});
