@@ -54,3 +54,19 @@ test('a RESPONSE without its ACK is out of order — deferred to the model, not 
 test('no phases at all → deferred to the model', () => {
   assert.equal(scpIngestionAgent.fastPath!(ctx()), null);
 });
+
+/**
+ * SCP needs NO cross-poll correlation window: every deciding fact is accumulated on the
+ * agent itself (phaseTs, ackCode), not re-read from the logs. This is the property that
+ * lets the engine size its history window from only the apps that declare a join
+ * (`relatedLogs`) or a signal hook (`pendingSignals`) — apiflc — instead of taking the
+ * max across all apps. Loading SCP's 30 minutes every poll was pure waste, and it pushed
+ * the window query toward its row cap, which discards the OLDEST logs and so breaks the
+ * very correlations the window exists to preserve.
+ */
+test('decides with an EMPTY window — SCP carries its own evidence', () => {
+  const d = scpIngestionAgent.fastPath!(
+    ctx({ phaseTs: { REQUEST: 0, ACK: 1, RESPONSE: 2 }, ackCode: 'PROCESSED_SUCCESSFULLY', window: [] }),
+  );
+  assert.equal(d?.status, 'completed');
+});
