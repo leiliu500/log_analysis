@@ -49,6 +49,11 @@ how cleanly its predicate verifies:
   double invocation, or a retry storm. Only claim a duplicate if the lines carry
   DIFFERENT identifiers or DIFFERENT timestamps that prove two separate events.
 - Retries, warm-up lines, and duplicated log lines that repeat an identical message.
+- A `failed` or timed-out transaction having NO terminal gateway status line. Not
+  reaching a terminal status is precisely what timing out means, and the worker already
+  accounts for it. A missing "Method completed with status" is only ever interesting on
+  a transaction the agent recorded as COMPLETED — and even then you cannot claim it,
+  because absence is not something you are able to prove from an excerpt.
 
 If your only evidence for a claim is that two log groups use different identifiers, or
 that an Allow preceded a failure, there is no claim. Say nothing.

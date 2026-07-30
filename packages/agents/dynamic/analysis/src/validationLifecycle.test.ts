@@ -238,7 +238,7 @@ test('applyAiReview relabels a residual success without touching the determinist
     v,
     {
       findings: [
-        { kind: 'business-failure', title: 'gateway 200 over an ACCOUNT_FROZEN body', severity: 'high', evidenceLogIds: ['l1'], verifiedPredicates: 2 },
+        { kind: 'business-failure', title: 'gateway 200 over an ACCOUNT_FROZEN body', severity: 'high', evidenceLogIds: ['l1'], verifiedPredicates: 2, predicates: [{ logId: 'l1', field: 'raw', op: 'contains', value: 'x' }] },
       ],
       rejected: [{ title: 'fabricated', reason: 'cites unknown logId l9' }],
     },
@@ -290,7 +290,7 @@ test('a review that salvaged findings despite an error is still recorded', () =>
   const v = validateAgent(closedClean, undefined, 50 * MIN, SCP, [], unknownOutcome);
   applyAiReview(
     v,
-    { findings: [{ kind: 'k', title: 'partial but verified', severity: 'high', evidenceLogIds: ['l1'], verifiedPredicates: 1 }], rejected: [], error: 'reply truncated' },
+    { findings: [{ kind: 'k', title: 'partial but verified', severity: 'high', evidenceLogIds: ['l1'], verifiedPredicates: 1, predicates: [{ logId: 'l1', field: 'raw', op: 'contains', value: 'x' }] }], rejected: [], error: 'reply truncated' },
     99 * MIN,
   );
   assert.equal(v.aiReviewedAt, 99 * MIN);

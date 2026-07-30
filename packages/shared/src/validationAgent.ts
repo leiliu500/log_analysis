@@ -85,6 +85,13 @@ export interface AiValidationFinding {
   evidenceLogIds: string[];
   /** How many predicates were re-executed and held (all of them — a partial fails). */
   verifiedPredicates: number;
+  /**
+   * The predicates themselves, as re-executed. Persisted because a claim's WORDING is
+   * not enough to judge it: two prod false positives ("lacks a terminal status line",
+   * "sendTime missing seconds") read as findings about the data but were actually
+   * assertions about absence, and that was only diagnosable by seeing the operators.
+   */
+  predicates: ClaimPredicate[];
   proposedRule?: { id: string; title: string; rationale: string };
 }
 
@@ -246,6 +253,17 @@ export function admitClaim(
   if (!preds.length) return { ok: false, reason: 'no verifiable predicate' };
   if (preds.length > MAX_PREDICATES) return { ok: false, reason: `too many predicates (${preds.length})` };
 
+  // ONLY POSITIVE EVIDENCE SPEAKS — the same rule `deriveOutcome` follows, enforced here
+  // rather than left to the prompt. `not_contains` can only establish that ONE cited line
+  // does not say something, which proves nothing about the transaction: the lines are an
+  // excerpted, windowed subset, so anything absent may simply not have been shown. Left
+  // unchecked it lets an absence claim ("no terminal status line", "timestamp missing its
+  // seconds") arrive dressed as a verified predicate — both observed in prod. A claim must
+  // rest on at least one thing a log line positively SAYS.
+  if (preds.every((p) => p?.op === 'not_contains')) {
+    return { ok: false, reason: 'no positive evidence — supported only by what a line does not say' };
+  }
+
   const cited = new Set(ids);
   for (const p of preds) {
     if (!p || typeof p.logId !== 'string') return { ok: false, reason: 'predicate has no logId' };
@@ -273,6 +291,7 @@ export function admitClaim(
       detail: typeof claim.detail === 'string' ? claim.detail.slice(0, 1000) : undefined,
       evidenceLogIds: [...new Set(ids)],
       verifiedPredicates: preds.length,
+      predicates: preds.map((p) => ({ logId: p.logId, field: p.field, op: p.op, value: String(p.value).slice(0, 200) })),
       proposedRule:
         rule && typeof rule.title === 'string' && rule.title.trim()
           ? {
@@ -397,6 +416,10 @@ const RESPONSE_CONTRACT = [
   '  payload is an artifact of how you were shown the line, not a defect in the data.',
   '- A difference between two lines is only a defect if the protocol says those two',
   '  values must match. If nothing above says they must match, they may differ.',
+  '- At least one predicate must be POSITIVE (contains/equals/matches/lt/gt). A claim',
+  '  supported only by `not_contains` is rejected outright: the lines you were shown are',
+  '  an excerpt of a time window, so something not appearing in them proves nothing. You',
+  '  cannot claim anything is "missing", "absent", "never logged", or "not found".',
   '- Reserve high/critical for evidence of money, data, or state being lost or wrong.',
   '  A cosmetic or formatting observation is at most low.',
 ].join('\n');

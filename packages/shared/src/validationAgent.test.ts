@@ -86,6 +86,43 @@ test('admits the good claims and discards the bad ones from the same reply', () 
   assert.equal(out.rejected.length, 1);
 });
 
+/**
+ * Only positive evidence speaks — the same rule `deriveOutcome` follows. Two prod false
+ * positives ("gateway execution lacks terminal status line", "ACK sendTime missing
+ * seconds fraction") were absence claims that passed re-verification, because a
+ * `not_contains` on one cited line is trivially true and says nothing about the
+ * transaction. The lines shown to the agent are an excerpt of a window, so absence is
+ * never provable from them.
+ */
+test('discards a claim supported only by what a line does NOT say', () => {
+  const out = admitClaims(
+    [claim({ predicates: [{ logId: 'log-res', field: 'raw', op: 'not_contains', value: 'Method completed with status' }] })],
+    LOGS,
+  );
+  assert.equal(out.findings.length, 0);
+  assert.match(out.rejected[0]!.reason, /no positive evidence/);
+});
+
+test('admits a claim that pairs a negative predicate with a positive one', () => {
+  const out = admitClaims(
+    [
+      claim({
+        predicates: [
+          { logId: 'log-res', field: 'raw', op: 'contains', value: 'ACCOUNT_FROZEN' },
+          { logId: 'log-res', field: 'raw', op: 'not_contains', value: 'status: 500' },
+        ],
+      }),
+    ],
+    LOGS,
+  );
+  assert.equal(out.findings.length, 1, 'a negative may corroborate, it just may not stand alone');
+});
+
+test('an admitted finding carries its predicates, so a claim can be triaged later', () => {
+  const out = admitClaims([claim()], LOGS);
+  assert.deepEqual(out.findings[0]!.predicates, [{ logId: 'log-res', field: 'raw', op: 'contains', value: 'ACCOUNT_FROZEN' }]);
+});
+
 test('evaluatePredicate: every operator only ever passes on positive proof', () => {
   assert.equal(evaluatePredicate({ logId: 'log-res', field: 'raw', op: 'contains', value: 'status: 200' }, RES), true);
   assert.equal(evaluatePredicate({ logId: 'log-res', field: 'raw', op: 'not_contains', value: 'status: 500' }, RES), true);

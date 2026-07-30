@@ -160,12 +160,15 @@ variable "validation_ai_review_epoch" {
     app's validation.agent.md changes — a claim is only as good as the spec that produced
     it, and without this the one-shot dedup would freeze verdicts from a superseded
     prompt on the board permanently. 0 = never re-review.
-    Bumped 2026-07-30T03:25Z, when both agent prompts gained the "same message on more
-    than one log line is re-logging, not a duplicate" rule. The prior bump (02:00Z) added
-    the by-design lists that cleared the messageId / sender / authorizer false positives.
+    History of bumps, each one a correction that had to supersede earlier verdicts:
+      02:00Z - by-design lists added; cleared the messageId / sender / authorizer FPs.
+      03:25Z - "same message on two log lines is re-logging, not a duplicate".
+      03:39Z - gate now REJECTS absence-only claims (predicates that are all
+               `not_contains`), which is what let "lacks a terminal status line" and
+               "sendTime missing seconds" through as verified findings.
   EOT
   type        = number
-  default     = 1785381933000
+  default     = 1785382768000
 }
 
 variable "validation_ai_deadline_ms" {
