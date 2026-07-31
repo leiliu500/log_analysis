@@ -314,3 +314,57 @@ test('a claim comparing DIFFERENT values across lines is still admitted', () => 
   );
   assert.equal(out.findings.length, 1, 'a 200 over a DECLINED body is a real contradiction');
 });
+
+/**
+ * PAIRED co-occurrence — how prod walked around the first version of the rule, which only
+ * rejected claims whose predicates were ALL identical. Five suspicions in one run used
+ * value A on two lines and value B on two lines: "Identical log lines for same messageId",
+ * "Same messageId logged twice, suggesting replay". Repetition is the tell regardless of
+ * how many distinct values are repeated.
+ */
+test('discards a claim whose predicates repeat in PAIRS, not just all-identical', () => {
+  const logs = [
+    makeParsedLog('scp', 1_000, '<messageId>SIM-USSS-4795</messageId><messageType>ACK</messageType>', 'a1'),
+    makeParsedLog('scp', 1_100, '<messageId>SIM-USSS-4795</messageId><messageType>ACK</messageType>', 'a2'),
+    makeParsedLog('scp', 2_000, '<messageId>SIM-USSS-4805</messageId><messageType>RESPONSE</messageType>', 'r1'),
+    makeParsedLog('scp', 2_100, '<messageId>SIM-USSS-4805</messageId><messageType>RESPONSE</messageType>', 'r2'),
+  ];
+  const out = admitClaims(
+    [
+      claim({
+        title: 'Identical log lines for same messageId',
+        evidenceLogIds: ['a1', 'a2', 'r1', 'r2'],
+        predicates: [
+          { logId: 'a1', field: 'raw', op: 'contains', value: 'SIM-USSS-4795' },
+          { logId: 'a2', field: 'raw', op: 'contains', value: 'SIM-USSS-4795' },
+          { logId: 'r1', field: 'raw', op: 'contains', value: 'SIM-USSS-4805' },
+          { logId: 'r2', field: 'raw', op: 'contains', value: 'SIM-USSS-4805' },
+        ],
+      }),
+    ],
+    logs,
+    '032',
+  );
+  assert.equal(out.findings.length, 0);
+  assert.match(out.rejected[0]!.reason, /co-occurrence only/);
+});
+
+test('a claim contrasting DIFFERENT facts is still admitted', () => {
+  // The shape a real finding has: a success status set against a failing body. Nothing
+  // repeats, so the co-occurrence rule does not touch it.
+  const logs = [makeParsedLog('gw', 1_000, 'Method completed with status: 200 body={"error":"DECLINED"}', 'g1')];
+  const out = admitClaims(
+    [
+      claim({
+        evidenceLogIds: ['g1'],
+        predicates: [
+          { logId: 'g1', field: 'raw', op: 'contains', value: 'status: 200' },
+          { logId: 'g1', field: 'raw', op: 'contains', value: '"error":"DECLINED"' },
+        ],
+      }),
+    ],
+    logs,
+    '999',
+  );
+  assert.equal(out.findings.length, 1);
+});
