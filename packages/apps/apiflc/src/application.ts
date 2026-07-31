@@ -50,7 +50,6 @@ export const apiflcApplication: ApplicationDef = {
   // Validation agent: validate all REQUEST→RESPONSE phases; the RESPONSE that
   // completes the transaction is expected within 2 minutes of the REQUEST.
   validation: {
-    promptPath: 'apps/apiflc/validation.md',
     responseTimeoutMinutes: 2,
     responseTimeoutFrom: 'REQUEST',
     // A completed transaction with an associated high/critical anomaly (e.g. a
