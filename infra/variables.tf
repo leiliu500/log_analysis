@@ -163,15 +163,15 @@ variable "validation_ai_review_epoch" {
     History of bumps, each one a correction that had to supersede earlier verdicts:
       02:00Z - by-design lists added; cleared the messageId / sender / authorizer FPs.
       03:25Z - "same message on two log lines is re-logging, not a duplicate".
-      later  - gate rejects REPEATED predicates (paired co-occurrence) and both
-               prompts ban log-pipeline claims, after 5/5 admitted claims in a
-               50-transaction run were duplicate-logging or timestamp-format noise.
       03:39Z - gate rejects absence-only claims (predicates that are all
                `not_contains`), which is what let "lacks a terminal status line" and
                "sendTime missing seconds" through as verified findings.
       04:27Z - residual narrowed to COMPLETED transactions only (a failed/timed-out one
                was already flagged, so it is not part of the false-negative population),
                and the gate now rejects vacuous membership-only witnesses.
+      07-31  - gate rejects REPEATED predicates (paired co-occurrence) and both
+               prompts ban log-pipeline claims, after all 5 admitted claims in a
+               50-transaction run were duplicate-logging or timestamp-format noise.
   EOT
   type        = number
   default     = 1785510435000
