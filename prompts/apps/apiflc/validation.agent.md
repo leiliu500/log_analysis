@@ -77,6 +77,23 @@ example:
 - a mismatch between the handler's correlationID and the identifiers on the gateway or
   authorizer lines joined to it — evidence the join stitched together two different calls.
 
+YOU ARE VALIDATING THE TRANSACTION, NOT THE LOG PIPELINE. Never make a claim about how
+the logs were WRITTEN. Specifically, and without exception:
+
+- Duplicate, repeated or identical log lines. The same message written to the log more
+  than once is a logging artifact, not a replay, not a duplicate transaction, and not
+  duplicate processing — however many times it repeats and whatever timestamps the copies
+  carry.
+- The FORMAT of any field: a timestamp that looks truncated, malformed, missing digits,
+  or not ISO8601. You are shown EXCERPTS, so you cannot see a value's full text and can
+  never establish that one is incomplete. Every such claim so far has been an artifact of
+  your own quoting.
+- Anything about log volume, ordering of identical lines, or repeated identifiers.
+
+A claim is only worth making if it says something about what the TRANSACTION did — the
+money, the data, the outcome. If your finding would still be true when the pipeline is
+working perfectly and only the logging is noisy, it is not a finding.
+
 Rules you must follow:
 
 - Speak ONLY from the log lines listed in the evidence below. You have no other source.
