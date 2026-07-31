@@ -4,7 +4,7 @@
  * `ingestPollerHandler`. Run: node scripts/bundle-lambda.mjs
  */
 import { build } from 'esbuild';
-import { mkdirSync, cpSync } from 'node:fs';
+import { mkdirSync, cpSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -28,6 +28,11 @@ await build({
 // Ship the externalized LLM system prompts beside the bundle so @log/shared's
 // loadPrompt() resolves them at runtime (the Lambda zip is source_dir =
 // build/lambda, so prompts/ unzips next to index.js under the task root).
+// Clear first: cpSync only overwrites, it never removes. Without this a prompt deleted
+// or renamed in the repo lingers in the bundle forever and the deployed Lambda keeps
+// shipping a file that no longer exists in source — so the bundle stops being a faithful
+// mirror of the repo, and a stale prompt could still be loaded by path.
+rmSync(join(outdir, 'prompts'), { recursive: true, force: true });
 cpSync(join(root, 'prompts'), join(outdir, 'prompts'), { recursive: true });
 
 console.log('Lambda bundle written to', outdir);
