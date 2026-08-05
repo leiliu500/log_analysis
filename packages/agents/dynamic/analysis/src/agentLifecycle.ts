@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, Anomaly, ApplicationDef, AgentPromptContext, LogSourceType, ParsedLog, Severity, ApplicationRegistry, TransitionDecision, TransitionReasoner } from '@log/shared';
-import { lifecycleTimeoutMs } from '@log/shared';
+import { coalesceEntries, lifecycleTimeoutMs } from '@log/shared';
 import { converseJson } from './bedrock.js';
 import {
   getActiveAgents,
@@ -42,23 +42,62 @@ export interface AgentEvent {
   raw?: string;
 }
 
-/** Pull the ordered transaction events out of a parsed window, across all apps. */
-export function agentEvents(parsed: ParsedLog[], registry: ApplicationRegistry): AgentEvent[] {
+/**
+ * Pull the ordered transaction events out of a window, across all apps.
+ *
+ * Events are extracted from COALESCED ENTRIES, not from raw records. CloudWatch stores one
+ * event per physical line, so a multi-line message arrives as several records and no single
+ * one carries every field `eventOf` needs — for SCP, `<messageType>` and `<messageId>` can
+ * land in different records, in which case `eventOf` sees neither a complete message nor a
+ * partial one: it returns undefined and the transaction is never seen AT ALL. Not partially
+ * ingested — invisible, with no agent and nothing downstream to notice the absence.
+ *
+ * Each app decides where its own messages begin ({@link TransactionProtocol.startsEntry});
+ * a record that is already a complete message coalesces to itself, so single-record
+ * delivery behaves exactly as before.
+ *
+ * `freshLogIds` bounds the work: only entries this poll actually touched are emitted, so a
+ * transaction completed long ago is not re-extracted every cycle. Re-emitting IS harmless
+ * — `phaseTs` only records a phase it has not seen — but it would burn the reasoning
+ * budget on transactions with nothing new.
+ */
+export function agentEvents(
+  logs: ParsedLog[],
+  registry: ApplicationRegistry,
+  freshLogIds?: ReadonlySet<string>,
+): AgentEvent[] {
   const out: AgentEvent[] = [];
-  for (const l of parsed) {
-    const app = registry.forLog(l);
+  // A record starts its own entry when the app says so, OR when it already parses as a
+  // COMPLETE event on its own. That default is the safety net: without it, an app that
+  // declares no `startsEntry` and whose logs are not AWS-format (the generic heuristic
+  // recognises only that) has every line read as a continuation, so consecutive complete
+  // messages merge into one entry and all but the first are silently lost. Forcing a
+  // start can only ever split entries, never merge them, so it cannot break an app that
+  // was working — single-record delivery keeps behaving exactly as it did.
+  const startsEntry = (log: ParsedLog): boolean => {
+    const app = registry.forLog(log);
+    if (!app) return false;
+    if (app.protocol.startsEntry?.(log) === true) return true;
+    return app.protocol.eventOf(log) !== undefined;
+  };
+  for (const entry of coalesceEntries(logs, startsEntry)) {
+    if (freshLogIds && !entry.lines.some((l) => freshLogIds.has(l.id))) continue;
+    const head = entry.head;
+    const app = registry.forLog(head);
     if (!app) continue;
-    const e = app.protocol.eventOf(l);
+    // Read the WHOLE entry, so a message split across records is still recognised.
+    const whole = entry.lines.length > 1 ? ({ ...head, raw: entry.raw, message: entry.raw } as ParsedLog) : head;
+    const e = app.protocol.eventOf(whole);
     if (!e) continue;
     out.push({
       type: e.type,
       corrId: e.corrId,
-      ts: l.timestamp,
+      ts: head.timestamp,
       ackCode: e.ackCode,
-      source: l.source,
-      logGroup: l.stream,
+      source: head.source,
+      logGroup: head.stream,
       application: app.id,
-      raw: l.raw ?? l.message,
+      raw: entry.raw,
     });
   }
   return out.sort((a, b) => a.ts - b.ts);
@@ -89,6 +128,21 @@ export interface StepResult {
   spawned: number;
   advanced: number;
   closed: number;
+  /**
+   * Transitions decided DETERMINISTICALLY by an app's fastPath, costing no model call.
+   * Reported next to `reasoned` so the model's share of ingestion is an observable
+   * number: if this collapses toward zero the throughput ceiling is back.
+   */
+  fastPathed: number;
+  /** Transitions that required a model call (these consume INGEST_DYNAMIC_MAX). */
+  reasoned: number;
+  /** Transitions left undecided this poll because the reasoning cap was hit. */
+  deferredOverCap: number;
+  /**
+   * Per-application backlog carried to the next poll. A backlog concentrated in one app
+   * means that app is slow or noisy; one spread evenly means the cap is simply too low.
+   */
+  backlogByApp: Record<string, number>;
   /** Per-application agent counts (application id → counts). */
   byApp: Record<string, AgentCounts>;
 }
@@ -151,6 +205,10 @@ export async function stepAgentsDynamic(
   let spawned = 0;
   let advanced = 0;
   let closed = 0;
+  let fastPathed = 0;
+  let reasoned = 0;
+  let deferredOverCap = 0;
+  const backlogByApp: Record<string, number> = {};
   const byApp: Record<string, AgentCounts> = {};
   const bump = (app: string | undefined, k: keyof AgentCounts): void => {
     (byApp[app ?? 'unknown'] ??= { spawned: 0, advanced: 0, closed: 0 })[k] += 1;
@@ -231,22 +289,74 @@ export async function stepAgentsDynamic(
   // Lambda timeout — beyond it (or on a null/no-transition result) the agent is left
   // unchanged and retried next poll.
   const maxLlm = opts.maxLlm ?? Number(process.env.INGEST_DYNAMIC_MAX ?? 40);
-  await mapPool(decisions, 6, async (dec, idx) => {
-    if (idx >= maxLlm) return; // over the per-poll cap — defer to next poll
-    const ctx: AgentPromptContext = {
-      messageId: dec.id,
-      currentStatus: dec.a.status,
-      phaseTs: dec.a.phaseTs,
-      ackCode: dec.a.ackCode,
-      phasesThisCycle: dec.evs.map((e) => e.type),
-      eventLines: dec.evs.map((e) => e.raw ?? '').filter(Boolean),
-      window: windowLogs,
-      now,
-    };
-    const agent = dec.app.ingestionAgent;
-    if (!agent) return; // app declares no dynamic agent — only its timeouts fire
-    const d = await agent.decide(ctx, opts.reasoner ?? defaultReasoner);
-    if (!d) return; // no transition this poll (model error / no spec) — leave unchanged
+
+  // DETERMINISTIC FAST PATH first. Each app decides the transitions its own evidence makes
+  // unambiguous (SCP: the ackCode on the protocol event; apiflc: the gateway HTTP status),
+  // and defers the rest. Those transitions cost no model call and do not consume the
+  // reasoning budget, which is what actually bounds ingestion throughput — see
+  // IngestionAgent.fastPath. Anything an app does not claim still goes to the model, so
+  // this narrows the model's role without removing it.
+  // ---------------------------------------------------------------------------
+  // SCHEDULER. One poll, many applications, a bounded number of concurrent model
+  // calls. Without an explicit policy the engine processed `decisions` in map order
+  // with a single global cap, which produces two failures on a shared platform:
+  //
+  //   STARVATION — one busy application's transactions arrive first and consume the
+  //   whole budget every poll, so a quiet application is never looked at.
+  //
+  //   SELF-INFLICTED TIMEOUTS — a transaction deferred because WE were over budget
+  //   keeps being deferred, and is eventually closed as `error` for inactivity. The
+  //   validation worker then passes that as consistent (a timeout carrying its medium
+  //   anomaly satisfies the invariant), so our own contention is recorded as the
+  //   transaction's fault.
+  //
+  // The policy is therefore: deadline first, then fair share.
+  // ---------------------------------------------------------------------------
+
+  /** Absolute instant this transaction will be timed out if nothing advances it. */
+  const deadlineOf = (dec: (typeof decisions)[number]): number => {
+    const ts = Object.values(dec.a.phaseTs);
+    const last = ts.length ? Math.max(...ts) : dec.a.spawnedAt;
+    return last + lifecycleTimeoutMs(dec.app, timeoutMs);
+  };
+
+  // (1) DEADLINE FIRST — the transaction closest to being timed out is worked first, so
+  // a budget shortfall delays the transactions that can best afford the wait rather than
+  // the ones about to be written off.
+  decisions.sort((a, b) => deadlineOf(a) - deadlineOf(b));
+
+  /**
+   * (2) FAIR SHARE — interleave applications round-robin. Each app's queue is already
+   * deadline-ordered, so this takes every app's most urgent transaction before any app's
+   * second, and a bounded budget is split evenly no matter how lopsided the arrival mix.
+   */
+  const fairShare = (items: typeof decisions): typeof decisions => {
+    const queues = new Map<string, typeof decisions>();
+    for (const it of items) {
+      const q = queues.get(it.app.id);
+      if (q) q.push(it);
+      else queues.set(it.app.id, [it]);
+    }
+    if (queues.size <= 1) return items; // single app — nothing to interleave
+    const out: typeof decisions = [];
+    let picked = true;
+    while (picked) {
+      picked = false;
+      for (const q of queues.values()) {
+        const next = q.shift();
+        if (next) {
+          out.push(next);
+          picked = true;
+        }
+      }
+    }
+    return out;
+  };
+
+  const fastPathEnabled = (process.env.INGEST_FASTPATH_ENABLED ?? 'true').toLowerCase() !== 'false';
+
+  /** Apply one decided transition. Identical for a fast-path and a reasoned decision. */
+  const applyDecision = (dec: (typeof decisions)[number], d: TransitionDecision): void => {
     const a = dec.a;
     if (d.status === 'awaiting') {
       a.status = 'awaiting';
@@ -267,7 +377,67 @@ export async function stepAgentsDynamic(
       closed += 1;
       bump(dec.app.id, 'closed');
     }
+    changed.add(dec.id);
+  };
+
+  const ctxOf = (dec: (typeof decisions)[number]): AgentPromptContext => ({
+    messageId: dec.id,
+    currentStatus: dec.a.status,
+    phaseTs: dec.a.phaseTs,
+    ackCode: dec.a.ackCode,
+    phasesThisCycle: dec.evs.map((e) => e.type),
+    eventLines: dec.evs.map((e) => e.raw ?? '').filter(Boolean),
+    window: windowLogs,
+    now,
   });
+
+  const deferred: typeof decisions = [];
+  for (const dec of decisions) {
+    let d: TransitionDecision | null = null;
+    if (fastPathEnabled && dec.app.ingestionAgent?.fastPath) {
+      try {
+        d = dec.app.ingestionAgent.fastPath(ctxOf(dec));
+      } catch (err) {
+        // A broken fast path must never drop a transaction — fall back to reasoning.
+        console.error(`ingest: fastPath threw for ${dec.id}, deferring to the model`, (err as Error).message);
+        d = null;
+      }
+    }
+    if (d) {
+      applyDecision(dec, d);
+      fastPathed += 1;
+    } else {
+      deferred.push(dec);
+    }
+  }
+
+  const modelQueue = fairShare(deferred);
+  await mapPool(modelQueue, 6, async (dec, idx) => {
+    if (idx >= maxLlm) {
+      deferredOverCap += 1;
+      backlogByApp[dec.app.id] = (backlogByApp[dec.app.id] ?? 0) + 1;
+      return; // over the per-poll cap — carried to the next poll, most urgent first
+    }
+    const agent = dec.app.ingestionAgent;
+    if (!agent) return; // app declares no dynamic agent — only its timeouts fire
+    const d = await agent.decide(ctxOf(dec), opts.reasoner ?? defaultReasoner);
+    if (!d) return; // no transition this poll (model error / no spec) — leave unchanged
+    reasoned += 1;
+    applyDecision(dec, d);
+  });
+
+  if (deferredOverCap > 0) {
+    // Never silent: this is the back-pressure that, left unchecked, turns into agents
+    // tripping their inactivity timeout and being recorded as legitimate timeouts. The
+    // per-app split matters — a backlog concentrated in one application is a different
+    // problem (that app is slow or noisy) from one spread evenly (the cap is too low).
+    const split = Object.entries(backlogByApp)
+      .map(([app, n]) => `${app}=${n}`)
+      .join(' ');
+    console.warn(
+      `ingest: ${deferredOverCap} transition(s) over the ${maxLlm}-per-poll reasoning cap; carried to the next poll (${split})`,
+    );
+  }
 
   // Deterministic timeout pass (a clock check, not reasoning) — the SLA backstop. The
   // timeout is per-app, sourced from each app's transaction.md (SCP 30 min, apiflc
@@ -307,7 +477,7 @@ export async function stepAgentsDynamic(
     }
   }
 
-  return { agents, changed, spawned, advanced, closed, byApp };
+  return { agents, changed, spawned, advanced, closed, fastPathed, reasoned, deferredOverCap, backlogByApp, byApp };
 }
 
 export interface AdvanceResult {
@@ -354,36 +524,77 @@ export async function advanceAgents(
   const anomaliesTtlMs =
     opts.anomaliesTtlMs ?? Number(process.env.FINDINGS_HISTORY_TTL_MINUTES ?? 1440) * 60_000;
 
-  const events = agentEvents(parsed, registry);
-  const ids = [...new Set(events.map((e) => e.corrId))];
-  const [active, matching] = await Promise.all([
-    getActiveAgents(2000),
-    ids.length ? getAgentsByMessageIds(ids) : Promise.resolve([] as Agent[]),
-  ]);
-  const known = new Map<string, Agent>();
-  for (const a of [...active, ...matching]) known.set(a.messageId, a);
-
   // Cross-poll correlation window. The connector pulls INCREMENTALLY — each log lands in
   // exactly one poll — so a transaction's later-arriving cross-group signal (apiflc's
   // gateway HTTP status is ingested in a different poll than the handler logs, and is not
   // a protocol event) would otherwise never share a window with its call. Correlate over
   // recent STORED logs spanning an agent's active lifetime, merged with this poll's logs
   // (which may not be persisted yet), so app joins (`relatedLogs`) see the whole call.
-  // Span the LARGEST per-app inactivity timeout so no app's active lifetime is
-  // under-covered (SCP's 30-min window must still load even while apiflc's is 2 min).
-  const windowSpanMs = Math.max(
-    timeoutMs,
-    ...registry.all().map((app) => lifecycleTimeoutMs(app, timeoutMs)),
-  );
+  //
+  // The span covers ONLY the applications that actually need history — those declaring a
+  // cross-log-group join (`relatedLogs`) or a non-event signal hook (`pendingSignals`).
+  // Taking the max across ALL apps made every poll load SCP's 30 minutes even though SCP
+  // needs none of it: its evidence rides on the protocol events, which are already
+  // accumulated on the agent. Loading three times more history than any app can use is
+  // what pushes this query into its row cap, and the cap discards the WRONG END (see
+  // below), so an over-wide span directly causes lost correlations.
+  const joinApps = registry.all().filter((app) => app.relatedLogs != null || app.pendingSignals != null);
+  const windowSpanMs = joinApps.length
+    ? Math.max(...joinApps.map((app) => lifecycleTimeoutMs(app, timeoutMs)))
+    : timeoutMs;
+
+  // The row cap, and why hitting it is dangerous rather than merely lossy: queryLogs
+  // orders by timestamp DESC, so truncation keeps the NEWEST rows and drops the OLDEST —
+  // exactly backwards for reassembling an in-flight call. The lines at risk are a
+  // transaction's earliest ones (apiflc seeds its join on the handler line carrying the
+  // correlationID); the newest need no help, they just arrived. Lose the seed and the
+  // join returns nothing, the gateway status is never attributed, and the transaction
+  // sits until it is timed out — a throughput problem recorded as the transaction's
+  // fault. So this is tunable, and reaching it is reported loudly instead of silently
+  // degrading correlation.
+  const windowLogLimit = Number(process.env.INGEST_WINDOW_LOG_LIMIT ?? 20000);
   let windowLogs = parsed;
   try {
-    const stored = await queryLogs({ from: now - windowSpanMs, to: now, limit: 10000 });
+    const stored = await queryLogs({ from: now - windowSpanMs, to: now, limit: windowLogLimit });
+    if (stored.length >= windowLogLimit) {
+      console.error(
+        `ingest: correlation window hit the ${windowLogLimit}-row cap over ${Math.round(windowSpanMs / 60_000)}m — ` +
+          'the OLDEST logs were dropped, so in-flight transactions may lose the lines their join seeds on ' +
+          'and time out spuriously. Raise INGEST_WINDOW_LOG_LIMIT.',
+      );
+    }
     const byId = new Map<string, ParsedLog>();
     for (const l of [...stored, ...parsed]) byId.set(l.id, l);
     windowLogs = [...byId.values()];
   } catch (err) {
     console.error('advanceAgents: correlation-window query failed, using this poll only', (err as Error).message);
   }
+
+  // Events come from the COALESCED WINDOW, not this poll's raw records: a multi-line
+  // message is split across records, and its lines can straddle a poll boundary, so
+  // extracting per-record per-poll can never see a whole message. `freshLogIds` keeps the
+  // work bounded to entries this poll actually touched.
+  const freshLogIds = new Set(parsed.map((l) => l.id));
+  const events = agentEvents(windowLogs, registry, freshLogIds);
+  const ids = [...new Set(events.map((e) => e.corrId))];
+  // The active-agent load is CAPPED, and hitting the cap is the sharpest scaling cliff in
+  // the poller: agents beyond it are never loaded, so they are never advanced, so they sit
+  // until their inactivity timeout closes them as `error` — and the validation worker then
+  // passes that as consistent, because a timeout carrying its medium anomaly satisfies the
+  // invariant. Thousands of transactions can be silently mis-recorded that way. Raise it
+  // with INGEST_ACTIVE_AGENT_LIMIT, and never let reaching it pass unreported.
+  const activeLimit = Number(process.env.INGEST_ACTIVE_AGENT_LIMIT ?? 5000);
+  const [active, matching] = await Promise.all([
+    getActiveAgents(activeLimit),
+    ids.length ? getAgentsByMessageIds(ids) : Promise.resolve([] as Agent[]),
+  ]);
+  if (active.length >= activeLimit) {
+    console.error(
+      `ingest: active-agent load hit the ${activeLimit} cap — agents beyond it are NOT being advanced and will time out spuriously. Raise INGEST_ACTIVE_AGENT_LIMIT.`,
+    );
+  }
+  const known = new Map<string, Agent>();
+  for (const a of [...active, ...matching]) known.set(a.messageId, a);
 
   const step = await stepAgentsDynamic(events, [...known.values()], { now, timeoutMs, registry, windowLogs });
 

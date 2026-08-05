@@ -42,7 +42,7 @@ function LoginForm() {
         onSubmit={onSubmit}
         className="w-full max-w-sm rounded-2xl border border-edge bg-panel p-8 shadow-xl"
       >
-        <div className="mb-6 text-center text-xl font-semibold text-white">🛰️ Agentic Log</div>
+        <div className="mb-6 text-center text-xl font-semibold text-white">🛰️ Agentic Log Platform</div>
         <p className="mb-6 text-center text-xs text-slate-500">Sign in to continue</p>
 
         <label className="mb-1 block text-xs text-slate-400">Username</label>

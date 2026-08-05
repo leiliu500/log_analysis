@@ -39,7 +39,6 @@ export const scpApplication: ApplicationDef = {
   // Validation agent: validate all REQUEST→ACK→RESPONSE phases; the RESPONSE that
   // completes the transaction is expected within 30 minutes of the ACK.
   validation: {
-    promptPath: 'apps/scp/validation.md',
     responseTimeoutMinutes: 30,
     responseTimeoutFrom: 'ACK',
     // A completed transaction with an associated high/critical anomaly is

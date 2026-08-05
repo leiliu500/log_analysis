@@ -6,6 +6,8 @@ import type {
   Agent,
   PollerRun,
   ValidationAgent,
+  ValidationAgentInfo,
+  ValidationAgentRun,
   BacktestSummary,
 } from '@log/shared';
 
@@ -55,6 +57,13 @@ export const api = {
    */
   validationAgents: () =>
     req<{ active: ValidationAgent[]; history: ValidationAgent[] }>('/validation-agents'),
+  /**
+   * Each application's validation AI agent as the API process has it configured. Comes
+   * from the runtime (registry + env), not from constants here, so an agent that is
+   * switched off or capped to zero cannot be rendered as a healthy one.
+   */
+  validationAgentConfig: () =>
+    req<{ agents: ValidationAgentInfo[]; activeRuns: ValidationAgentRun[]; recentRuns: ValidationAgentRun[] }>('/validation-agents/config'),
   /** On-demand "Validate now" — the scheduled validation Lambda runs this autonomously. */
   validateNow: () =>
     req<{

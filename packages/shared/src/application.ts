@@ -49,7 +49,7 @@ export interface ApplicationDef {
    * (spawn, advance, close on failure/complete/timeout). Owned by the app package
    * and shipped with the runtime, kept fully separate from every other app's. The
    * generic engine still runs off {@link TransactionProtocol}; this documents the
-   * per-app lifecycle beside the {@link ApplicationValidation} spec.
+   * per-app lifecycle.
    */
   transactionPromptPath?: string;
   /**
@@ -206,15 +206,15 @@ export interface ReconciliationResult {
   detail?: string;
 }
 
-/** An application's validation rules — its own `validation.md` spec, made executable. */
+/**
+ * An application's validation rules, as executable config.
+ *
+ * There is deliberately NO prose spec for the deterministic worker: it is code, and a
+ * second description of it in Markdown could only drift from the code or duplicate it.
+ * The numbers here ARE the spec. The one prompt that remains is {@link agentPromptPath},
+ * which a model actually reads at runtime.
+ */
 export interface ApplicationValidation {
-  /**
-   * Path (relative to the `prompts/` root) of THIS application's validation prompt
-   * (e.g. 'apps/scp/validation.md') — the human-readable spec of what its
-   * validation agent checks (phases + timeout). Shipped with the runtime like the
-   * other app prompts and shown/loaded by name.
-   */
-  promptPath: string;
   /**
    * Path (relative to the `prompts/` root) of THIS application's VALIDATION AGENT prompt
    * (e.g. 'apps/scp/validation.agent.md') — the residual reviewer's spec, distinct from

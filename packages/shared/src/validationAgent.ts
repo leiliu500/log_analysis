@@ -285,6 +285,31 @@ export function admitClaim(
     }
   }
 
+  // CO-OCCURRENCE IS NOT A DEFECT. A predicate REPEATED across lines proves exactly one
+  // thing — that those lines share a value — which is what a correlation id, a request id
+  // or a messageId is FOR: one call, or one message, written to the log more than once.
+  //
+  // The first version of this rule only rejected a claim whose predicates were ALL
+  // identical, and prod immediately walked around it by pairing: value A on two lines and
+  // value B on two lines ("Identical log lines for same messageId", "Same messageId logged
+  // twice, suggesting replay"). Repetition is the tell regardless of how many distinct
+  // values are repeated, so the rule is now: no predicate may repeat another. A real claim
+  // contrasts DIFFERENT facts — a 200 against a DECLINED body — and repeats nothing.
+  if (preds.length > 1) {
+    const shape = (p: ClaimPredicate): string => `${p?.field}|${p?.op}|${String(p?.value ?? '').toLowerCase()}`;
+    const seen = new Set<string>();
+    for (const p of preds) {
+      const k = shape(p);
+      if (seen.has(k)) {
+        return {
+          ok: false,
+          reason: `co-occurrence only — predicate "${p.field} ${p.op} ${String(p.value).slice(0, 40)}" is repeated, which shows only that lines share it`,
+        };
+      }
+      seen.add(k);
+    }
+  }
+
   const cited = new Set(ids);
   for (const p of preds) {
     if (!p || typeof p.logId !== 'string') return { ok: false, reason: 'predicate has no logId' };

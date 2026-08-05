@@ -14,12 +14,14 @@ import {
   deleteAllAgents,
   getActiveValidationAgents,
   getValidationHistory,
+  getActiveValidationAgentRuns,
+  getRecentValidationAgentRuns,
   deleteAllValidationAgents,
   recentPollerRuns,
   deleteAllPollerRuns,
 } from '@log/db';
 import { simulate, handleSimulatePrompt } from '@log/simulator';
-import { analyzeAllSources, routeRequest, validateAgents, applicationRegistry, type ValidationRunResult } from '@log/agents';
+import { analyzeAllSources, routeRequest, validateAgents, validationAgentInfo, applicationRegistry, type ValidationRunResult } from '@log/agents';
 import { invokeApplication } from '@log/app-scp';
 import { runBacktest, corpus, toSummary } from '@log/backtest';
 import { SimulateRequest, InvokeAppRequest, LogSourceType } from '@log/shared';
@@ -83,12 +85,27 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     return { active, history };
   });
 
+  // Each application's VALIDATION AI AGENT as THIS process has it configured — registry
+  // declaration plus the env that gates it. Served from the runtime rather than hardcoded
+  // in the UI so a disabled or misconfigured agent can never render as a healthy one.
+  api.get('/validation-agents/config', async () => ({
+    agents: validationAgentInfo(applicationRegistry),
+    // Agents RUNNING right now. The dashboard renders these, so a card appears when a
+    // validation pass starts and disappears when it ends — the agent as a lifecycle, not
+    // a permanent fixture.
+    activeRuns: await getActiveValidationAgentRuns(Date.now()),
+    // The last few FINISHED runs. Without them an empty panel is ambiguous: "no agent is
+    // running" looks the same whether the stage just worked perfectly or is silently
+    // broken. This shows the difference without keeping a card up after the work is done.
+    recentRuns: await getRecentValidationAgentRuns(10),
+  }));
+
   // On-demand validation pass (the scheduled validation Lambda runs this
   // autonomously; this is the manual "Validate now" trigger). Isolated from
   // ingestion — only reads agents+anomalies and writes validation_agents.
   api.post('/validate', async (req) => {
     try {
-      return await validateAgents(applicationRegistry);
+      return await validateAgents(applicationRegistry, { trigger: 'manual' });
     } catch (err) {
       req.log.error(err, 'validation pass failed');
       const empty: ValidationRunResult = {

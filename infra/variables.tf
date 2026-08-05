@@ -169,9 +169,12 @@ variable "validation_ai_review_epoch" {
       04:27Z - residual narrowed to COMPLETED transactions only (a failed/timed-out one
                was already flagged, so it is not part of the false-negative population),
                and the gate now rejects vacuous membership-only witnesses.
+      07-31  - gate rejects REPEATED predicates (paired co-occurrence) and both
+               prompts ban log-pipeline claims, after all 5 admitted claims in a
+               50-transaction run were duplicate-logging or timestamp-format noise.
   EOT
   type        = number
-  default     = 1785385628000
+  default     = 1785510435000
 }
 
 variable "validation_ai_deadline_ms" {

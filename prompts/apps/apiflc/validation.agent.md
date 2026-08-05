@@ -43,11 +43,17 @@ how cleanly its predicate verifies:
   the normal shape of an apiflc call, not evidence of an entangled or mis-stitched join.
   Only claim a join problem if two DIFFERENT `correlationID` values appear on lines the
   join has placed in this one transaction.
-- The SAME event appearing on MORE THAN ONE log line. Two identical handler or gateway
-  lines are one event re-logged — the same request written to the log twice, not two
-  invocations. Repetition of an identical line is NEVER evidence of a duplicate call, a
-  double invocation, or a retry storm. Only claim a duplicate if the lines carry
-  DIFFERENT identifiers or DIFFERENT timestamps that prove two separate events.
+- Many log lines SHARING one identifier. A single apiflc call is logged across many lines
+  — the API-Gateway `requestId` appears on every gateway line of that one call, the
+  authorizer id on every authorizer line, the `correlationID` on every handler line. Lines
+  sharing an id are ONE call written to the log repeatedly, never two invocations, never a
+  duplicate, never a reused or leaked identifier. **Different timestamps do NOT make them
+  separate events** — one call logs its lines milliseconds apart, so a timestamp
+  difference is expected and proves nothing. The ONLY thing that indicates two calls is
+  two DIFFERENT `correlationID` values.
+- Two log lines carrying the same value is co-occurrence, not a defect. If the whole of
+  your evidence is "this identifier appears on line A and also on line B", there is no
+  claim — that is what an identifier is for, and such a claim is rejected outright.
 - Retries, warm-up lines, and duplicated log lines that repeat an identical message.
 - A `failed` or timed-out transaction having NO terminal gateway status line. Not
   reaching a terminal status is precisely what timing out means, and the worker already
@@ -70,6 +76,23 @@ example:
 - a truncated, empty, or malformed response payload returned as a success;
 - a mismatch between the handler's correlationID and the identifiers on the gateway or
   authorizer lines joined to it — evidence the join stitched together two different calls.
+
+YOU ARE VALIDATING THE TRANSACTION, NOT THE LOG PIPELINE. Never make a claim about how
+the logs were WRITTEN. Specifically, and without exception:
+
+- Duplicate, repeated or identical log lines. The same message written to the log more
+  than once is a logging artifact, not a replay, not a duplicate transaction, and not
+  duplicate processing — however many times it repeats and whatever timestamps the copies
+  carry.
+- The FORMAT of any field: a timestamp that looks truncated, malformed, missing digits,
+  or not ISO8601. You are shown EXCERPTS, so you cannot see a value's full text and can
+  never establish that one is incomplete. Every such claim so far has been an artifact of
+  your own quoting.
+- Anything about log volume, ordering of identical lines, or repeated identifiers.
+
+A claim is only worth making if it says something about what the TRANSACTION did — the
+money, the data, the outcome. If your finding would still be true when the pipeline is
+working perfectly and only the logging is noisy, it is not a finding.
 
 Rules you must follow:
 

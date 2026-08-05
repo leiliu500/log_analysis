@@ -32,6 +32,22 @@ const RESULT_STYLES: Record<string, string> = {
 const isElevated = (s?: string): boolean => s === 'high' || s === 'critical';
 
 /**
+ * The DETERMINISTIC worker's verdict for a row, with the AI overlay stripped off.
+ *
+ * `result` is overloaded: when the AI agent admits a claim the row's result becomes
+ * `ai_suspected`, which hides the fact that every deterministic check passed. Showing the
+ * two in one column is exactly the conflation the rest of the design avoids — proven and
+ * suspected are different populations and belong in different columns.
+ *
+ * The inverse is exact by construction, not a guess: `applyAiReview` promotes a row to
+ * `ai_suspected` ONLY from a clean `success` with an empty delta (and the upsert's sticky
+ * clause has the same guard), so `ai_suspected` always implies the worker said `success`.
+ */
+function workerResult(v: ValidationAgent): string {
+  return v.result === 'ai_suspected' ? 'success' : v.result;
+}
+
+/**
  * Categorize a delta string into a compact, colour-coded chip so the richer
  * validation checks (status-vs-reality, evidence gaps, SCP ordering/duplicate,
  * system-of-record) are legible at a glance instead of one long red blob. The full
@@ -125,7 +141,9 @@ export function ValidationPanel({
   const issues = history.filter((v) => v.result === 'completed_with_issues').length;
   // Completed cleanly BUT carried an associated anomaly below the app's issue
   // threshold — recorded, not flagged. Surfaced so the suppression is observable.
-  const suppressed = history.filter((v) => v.result === 'success' && v.qualityAnomalies.length > 0).length;
+  // Counted off the WORKER's verdict, not the overloaded `result`: an AI suspicion must
+  // not make a suppressed anomaly stop being counted as suppressed.
+  const suppressed = history.filter((v) => workerResult(v) === 'success' && v.qualityAnomalies.length > 0).length;
   const aiSuspected = history.filter((v) => v.result === 'ai_suspected').length;
   const aiDiscarded = history.reduce((n, v) => n + (v.aiRejected ?? 0), 0);
   const aiFailed = history.filter((v) => v.aiError).length;
@@ -209,14 +227,16 @@ export function ValidationPanel({
               <tr className="border-b border-edge">
                 <th className="px-3 py-2">{correlationLabel}</th>
                 <th className="px-3 py-2">agent status</th>
-                <th className="px-3 py-2">result</th>
+                <th className="px-3 py-2" title="The DETERMINISTIC validation worker's verdict: the anomaly/level invariant, phase completeness, the SLA, status-vs-reality, evidence completeness and the app's own checks. This is the proven result and an AI claim never changes it.">
+                  worker result
+                </th>
                 <th className="px-3 py-2">phases</th>
                 <th className="px-3 py-2">SLA</th>
                 <th className="px-3 py-2">expected</th>
                 <th className="px-3 py-2">actual</th>
                 <th className="px-3 py-2">anomalies</th>
-                <th className="px-3 py-2" title="Residual-only AI review: claims that re-verified against the real log rows, and claims the admission gate discarded. Never a verdict.">
-                  AI review
+                <th className="px-3 py-2" title="The AI agent's outcome, kept in its own column so a suspicion is never mistaken for a proven verdict. It only ever reviews the residual — transactions the worker passed without proving the outcome — and its claims are re-executed against the real log rows before being recorded.">
+                  agent result
                 </th>
                 <th className="px-3 py-2">delta</th>
                 <th className="px-3 py-2">validated</th>
@@ -228,9 +248,14 @@ export function ValidationPanel({
                   <td className="px-3 py-1.5">{v.messageId}</td>
                   <td className="px-3 py-1.5 text-slate-400">{v.agentStatus}</td>
                   <td className="px-3 py-1.5">
-                    <span className={`whitespace-nowrap rounded px-1.5 py-0.5 ${RESULT_STYLES[v.result] ?? 'bg-slate-500/20 text-slate-300'}`}>
-                      {RESULT_LABELS[v.result] ?? v.result}
-                    </span>
+                    {(() => {
+                      const wr = workerResult(v);
+                      return (
+                        <span className={`whitespace-nowrap rounded px-1.5 py-0.5 ${RESULT_STYLES[wr] ?? 'bg-slate-500/20 text-slate-300'}`}>
+                          {RESULT_LABELS[wr] ?? wr}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className={`px-3 py-1.5 ${v.missingPhases.length ? 'text-red-400' : 'text-slate-400'}`}>
                     {v.missingPhases.length ? `missing ${v.missingPhases.join(', ')}` : 'complete'}
@@ -275,11 +300,11 @@ export function ValidationPanel({
                         {v.aiFindings.length ? (
                           <span
                             className="cursor-help whitespace-nowrap rounded border border-violet-500/40 bg-violet-500/20 px-1.5 py-0.5 text-[10px] text-violet-200"
-                            title={v.aiFindings
+                            title={`SUSPECTED — ${v.aiFindings.length} claim(s) survived re-verification. This is a suspicion to triage, not a proven failure: the deterministic worker still says ${workerResult(v)}.\n\n${v.aiFindings
                               .map((f) => `${f.severity}: ${f.title} (${f.verifiedPredicates} predicate(s) re-verified on ${f.evidenceLogIds.join(', ')})`)
-                              .join('\n')}
+                              .join('\n')}`}
                           >
-                            {v.aiFindings.length} verified
+                            suspected · {v.aiFindings.length}
                           </span>
                         ) : (
                           <span

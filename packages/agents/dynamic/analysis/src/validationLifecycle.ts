@@ -10,6 +10,7 @@ import type {
   ReconciliationResult,
   Severity,
   ValidationAgent,
+  ValidationAgentInfo,
   ValidationClaim,
   ValidationReasoner,
 } from '@log/shared';
@@ -21,6 +22,9 @@ import {
   getAgentAnomalySeverities,
   getAiReviewedMessageIds,
   getNonTransactionAnomaliesSince,
+  startValidationAgentRuns,
+  finishValidationAgentRun,
+  reapValidationAgentRuns,
   queryLogs,
   upsertValidationAgents,
   pruneClosedValidationAgentsOlderThan,
@@ -239,6 +243,35 @@ async function pool<T>(
   });
   await Promise.all(workers);
   return started;
+}
+
+/**
+ * Report each application's validation AI agent as this process has it configured —
+ * registry declaration AND the env that gates it. Read from the same constants the stage
+ * itself uses, so the UI can never show an agent as enabled while the runtime has it off
+ * (the API and the Lambda are separately configured, and have drifted before).
+ */
+export function validationAgentInfo(registry?: ApplicationRegistry): ValidationAgentInfo[] {
+  return (registry?.all() ?? []).map((app) => {
+    const declared = app.validation?.validationAgent != null;
+    return {
+      application: app.id,
+      displayName: app.displayName,
+      enabled: declared && AI_ENABLED && AI_MAX_PER_POLL > 0,
+      disabledReason: !declared
+        ? 'this application declares no validation agent'
+        : !AI_ENABLED
+          ? 'VALIDATION_AI_ENABLED=false in this runtime'
+          : AI_MAX_PER_POLL <= 0
+            ? 'VALIDATION_AI_MAX_PER_POLL is 0'
+            : undefined,
+      promptPath: app.validation?.agentPromptPath,
+      scope: AI_SCOPE,
+      maxPerPoll: AI_MAX_PER_POLL,
+      deadlineMs: AI_DEADLINE_MS,
+      reviewEpoch: AI_REVIEW_EPOCH,
+    };
+  });
 }
 
 /** Compare one regular agent against the anomalies + its app rules → a validation agent. */
@@ -596,6 +629,8 @@ export async function validateAgents(
     qualityWindowMs?: number;
     /** Override the model call for the AI stage (tests inject a stub; prod uses Bedrock). */
     validationReasoner?: ValidationReasoner;
+    /** How this pass was started — 'manual' for the dashboard's "Validate now". */
+    trigger?: 'schedule' | 'manual';
   } = {},
 ): Promise<ValidationRunResult> {
   const now = opts.now ?? Date.now();
@@ -773,6 +808,33 @@ export async function validateAgents(
     }
 
     const reviewed = residuals.slice(0, AI_MAX_PER_POLL);
+
+    // SPAWN a running agent per application that actually has work this pass. The row is
+    // what the dashboard renders as an "active validation agent", so an idle poll must
+    // spawn nothing — otherwise the panel would show agents doing nothing, which is the
+    // static roster this replaced.
+    const runId = `${now}-${Math.abs(reviewed.length * 31 + validations.length)}`;
+    const byAppRun = new Map<string, { id: string; reviewed: number; suspected: number; discarded: number; failed: number }>();
+    for (const r of reviewed) {
+      if (!byAppRun.has(r.app.id)) byAppRun.set(r.app.id, { id: `${runId}-${r.app.id}`, reviewed: 0, suspected: 0, discarded: 0, failed: 0 });
+    }
+    if (byAppRun.size) {
+      try {
+        await startValidationAgentRuns(
+          [...byAppRun].map(([application, run]) => ({
+            id: run.id,
+            runId,
+            application,
+            trigger: opts.trigger ?? 'schedule',
+            startedAt: now,
+            queued: reviewed.filter((r) => r.app.id === application).length,
+          })),
+        );
+      } catch (err) {
+        // Best-effort: this is display state. Never let it block the actual review.
+        console.error('validation: could not record agent run start', (err as Error).message);
+      }
+    }
     if (residuals.length > reviewed.length) {
       // Never let a cap silently read as "everything was reviewed".
       console.warn(
@@ -796,6 +858,13 @@ export async function validateAgents(
           opts.validationReasoner ?? defaultValidationReasoner,
         );
         applyAiReview(v, outcome, now);
+        const run = byAppRun.get(app.id);
+        if (run) {
+          if (outcome.error && !outcome.findings.length) run.failed += 1;
+          else run.reviewed += 1;
+          if (outcome.findings.length) run.suspected += 1;
+          run.discarded += outcome.rejected.length;
+        }
         for (const r of outcome.rejected) {
           console.warn(`validation: AI claim discarded for ${v.messageId} — ${r.reason} ("${r.title}")`);
         }
@@ -815,6 +884,25 @@ export async function validateAgents(
         `validation: AI stage hit its ${AI_DEADLINE_MS}ms budget after ${started} of ${reviewed.length} review(s); the rest keep their deterministic result`,
       );
     }
+
+    // CLOSE every agent spawned above, so the dashboard stops showing it. Done in a
+    // finally-ish position: the pool never rejects (each review is individually
+    // try/caught), so reaching here means the pass is over one way or another.
+    for (const [application, run] of byAppRun) {
+      try {
+        await finishValidationAgentRun(run.id, Date.now(), run, `${run.reviewed} reviewed, ${run.suspected} suspected, ${run.discarded} discarded${run.failed ? `, ${run.failed} failed` : ''}`);
+      } catch (err) {
+        console.error(`validation: could not close agent run for ${application}`, (err as Error).message);
+      }
+    }
+  }
+
+  // Close rows a killed process left open, and drop old history. Without this a Lambda
+  // that times out mid-pass would leave an agent showing as active forever.
+  try {
+    await reapValidationAgentRuns(Date.now());
+  } catch (err) {
+    console.error('validation: could not reap agent runs', (err as Error).message);
   }
 
   // The epoch is passed so a STORED review older than it is not resurrected onto a row

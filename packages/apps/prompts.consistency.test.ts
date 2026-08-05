@@ -6,7 +6,7 @@ import { applicationRegistry } from './index.js';
 /**
  * Consistency guard: every prompt an application declares by path must actually
  * resolve at runtime. This keeps each app's own prompts — the regular-agent
- * `transaction.md`, the `validation.md`, plus the Log-Assistant / Simulator
+ * `transaction.md`, the `validation.agent.md`, plus the Log-Assistant / Simulator
  * prompts — wired and separate per app, and fails loudly on a typo or a moved
  * file instead of shipping a dangling reference into the Lambda / API image.
  */
@@ -15,7 +15,6 @@ import { applicationRegistry } from './index.js';
 function declaredPromptPaths(app: ReturnType<typeof applicationRegistry.all>[number]) {
   return [
     ['transactionPromptPath', app.transactionPromptPath],
-    ['validation.promptPath', app.validation?.promptPath],
     ['validation.agentPromptPath', app.validation?.agentPromptPath],
     ['assistantPromptPath', app.assistantPromptPath],
     ['simulateUnderstandingPromptPath', app.simulateUnderstandingPromptPath],
@@ -32,12 +31,11 @@ for (const app of applicationRegistry.all()) {
   }
 }
 
-test('scp and apiflc each declare their own transaction + validation prompts', () => {
+test('scp and apiflc each declare their own transaction prompt', () => {
   for (const id of ['scp', 'apiflc']) {
     const app = applicationRegistry.byId(id);
     assert.ok(app, `application ${id} is registered`);
     assert.ok(app!.transactionPromptPath?.includes(`apps/${id}/transaction.md`), `${id} has its own transaction.md`);
-    assert.ok(app!.validation?.promptPath.includes(`apps/${id}/validation.md`), `${id} has its own validation.md`);
   }
 });
 
@@ -63,7 +61,6 @@ for (const app of applicationRegistry.all()) {
 
   test(`${app.id}: validation.agent.md is this app's own, and is not the worker spec`, () => {
     assert.ok(v.agentPromptPath!.includes(`apps/${app.id}/validation.agent.md`), `${app.id} needs its own validation.agent.md`);
-    assert.notEqual(v.agentPromptPath, v.promptPath, 'the AI agent spec must be separate from the deterministic worker spec');
   });
 
   test(`${app.id}: validation.agent.md agrees with the executable SLA + phase config`, () => {
@@ -101,9 +98,8 @@ for (const app of applicationRegistry.all()) {
 
 /**
  * Config ↔ protocol consistency. The deterministic validation engine is only as
- * correct as each app's per-app config: a wrong SLA anchor, a phase list out of
- * sync with the protocol, or a `validation.md` that disagrees with the executable
- * numbers produces deterministically wrong verdicts at scale. Assert they line up,
+ * correct as each app's per-app config: a wrong SLA anchor, or a phase list out of
+ * sync with the protocol, produces deterministically wrong verdicts at scale. Assert they line up,
  * so drift fails the build instead of silently mis-validating every transaction.
  */
 for (const app of applicationRegistry.all()) {
@@ -137,12 +133,4 @@ for (const app of applicationRegistry.all()) {
     if (app.id === 'apiflc') assert.equal(v.checks, undefined, 'apiflc has no ACK phase and must declare no checks');
   });
 
-  test(`${app.id}: validation.md agrees with the executable SLA + phase config`, () => {
-    const body = loadPrompt(v.promptPath);
-    assert.ok(body.includes(String(v.responseTimeoutMinutes)), `prompt omits the ${v.responseTimeoutMinutes}-minute budget`);
-    assert.ok(new RegExp(`\\b${v.responseTimeoutFrom}\\b`).test(body), `prompt omits the SLA anchor ${v.responseTimeoutFrom}`);
-    for (const phase of proto.allPhases) {
-      assert.ok(new RegExp(`\\b${phase}\\b`).test(body), `prompt omits protocol phase ${phase}`);
-    }
-  });
 }

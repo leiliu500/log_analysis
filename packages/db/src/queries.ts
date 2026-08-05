@@ -7,6 +7,7 @@ import type {
   Agent,
   PollerRun,
   ValidationAgent,
+  ValidationAgentRun,
 } from '@log/shared';
 import { getDb, getSql, type Sql } from './client.js';
 import {
@@ -443,6 +444,92 @@ export async function getAiReviewedMessageIds(messageIds: string[], since = 0): 
   const rows = await sqlc`SELECT message_id FROM validation_agents
     WHERE message_id = ANY(${messageIds}) AND ai_reviewed_at IS NOT NULL AND ai_reviewed_at >= ${since}`;
   return new Set(rows.map((r) => r.message_id as string));
+}
+
+// ---------------------------------------------------------------------------
+// Validation AI agent RUNS — the agent as a lifecycle, so the dashboard can show
+// one only while it is actually reviewing.
+// ---------------------------------------------------------------------------
+
+/** Spawn a running agent per application that has residual work this pass. */
+export async function startValidationAgentRuns(
+  runs: Array<{ id: string; runId: string; application: string; trigger: string; startedAt: number; queued: number }>,
+): Promise<void> {
+  if (!runs.length) return;
+  const sqlc = getSql();
+  await sqlc.begin(async (tx) => {
+    for (const r of runs) {
+      await tx`INSERT INTO validation_agent_runs (id, run_id, application, trigger, started_at, queued)
+        VALUES (${r.id}, ${r.runId}, ${r.application}, ${r.trigger}, ${r.startedAt}, ${r.queued})
+        ON CONFLICT (id) DO NOTHING`;
+    }
+  });
+}
+
+/** Close a running agent with what it actually did. */
+export async function finishValidationAgentRun(
+  id: string,
+  at: number,
+  counts: { reviewed: number; suspected: number; discarded: number; failed: number },
+  detail?: string,
+): Promise<void> {
+  const sqlc = getSql();
+  await sqlc`UPDATE validation_agent_runs
+    SET finished_at = ${at}, reviewed = ${counts.reviewed}, suspected = ${counts.suspected},
+        discarded = ${counts.discarded}, failed = ${counts.failed}, detail = ${detail ?? null}
+    WHERE id = ${id}`;
+}
+
+/**
+ * Agents currently running. Rows older than `staleMs` are excluded even when still open:
+ * a process killed mid-pass (Lambda timeout, container replaced) can never close its own
+ * row, and an agent stuck "active" forever would be worse than not showing it at all.
+ */
+export async function getActiveValidationAgentRuns(now: number, staleMs = 10 * 60_000): Promise<ValidationAgentRun[]> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT * FROM validation_agent_runs
+    WHERE finished_at IS NULL AND started_at >= ${now - staleMs}
+    ORDER BY started_at DESC LIMIT 50`;
+  return rows.map(rawRowToValidationAgentRun);
+}
+
+/**
+ * The most recently FINISHED agent runs. An active-only panel is a mystery when it is
+ * empty — "no agent is running" reads identically whether the stage is working perfectly
+ * or silently broken. Showing the last completed run per application makes the difference
+ * visible without keeping a card up after the work is done.
+ */
+export async function getRecentValidationAgentRuns(limit = 10): Promise<ValidationAgentRun[]> {
+  const sqlc = getSql();
+  const rows = await sqlc`SELECT * FROM validation_agent_runs
+    WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT ${limit}`;
+  return rows.map(rawRowToValidationAgentRun);
+}
+
+/** Close abandoned rows (see {@link getActiveValidationAgentRuns}) and drop old history. */
+export async function reapValidationAgentRuns(now: number, staleMs = 10 * 60_000, ttlMs = 24 * 60 * 60_000): Promise<void> {
+  const sqlc = getSql();
+  await sqlc`UPDATE validation_agent_runs SET finished_at = ${now}, detail = 'abandoned — the process did not close this run'
+    WHERE finished_at IS NULL AND started_at < ${now - staleMs}`;
+  await sqlc`DELETE FROM validation_agent_runs WHERE finished_at IS NOT NULL AND finished_at < ${now - ttlMs}`;
+}
+
+function rawRowToValidationAgentRun(r: Record<string, unknown>): ValidationAgentRun {
+  const num = (v: unknown): number | undefined => (v === null || v === undefined ? undefined : Number(v));
+  return {
+    id: r.id as string,
+    runId: r.run_id as string,
+    application: r.application as string,
+    trigger: (r.trigger ?? 'schedule') as ValidationAgentRun['trigger'],
+    startedAt: Number(r.started_at),
+    finishedAt: num(r.finished_at),
+    queued: Number(r.queued ?? 0),
+    reviewed: Number(r.reviewed ?? 0),
+    suspected: Number(r.suspected ?? 0),
+    discarded: Number(r.discarded ?? 0),
+    failed: Number(r.failed ?? 0),
+    detail: (r.detail ?? undefined) as string | undefined,
+  };
 }
 
 export async function pruneClosedValidationAgentsOlderThan(cutoff: number): Promise<number> {

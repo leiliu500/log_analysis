@@ -108,6 +108,16 @@ resource "aws_ecs_task_definition" "api" {
       # Assistant, chat, simulator, on-demand analysis). Kept identical to the Lambdas'
       # so the same question answered by either half gets the same budget.
       { name = "BEDROCK_MAX_TOKENS", value = tostring(var.bedrock_max_tokens) },
+      # The API runs the SAME validateAgents() as the scheduled Lambda whenever someone
+      # hits "Validate now", so it must be configured identically. Without these it fell
+      # back to code defaults — and the default review epoch is 0, meaning a manual run
+      # treated every stored AI review as current: it would neither re-review after a
+      # corrected prompt nor clear a superseded verdict, silently undoing on-demand what
+      # the scheduled poller had just fixed.
+      { name = "VALIDATION_AI_ENABLED", value = tostring(var.validation_ai_enabled) },
+      { name = "VALIDATION_AI_MAX_PER_POLL", value = tostring(var.validation_ai_max_per_poll) },
+      { name = "VALIDATION_AI_DEADLINE_MS", value = tostring(var.validation_ai_deadline_ms) },
+      { name = "VALIDATION_AI_REVIEW_EPOCH", value = tostring(var.validation_ai_review_epoch) },
       { name = "BEDROCK_SUPERVISOR_AGENT_ID", value = aws_bedrockagent_agent.supervisor.agent_id },
       { name = "BEDROCK_SUPERVISOR_AGENT_ALIAS_ID", value = aws_bedrockagent_agent_alias.supervisor.agent_alias_id }
     ]
