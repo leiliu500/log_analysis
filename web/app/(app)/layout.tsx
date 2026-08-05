@@ -10,7 +10,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <aside className="flex w-56 shrink-0 flex-col border-r border-edge bg-panel p-4">
-        <div className="mb-6 text-lg font-semibold text-white">🛰️ Agentic Log Platform</div>
+        {/* text-sm + nowrap: the name is 21 characters and the sidebar is w-56 (~192px
+            inside its padding), so at text-lg it wrapped onto a second line. */}
+        <div className="mb-6 whitespace-nowrap text-sm font-semibold text-white">🛰️ Agentic Log Platform</div>
         <nav className="space-y-1 text-sm">
           <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/">
             Dashboard
