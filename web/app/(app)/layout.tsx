@@ -10,7 +10,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <aside className="flex w-56 shrink-0 flex-col border-r border-edge bg-panel p-4">
-        <div className="mb-6 text-lg font-semibold text-white">🛰️ Agentic Log</div>
+        <div className="mb-6 text-lg font-semibold text-white">🛰️ Agentic Log Platform</div>
         <nav className="space-y-1 text-sm">
           <Link className="block rounded-lg px-3 py-2 hover:bg-edge" href="/">
             Dashboard

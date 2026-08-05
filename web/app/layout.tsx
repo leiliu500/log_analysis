@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Agentic Log — Bedrock Agentic Platform',
+  title: 'Agentic Log Platform',
   description: 'Anomalies, anomalies, reasoning & a scoped log chatbot.',
 };
 
