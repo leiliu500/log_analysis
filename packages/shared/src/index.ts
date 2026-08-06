@@ -15,6 +15,7 @@ export * from './ingestionAgent.js';
 export * from './validationAgent.js';
 export * from './lifecycleTimeout.js';
 export * from './backtest.js';
+export * from './telemetry.js';
 
 /** Small helpers shared across packages. */
 export const nowMs = (): number => Date.now();
