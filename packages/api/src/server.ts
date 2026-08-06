@@ -18,6 +18,7 @@ import {
   getRecentValidationAgentRuns,
   deleteAllValidationAgents,
   recentPollerRuns,
+  getPlatformTelemetry,
   deleteAllPollerRuns,
 } from '@log/db';
 import { simulate, handleSimulatePrompt } from '@log/simulator';
@@ -137,6 +138,16 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
       req.log.error(err, 'backtest run failed');
       throw err;
     }
+  });
+
+  // -------- Telemetry: platform metrics, aggregated in SQL over live tables --------
+  // Every figure is computed from real rows. Aggregation happens in Postgres rather than
+  // by pulling rows here, so a metric can never silently become "count of the first N"
+  // through one of the row caps.
+  api.get('/telemetry', async (req) => {
+    const q = req.query as { windowMinutes?: string };
+    const mins = Math.min(Math.max(Number(q.windowMinutes ?? 1440), 5), 43200);
+    return getPlatformTelemetry(mins * 60_000);
   });
 
   // -------- Schedule: scheduled-ingestion run history --------

@@ -9,6 +9,7 @@ import type {
   ValidationAgentInfo,
   ValidationAgentRun,
   BacktestSummary,
+  PlatformTelemetry,
 } from '@log/shared';
 
 const BASE =
@@ -83,6 +84,13 @@ export const api = {
    * /backtest page. Pure/in-process on the API; no data is written.
    */
   runBacktest: () => req<BacktestSummary>('/backtest', { method: 'POST', body: JSON.stringify({}) }),
+  /**
+   * Platform telemetry — every figure aggregated in SQL over the live tables. No mock or
+   * sampled data: a metric with no rows behind it reports zero, and an unmeasured rate
+   * comes back undefined rather than pretending to be zero.
+   */
+  telemetry: (windowMinutes = 1440) =>
+    req<PlatformTelemetry>(`/telemetry?windowMinutes=${windowMinutes}`),
   /** Scheduled-ingestion run history for the Schedule tab. */
   schedule: () => req<{ runs: PollerRun[] }>('/schedule?limit=100'),
   chat: (sessionId: string, message: string) =>

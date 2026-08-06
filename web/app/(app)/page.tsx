@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { DashboardView } from '@/components/DashboardView';
 import { ValidationView } from '@/components/ValidationView';
 import { BacktestView } from '@/components/BacktestView';
+import { TelemetryView } from '@/components/TelemetryView';
 
 /**
  * The main workspace — Dashboard, Validation, and Backtest consolidated into three
@@ -16,6 +17,7 @@ const TABS = [
   { key: 'dashboard', label: 'Signal' },
   { key: 'validation', label: 'Validation' },
   { key: 'backtest', label: 'Backtest' },
+  { key: 'telemetry', label: 'Telemetry' },
 ] as const;
 type TopTab = (typeof TABS)[number]['key'];
 
@@ -41,6 +43,7 @@ export default function Workspace() {
       {tab === 'dashboard' && <DashboardView />}
       {tab === 'validation' && <ValidationView />}
       {tab === 'backtest' && <BacktestView />}
+      {tab === 'telemetry' && <TelemetryView />}
     </div>
   );
 }
