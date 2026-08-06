@@ -67,8 +67,8 @@ export async function getPlatformTelemetry(windowMs = 24 * 60 * 60_000): Promise
     // Lifetime percentiles over CLOSED transactions only — an active one has no duration.
     sql`SELECT coalesce(application,'unknown') AS app,
                count(*)::int AS n,
-               percentile_cont(0.5) WITHIN GROUP (ORDER BY (closed_at - spawned_at)) AS p50,
-               percentile_cont(0.95) WITHIN GROUP (ORDER BY (closed_at - spawned_at)) AS p95,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY (closed_at - spawned_at)::float8) AS p50,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY (closed_at - spawned_at)::float8) AS p95,
                max(closed_at - spawned_at) AS max
         FROM agents WHERE NOT active AND closed_at IS NOT NULL GROUP BY 1`,
     sql`SELECT result AS k, count(*)::int AS n FROM validation_agents GROUP BY result`,
@@ -94,8 +94,8 @@ export async function getPlatformTelemetry(windowMs = 24 * 60 * 60_000): Promise
                count(*) FILTER (WHERE ran_at >= ${since})::int AS recent,
                max(ran_at) AS last_run,
                avg(duration_ms) AS avg_ms,
-               percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_ms,
-               coalesce(sum(findings),0)::int AS findings
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms::float8) AS p95_ms,
+               coalesce(sum(anomalies),0)::int AS anomalies_produced
         FROM poller_runs`,
     sql`SELECT trigger AS k, count(*)::int AS n FROM poller_runs GROUP BY trigger`,
     // Deterministic checks the AI agents proposed, ranked by recurrence — the promotion
@@ -186,7 +186,7 @@ export async function getPlatformTelemetry(windowMs = 24 * 60 * 60_000): Promise
       lastRunAt: num(pt.last_run) || undefined,
       avgDurationMs: num(pt.avg_ms) || undefined,
       p95DurationMs: num(pt.p95_ms) || undefined,
-      anomaliesProduced: num(pt.findings),
+      anomaliesProduced: num(pt.anomalies_produced),
       byTrigger: toBuckets(pollerByTrigger),
     },
   };
