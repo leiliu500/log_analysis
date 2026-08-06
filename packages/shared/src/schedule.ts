@@ -22,6 +22,12 @@ export interface PollerRun {
   /** Stale rows pruned this run. */
   pruned: number;
   /**
+   * Per-stage wall clock for this poll (ingest, lifecycle) plus the lifecycle's
+   * fastPathed / reasoned / deferredOverCap split. Lets a slow poll be attributed to a
+   * phase, and makes the model's share of ingestion an observable number.
+   */
+  stages?: Record<string, number>;
+  /**
    * Per-application breakdown of this run, so the dashboard can scope the
    * Schedule tab to a selected application (e.g. scp vs apiflc).
    */

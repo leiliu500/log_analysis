@@ -60,6 +60,11 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
   // logs so the lifecycle sees every source's request/ack/response messages.
   const allParsed: ParsedLog[] = [];
   const sourceAnomalies: Anomaly[] = [];
+  // Per-stage wall clock. A poll that gets slow otherwise reports only a total, which
+  // says nothing about WHICH phase regressed — pull/parse, the agent lifecycle, or the
+  // bookkeeping. These are recorded on the run so the Telemetry tab can attribute it.
+  const stages: Record<string, number> = {};
+  const ingestStart = Date.now();
   await Promise.all(
     allConnectors().map(async (connector) => {
       try {
@@ -79,9 +84,13 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
     }),
   );
 
+  stages.ingest = Date.now() - ingestStart;
+
   // Advance the agent lifecycle exactly once per poll — ALWAYS, even when
   // allParsed is empty, so timeouts fire on idle polls and report Anomalies.
+  const lifecycleStart = Date.now();
   let agents = { spawned: 0, advanced: 0, closed: 0, anomalies: 0 };
+  let lifecycleSplit: { fastPathed: number; reasoned: number; deferredOverCap: number } | undefined;
   let lifeByApp: Record<string, { spawned: number; advanced: number; closed: number; anomalies: number }> = {};
   try {
     const timeoutMs =
@@ -98,9 +107,18 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
       anomalies: life.anomalies.length,
     };
     lifeByApp = life.byApplication;
+    // The fast-path vs reasoned split was computed every poll and never persisted, so the
+    // one number that says whether the model is back on the ingestion critical path was
+    // invisible outside a log line. Recorded now.
+    lifecycleSplit = {
+      fastPathed: life.fastPathed ?? 0,
+      reasoned: life.reasoned ?? 0,
+      deferredOverCap: life.deferredOverCap ?? 0,
+    };
   } catch (err) {
     console.error('agent lifecycle advance failed', err);
   }
+  stages.lifecycle = Date.now() - lifecycleStart;
 
   // Per-application breakdown for the Schedule tab (parsed by log group, anomalies
   // + agent lifecycle activity per app).
@@ -136,6 +154,7 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
       agents,
       anomalies: anomaliesTotal,
       pruned,
+      stages: { ...stages, ...(lifecycleSplit ?? {}) },
     });
   } catch (err) {
     console.error('record poller run failed', err);

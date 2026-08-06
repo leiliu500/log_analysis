@@ -50,6 +50,7 @@ ${renderLogs(cluster.logs)}`;
   const mf = await converseJson<ModelAnomaly>(prompt, {
     system: REASONING_SYSTEM,
     temperature: 0.1,
+    stage: 'analysis-reason',
   });
 
   const summaryText = `${mf.title}\n${mf.summary}`;

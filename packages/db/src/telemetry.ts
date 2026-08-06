@@ -1,4 +1,4 @@
-import type { PlatformTelemetry } from '@log/shared';
+import type { ModelCallTelemetry, PlatformTelemetry } from '@log/shared';
 import { getSql } from './client.js';
 
 /**
@@ -180,6 +180,7 @@ export async function getPlatformTelemetry(windowMs = 24 * 60 * 60_000): Promise
       avgRunMs: num(ar.avg_ms) || undefined,
       ruleCandidates: toBuckets(ruleCandidates),
     },
+    models: await getModelCallTelemetry(windowMs).catch(() => undefined),
     poller: {
       runs: num(pt.n),
       inWindow: num(pt.recent),
@@ -189,5 +190,114 @@ export async function getPlatformTelemetry(windowMs = 24 * 60 * 60_000): Promise
       anomaliesProduced: num(pt.anomalies_produced),
       byTrigger: toBuckets(pollerByTrigger),
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Model-call instrumentation. Written by the Bedrock wrapper on EVERY call.
+// ---------------------------------------------------------------------------
+
+export interface ModelCallRow {
+  ts: number;
+  stage: string;
+  model: string;
+  application?: string;
+  ok: boolean;
+  /** Provider-reported latency (Bedrock `metrics.latencyMs`); absent on failure. */
+  latencyMs?: number;
+  /** Our own wall clock around the call — always present, includes transport. */
+  wallMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  replyChars?: number;
+  stopReason?: string;
+  error?: string;
+}
+
+/** Keep a bounded recent history: this is an operational stream, not an audit log. */
+const MODEL_CALLS_KEEP = Number(process.env.MODEL_CALLS_KEEP ?? 20000);
+
+/**
+ * Record one model call. Best-effort by contract — the caller fire-and-forgets, because
+ * telemetry must never be able to fail or slow the call it is measuring.
+ */
+export async function insertModelCall(r: ModelCallRow): Promise<void> {
+  const sql = getSql();
+  await sql`INSERT INTO model_calls
+    (id, ts, stage, model, application, ok, latency_ms, wall_ms, input_tokens, output_tokens, reply_chars, stop_reason, error)
+    VALUES (${`${r.ts}-${Math.random().toString(36).slice(2, 10)}`}, ${r.ts}, ${r.stage}, ${r.model},
+            ${r.application ?? null}, ${r.ok}, ${r.latencyMs ?? null}, ${Math.round(r.wallMs)},
+            ${r.inputTokens ?? null}, ${r.outputTokens ?? null}, ${r.replyChars ?? null},
+            ${r.stopReason ?? null}, ${r.error ?? null})`;
+  // Trim opportunistically rather than on a schedule — no extra moving part to fail.
+  if (Math.random() < 0.02) {
+    await sql`DELETE FROM model_calls WHERE id IN (
+      SELECT id FROM model_calls ORDER BY ts DESC OFFSET ${MODEL_CALLS_KEEP})`;
+  }
+}
+
+/** Aggregate model-call metrics, per stage and per model, over a window. */
+export async function getModelCallTelemetry(windowMs: number): Promise<ModelCallTelemetry> {
+  const sql = getSql();
+  const since = Date.now() - windowMs;
+
+  const [totals, byStage, byModel, byStop, recentErrors] = await Promise.all([
+    sql`SELECT count(*)::int AS n,
+               count(*) FILTER (WHERE NOT ok)::int AS failed,
+               coalesce(sum(input_tokens),0)::bigint AS in_tok,
+               coalesce(sum(output_tokens),0)::bigint AS out_tok,
+               avg(latency_ms) AS avg_latency,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms::float8) AS p50,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms::float8) AS p95,
+               max(latency_ms) AS max_latency,
+               avg(wall_ms) AS avg_wall
+        FROM model_calls WHERE ts >= ${since}`,
+    sql`SELECT stage AS k, count(*)::int AS n,
+               count(*) FILTER (WHERE NOT ok)::int AS failed,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms::float8) AS p50,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms::float8) AS p95,
+               coalesce(sum(input_tokens),0)::bigint AS in_tok,
+               coalesce(sum(output_tokens),0)::bigint AS out_tok,
+               avg(reply_chars) AS avg_chars
+        FROM model_calls WHERE ts >= ${since} GROUP BY stage ORDER BY n DESC`,
+    sql`SELECT model AS k, count(*)::int AS n FROM model_calls WHERE ts >= ${since} GROUP BY model`,
+    // A reply that keeps stopping on the token ceiling is the truncation signature.
+    sql`SELECT coalesce(stop_reason,'unknown') AS k, count(*)::int AS n
+        FROM model_calls WHERE ts >= ${since} AND ok GROUP BY 1`,
+    sql`SELECT stage, error, ts FROM model_calls
+        WHERE ts >= ${since} AND NOT ok ORDER BY ts DESC LIMIT 5`,
+  ]);
+
+  const t = totals[0] ?? {};
+  const n = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v));
+
+  return {
+    total: n(t.n),
+    failed: n(t.failed),
+    errorRate: n(t.n) > 0 ? n(t.failed) / n(t.n) : undefined,
+    inputTokens: n(t.in_tok),
+    outputTokens: n(t.out_tok),
+    avgLatencyMs: n(t.avg_latency) || undefined,
+    p50LatencyMs: n(t.p50) || undefined,
+    p95LatencyMs: n(t.p95) || undefined,
+    maxLatencyMs: n(t.max_latency) || undefined,
+    avgWallMs: n(t.avg_wall) || undefined,
+    byStage: byStage.map((r) => ({
+      stage: String(r.k),
+      calls: n(r.n),
+      failed: n(r.failed),
+      p50LatencyMs: n(r.p50) || undefined,
+      p95LatencyMs: n(r.p95) || undefined,
+      inputTokens: n(r.in_tok),
+      outputTokens: n(r.out_tok),
+      avgReplyChars: n(r.avg_chars) || undefined,
+    })),
+    byModel: Object.fromEntries(byModel.map((r) => [String(r.k), n(r.n)])),
+    byStopReason: Object.fromEntries(byStop.map((r) => [String(r.k), n(r.n)])),
+    recentErrors: recentErrors.map((r) => ({
+      stage: String(r.stage),
+      error: String(r.error ?? ''),
+      ts: n(r.ts),
+    })),
   };
 }

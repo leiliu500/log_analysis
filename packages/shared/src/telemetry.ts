@@ -91,6 +91,9 @@ export interface PlatformTelemetry {
     ruleCandidates: TelemetryBuckets;
   };
 
+  /** Model-call cost and latency, per stage. Absent when nothing has been recorded. */
+  models?: ModelCallTelemetry;
+
   poller: {
     runs: number;
     inWindow: number;
@@ -100,4 +103,45 @@ export interface PlatformTelemetry {
     anomaliesProduced: number;
     byTrigger: TelemetryBuckets;
   };
+}
+
+/**
+ * Model-call telemetry — what it COST to reach the decisions above: which model answered,
+ * how long it took, how many tokens it burned, and whether it failed.
+ *
+ * `latencyMs` figures are the PROVIDER's own measurement (Bedrock `metrics.latencyMs`);
+ * `avgWallMs` is our clock around the same call. Both are kept because the gap between
+ * them is our own overhead, and averaging them together would hide it.
+ */
+export interface ModelCallTelemetry {
+  total: number;
+  failed: number;
+  /** failed / total. Undefined with no calls — an unobserved rate is not zero. */
+  errorRate?: number;
+  inputTokens: number;
+  outputTokens: number;
+  avgLatencyMs?: number;
+  p50LatencyMs?: number;
+  p95LatencyMs?: number;
+  maxLatencyMs?: number;
+  avgWallMs?: number;
+  /** Per pipeline stage, so a regression is attributable instead of averaged away. */
+  byStage: Array<{
+    stage: string;
+    calls: number;
+    failed: number;
+    p50LatencyMs?: number;
+    p95LatencyMs?: number;
+    inputTokens: number;
+    outputTokens: number;
+    /**
+     * Mean reply length. A stage whose replies cluster at the ceiling is the truncation
+     * signature that produced unparseable validation JSON in production.
+     */
+    avgReplyChars?: number;
+  }>;
+  byModel: TelemetryBuckets;
+  /** `max_tokens` here means replies are being cut off, not that the model finished. */
+  byStopReason: TelemetryBuckets;
+  recentErrors: Array<{ stage: string; error: string; ts: number }>;
 }

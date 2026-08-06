@@ -373,6 +373,128 @@ export function TelemetryView() {
             )}
           </Section>
 
+
+          {/* ---- Model calls: what the decisions above COST ---- */}
+          <Section
+            title="Model calls"
+            note="latency and token cost per pipeline stage — provider-reported, not estimated"
+          >
+            {!t.models || t.models.total === 0 ? (
+              <p className="text-xs text-slate-500">
+                No model calls recorded in this window. Every Bedrock call is instrumented at the wrapper, so this
+                stays empty only while the agents are genuinely idle.
+              </p>
+            ) : (
+              <>
+                <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Stat
+                    label="Calls"
+                    value={fmt(t.models.total)}
+                    sub={`${fmt(t.models.failed)} failed${t.models.errorRate != null ? ` · ${pct(t.models.errorRate)}` : ''}`}
+                    tone={t.models.failed > 0 ? 'text-orange-300' : 'text-white'}
+                  />
+                  <Stat
+                    label="Latency p50 / p95"
+                    value={`${dur(t.models.p50LatencyMs)} / ${dur(t.models.p95LatencyMs)}`}
+                    sub={`max ${dur(t.models.maxLatencyMs)}`}
+                    title="Bedrock's own metrics.latencyMs. avgWall below is our clock around the same call — the gap is transport plus our overhead."
+                  />
+                  <Stat
+                    label="Tokens in / out"
+                    value={`${fmt(t.models.inputTokens)} / ${fmt(t.models.outputTokens)}`}
+                    sub={`mean wall ${dur(t.models.avgWallMs)}`}
+                    title="Reported by Bedrock usage.*, so this is actual consumption rather than an estimate."
+                  />
+                  <Stat
+                    label="Models in use"
+                    value={String(Object.keys(t.models.byModel).length)}
+                    sub={Object.keys(t.models.byModel).join(', ') || '—'}
+                  />
+                </div>
+
+                <div className="mb-3 overflow-x-auto rounded-xl border border-edge bg-panel">
+                  <table className="w-full text-left text-xs">
+                    <thead className="text-slate-500">
+                      <tr className="border-b border-edge">
+                        <th className="px-3 py-2">pipeline stage</th>
+                        <th className="px-3 py-2 text-right">calls</th>
+                        <th className="px-3 py-2 text-right">failed</th>
+                        <th className="px-3 py-2 text-right">p50</th>
+                        <th className="px-3 py-2 text-right">p95</th>
+                        <th className="px-3 py-2 text-right">tokens in</th>
+                        <th className="px-3 py-2 text-right">tokens out</th>
+                        <th className="px-3 py-2 text-right">mean reply</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-slate-300">
+                      {t.models.byStage.map((st, i) => (
+                        <tr key={st.stage} className="border-b border-edge/50">
+                          <td className="px-3 py-2">
+                            <span className="inline-flex items-center gap-1.5">
+                              <span
+                                className="h-2 w-2 rounded-sm"
+                                style={{ backgroundColor: CATEGORICAL[i % CATEGORICAL.length] }}
+                              />
+                              {st.stage}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmt(st.calls)}</td>
+                          <td className={`px-3 py-2 text-right tabular-nums ${st.failed > 0 ? 'text-orange-300' : 'text-slate-500'}`}>
+                            {fmt(st.failed)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-400">{dur(st.p50LatencyMs)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-400">{dur(st.p95LatencyMs)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-400">{fmt(st.inputTokens)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-400">{fmt(st.outputTokens)}</td>
+                          <td
+                            className="px-3 py-2 text-right tabular-nums text-slate-400"
+                            title="Mean reply length. Replies clustering at the ceiling are the truncation signature that produced unparseable validation JSON."
+                          >
+                            {st.avgReplyChars != null ? `${Math.round(st.avgReplyChars)}c` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl border border-edge bg-panel p-3">
+                    <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">
+                      Stop reason
+                      <span className="ml-1 normal-case text-slate-600">
+                        — max_tokens means replies are being cut off
+                      </span>
+                    </div>
+                    <BarRows
+                      buckets={t.models.byStopReason}
+                      colorOf={(k) => (k === 'max_tokens' ? '#d97706' : k === 'end_turn' ? '#059669' : '#475569')}
+                      emptyNote="No completed calls in this window."
+                    />
+                  </div>
+                  <div className="rounded-xl border border-edge bg-panel p-3">
+                    <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Recent failures</div>
+                    {t.models.recentErrors.length === 0 ? (
+                      <p className="text-xs text-slate-500">No model call has failed in this window.</p>
+                    ) : (
+                      <ul className="space-y-1 text-[11px]">
+                        {t.models.recentErrors.map((e, i) => (
+                          <li key={i} className="flex gap-2">
+                            <span className="shrink-0 text-slate-500">{ago(e.ts)}</span>
+                            <span className="shrink-0 text-slate-400">{e.stage}</span>
+                            <span className="truncate text-orange-300/90" title={e.error}>
+                              {e.error}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </Section>
+
           {/* ---- Validation ---- */}
           <Section title="Validation" note="deterministic worker verdicts across every shadowed transaction">
             <div className="grid gap-4 lg:grid-cols-2">
