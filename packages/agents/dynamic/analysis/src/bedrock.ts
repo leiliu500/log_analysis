@@ -1,3 +1,4 @@
+import { insertModelCall } from '@log/db';
 import {
   BedrockRuntimeClient,
   ConverseCommand,
@@ -38,15 +39,36 @@ export interface ConverseOptions {
   system?: string;
   maxTokens?: number;
   temperature?: number;
+  /**
+   * Which pipeline stage is asking. Recorded on every call so latency, token use and
+   * failure can be attributed to a STAGE rather than averaged into one platform-wide
+   * number that hides which part is degrading.
+   */
+  stage?: string;
+  /** Owning application, where the call is made on behalf of one. */
+  application?: string;
 }
 
-/** Single-shot text completion via the Bedrock Converse API. */
+/**
+ * Record one model call, best-effort. Telemetry must never be able to fail a model call
+ * or slow it down, so this is fire-and-forget and swallows its own errors: a metrics
+ * table that is briefly unwritable is a reporting gap, not an outage.
+ */
+function record(row: Parameters<typeof insertModelCall>[0]): void {
+  void insertModelCall(row).catch(() => {});
+}
+
+/** Single-shot text completion via the Bedrock Converse API, instrumented. */
 export async function converse(
   prompt: string,
   opts: ConverseOptions = {},
 ): Promise<string> {
   const messages: Message[] = [{ role: 'user', content: [{ text: prompt }] }];
-  const res = await client().send(
+  const startedAt = Date.now();
+  const base = { ts: startedAt, stage: opts.stage ?? 'unattributed', model: MODEL_ID, application: opts.application };
+  let res;
+  try {
+    res = await client().send(
     new ConverseCommand({
       modelId: MODEL_ID,
       messages,
@@ -57,8 +79,24 @@ export async function converse(
       },
     }),
   );
+  } catch (err) {
+    record({ ...base, ok: false, wallMs: Date.now() - startedAt, error: (err as Error).message.slice(0, 300) });
+    throw err;
+  }
   const parts = res.output?.message?.content ?? [];
-  return parts.map((p) => ('text' in p ? p.text : '')).join('').trim();
+  const text = parts.map((p) => ('text' in p ? p.text : '')).join('').trim();
+  record({
+    ...base,
+    ok: true,
+    wallMs: Date.now() - startedAt,
+    // Provider-reported, not our wall clock — kept alongside it so the gap is visible.
+    latencyMs: res.metrics?.latencyMs,
+    inputTokens: res.usage?.inputTokens,
+    outputTokens: res.usage?.outputTokens,
+    replyChars: text.length,
+    stopReason: res.stopReason,
+  });
+  return text;
 }
 
 /**

@@ -173,7 +173,7 @@ const REASONER_MAX_TOKENS = process.env.INGEST_DYNAMIC_MAXTOKENS
   ? Number(process.env.INGEST_DYNAMIC_MAXTOKENS)
   : undefined;
 const defaultReasoner: TransitionReasoner = (system, user) =>
-  converseJson<Partial<TransitionDecision>>(user, { system, temperature: 0, maxTokens: REASONER_MAX_TOKENS });
+  converseJson<Partial<TransitionDecision>>(user, { system, temperature: 0, maxTokens: REASONER_MAX_TOKENS, stage: 'ingest-transition' });
 
 /**
  * The dynamic lifecycle step (pure — no DB). Extraction/correlation + phaseTs bookkeeping
@@ -488,6 +488,14 @@ export interface AdvanceResult {
   anomalies: Anomaly[];
   /** Per-application agent counts + minted anomalies (application id → counts). */
   byApplication: Record<string, AgentCounts & { anomalies: number }>;
+  /**
+   * The deterministic/model split for this poll, surfaced so the caller can PERSIST it.
+   * Computed since the fast path landed but previously visible only in a log line — and
+   * it is the number that says whether the model is back on the ingestion critical path.
+   */
+  fastPathed: number;
+  reasoned: number;
+  deferredOverCap: number;
 }
 
 const ALERT_SEVERITIES: Severity[] = ['high', 'critical'];
@@ -640,7 +648,16 @@ export async function advanceAgents(
     byApplication[id] = { ...c, anomalies: anomaliesByApp[id] ?? 0 };
   }
 
-  return { spawned: step.spawned, advanced: step.advanced, closed: step.closed, anomalies, byApplication };
+  return {
+    spawned: step.spawned,
+    advanced: step.advanced,
+    closed: step.closed,
+    anomalies,
+    byApplication,
+    fastPathed: step.fastPathed,
+    reasoned: step.reasoned,
+    deferredOverCap: step.deferredOverCap,
+  };
 }
 
 /** A deterministic Anomaly for a terminally failed/errored (timed-out) agent. */

@@ -447,7 +447,7 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
     `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}${rawBlock ? `\n\n${rawBlock}` : ''}`,
     // No per-site ceiling: a response body can be several KB and the old 2500/8000 split
     // truncated answers mid-JSON. Inherits the platform-wide BEDROCK_MAX_TOKENS.
-    { system, temperature: 0 },
+    { system, temperature: 0, stage: 'assistant-qa' },
   );
   // Guard the one free-form LLM output: flag any transaction id it cited that does
   // not actually appear in the retrieved logs, so a fabricated id is never trusted.

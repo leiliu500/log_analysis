@@ -245,7 +245,7 @@ export async function understandSimulation(
   }
   const user = `Target log groups (use these exact names): ${JSON.stringify([...app.logGroups])}\n\nUser request (may include pasted raw logs):\n"""\n${prompt.slice(0, 16000)}\n"""`;
   try {
-    const raw = await converseJson<Record<string, unknown>>(user, { system, temperature: 0 });
+    const raw = await converseJson<Record<string, unknown>>(user, { system, temperature: 0, stage: 'simulate' });
     return normalizePlan(raw, app);
   } catch {
     return undefined;
@@ -290,7 +290,7 @@ async function extractOneCommand(seg: string): Promise<SimulateCommand> {
   let llm: SimulateCommand | undefined;
   try {
     llm = normalizeCommand(
-      await converseJson<Record<string, unknown>>(seg, { system: EXTRACT_ONE_SYSTEM, temperature: 0 }),
+      await converseJson<Record<string, unknown>>(seg, { system: EXTRACT_ONE_SYSTEM, temperature: 0, stage: 'simulate' }),
     );
   } catch {
     /* llm stays undefined */
