@@ -144,4 +144,18 @@ export interface ModelCallTelemetry {
   /** `max_tokens` here means replies are being cut off, not that the model finished. */
   byStopReason: TelemetryBuckets;
   recentErrors: Array<{ stage: string; error: string; ts: number }>;
+  /**
+   * Bedrock Guardrail activity. All zeros when no guardrail is provisioned — which is
+   * indistinguishable from a provisioned guardrail that never fires, and deliberately so:
+   * the dashboard should show "nothing was blocked", and whether a guardrail EXISTS is a
+   * deployment fact, not a metric.
+   */
+  guardrail: {
+    /** Calls the guardrail STOPPED. Every one is a request that got no answer. */
+    blocked: number;
+    /** Calls that returned, with a policy having redacted part of the reply. */
+    masked: number;
+    /** `content:PROMPT_ATTACK`, `pii:AWS_SECRET_KEY`, … — what to tune. */
+    byPolicy: TelemetryBuckets;
+  };
 }

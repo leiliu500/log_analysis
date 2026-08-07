@@ -212,6 +212,14 @@ export interface ModelCallRow {
   replyChars?: number;
   stopReason?: string;
   error?: string;
+  /**
+   * Bedrock Guardrail policies that fired, as `policy:name` (`content:PROMPT_ATTACK`,
+   * `pii:AWS_SECRET_KEY`). Empty on the overwhelming majority of calls. Non-empty with a
+   * `guardrail_intervened` stop reason means the call was BLOCKED; non-empty without one
+   * means the reply was MASKED — which nothing else records, so the answer a user saw
+   * would otherwise differ from anything we can reconstruct.
+   */
+  guardrailPolicies?: string[];
 }
 
 /** Keep a bounded recent history: this is an operational stream, not an audit log. */
@@ -224,11 +232,12 @@ const MODEL_CALLS_KEEP = Number(process.env.MODEL_CALLS_KEEP ?? 20000);
 export async function insertModelCall(r: ModelCallRow): Promise<void> {
   const sql = getSql();
   await sql`INSERT INTO model_calls
-    (id, ts, stage, model, application, ok, latency_ms, wall_ms, input_tokens, output_tokens, reply_chars, stop_reason, error)
+    (id, ts, stage, model, application, ok, latency_ms, wall_ms, input_tokens, output_tokens, reply_chars, stop_reason, error, guardrail_policies)
     VALUES (${`${r.ts}-${Math.random().toString(36).slice(2, 10)}`}, ${r.ts}, ${r.stage}, ${r.model},
             ${r.application ?? null}, ${r.ok}, ${r.latencyMs ?? null}, ${Math.round(r.wallMs)},
             ${r.inputTokens ?? null}, ${r.outputTokens ?? null}, ${r.replyChars ?? null},
-            ${r.stopReason ?? null}, ${r.error ?? null})`;
+            ${r.stopReason ?? null}, ${r.error ?? null},
+            ${r.guardrailPolicies?.length ? r.guardrailPolicies : null})`;
   // Trim opportunistically rather than on a schedule — no extra moving part to fail.
   if (Math.random() < 0.02) {
     await sql`DELETE FROM model_calls WHERE id IN (
@@ -241,7 +250,7 @@ export async function getModelCallTelemetry(windowMs: number): Promise<ModelCall
   const sql = getSql();
   const since = Date.now() - windowMs;
 
-  const [totals, byStage, byModel, byStop, recentErrors] = await Promise.all([
+  const [totals, byStage, byModel, byStop, recentErrors, guardrail, guardrailByPolicy] = await Promise.all([
     sql`SELECT count(*)::int AS n,
                count(*) FILTER (WHERE NOT ok)::int AS failed,
                coalesce(sum(input_tokens),0)::bigint AS in_tok,
@@ -266,6 +275,17 @@ export async function getModelCallTelemetry(windowMs: number): Promise<ModelCall
         FROM model_calls WHERE ts >= ${since} AND ok GROUP BY 1`,
     sql`SELECT stage, error, ts FROM model_calls
         WHERE ts >= ${since} AND NOT ok ORDER BY ts DESC LIMIT 5`,
+    // Blocked vs masked, split on the stop reason. Both are guardrail activity, but they
+    // mean opposite things operationally: a block is a request that got NO answer (and is
+    // a false positive until proven otherwise), a mask is an answer that was delivered
+    // with a secret removed — which is the guardrail working exactly as intended.
+    sql`SELECT count(*) FILTER (WHERE stop_reason = 'guardrail_intervened')::int AS blocked,
+               count(*) FILTER (WHERE stop_reason IS DISTINCT FROM 'guardrail_intervened')::int AS masked
+        FROM model_calls
+        WHERE ts >= ${since} AND guardrail_policies IS NOT NULL`,
+    sql`SELECT p AS k, count(*)::int AS n
+        FROM model_calls, unnest(guardrail_policies) p
+        WHERE ts >= ${since} GROUP BY 1 ORDER BY n DESC`,
   ]);
 
   const t = totals[0] ?? {};
@@ -294,6 +314,11 @@ export async function getModelCallTelemetry(windowMs: number): Promise<ModelCall
     })),
     byModel: Object.fromEntries(byModel.map((r) => [String(r.k), n(r.n)])),
     byStopReason: Object.fromEntries(byStop.map((r) => [String(r.k), n(r.n)])),
+    guardrail: {
+      blocked: n(guardrail[0]?.blocked),
+      masked: n(guardrail[0]?.masked),
+      byPolicy: toBuckets(guardrailByPolicy),
+    },
     recentErrors: recentErrors.map((r) => ({
       stage: String(r.stage),
       error: String(r.error ?? ''),

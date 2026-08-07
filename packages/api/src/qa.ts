@@ -6,7 +6,7 @@ import type {
   TransactionProtocol,
 } from '@log/shared';
 import { loadPrompt, coalesceEntries } from '@log/shared';
-import { converse, parseBatch } from '@log/analysis';
+import { converse, parseBatch, GuardrailBlockedError } from '@log/analysis';
 import { connectorFor } from '@log/ingestion';
 import { applicationRegistry } from '@log/agents';
 import { apiflcHttpOutcomes } from '@log/app-apiflc';
@@ -443,12 +443,32 @@ export async function answerLogQuestion(message: string, route: RouteDecision): 
   const related = new Set<ParsedLog>(focusId ? (app.relatedLogs?.(focusId, parsed) ?? []) : []);
   const rawBlock = focusId ? rawMessagesFor(focusId, enriched, related) : '';
 
-  const raw = await converse(
-    `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}${rawBlock ? `\n\n${rawBlock}` : ''}`,
-    // No per-site ceiling: a response body can be several KB and the old 2500/8000 split
-    // truncated answers mid-JSON. Inherits the platform-wide BEDROCK_MAX_TOKENS.
-    { system, temperature: 0, stage: 'assistant-qa' },
-  );
+  let raw: string;
+  try {
+    raw = await converse(
+      `QUESTION: ${message}\n\nAGGREGATES:\n${summary}\n\nMESSAGES (one per line, with ids):\n${table || '(none)'}${extra ? `\n\n${extra}` : ''}${rawBlock ? `\n\n${rawBlock}` : ''}`,
+      // No per-site ceiling: a response body can be several KB and the old 2500/8000 split
+      // truncated answers mid-JSON. Inherits the platform-wide BEDROCK_MAX_TOKENS.
+      //
+      // `untrusted` marks the user's own sentence as the ONLY span scanned for prompt
+      // injection. This is the platform's one endpoint that turns typed text into a model
+      // prompt, and the same supervisor stack can reach real downstream endpoints, so the
+      // question is genuinely hostile input. The aggregates, message table and raw log
+      // bodies around it are deliberately left untagged: logs quote arbitrary strings —
+      // including the imperative phrasing an injection filter keys on — so scanning them
+      // would block ordinary incident analysis. See guardedContent().
+      { system, temperature: 0, stage: 'assistant-qa', untrusted: message },
+    );
+  } catch (err) {
+    // A guardrail decision is an ANSWER, not a failure. Returning the policy's own
+    // message keeps the response shape intact (meta and logs still describe the real
+    // window the user asked about) instead of collapsing the whole request into a 500
+    // that tells them nothing about why it stopped.
+    if (err instanceof GuardrailBlockedError) {
+      return { answer: err.userMessage, logs: parsed.slice(0, 50), meta: answerMeta };
+    }
+    throw err;
+  }
   // Guard the one free-form LLM output: flag any transaction id it cited that does
   // not actually appear in the retrieved logs, so a fabricated id is never trusted.
   const { answer } = groundAnswer(raw, parsed);

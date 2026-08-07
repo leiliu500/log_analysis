@@ -1,4 +1,5 @@
 export * from './bedrock.js';
+export * from './guardrail.js';
 export * from './extract.js';
 export * from './fingerprint.js';
 export * from './parser.js';

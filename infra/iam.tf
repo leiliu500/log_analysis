@@ -33,6 +33,15 @@ resource "aws_iam_role_policy" "lambda_inline" {
         Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
         Resource = "*"
       },
+      # Converse rejects a guardrailConfig the caller is not allowed to apply, so without
+      # this every model call in the ingest/validation Lambdas fails once the guardrail is
+      # wired in — not silently degrades to unguarded, fails outright.
+      {
+        Sid      = "ApplyGuardrail"
+        Effect   = "Allow"
+        Action   = ["bedrock:ApplyGuardrail"]
+        Resource = "*"
+      },
       {
         Sid      = "ReadLogs"
         Effect   = "Allow"
@@ -95,6 +104,20 @@ resource "aws_iam_role_policy" "bedrock_agent" {
         Effect   = "Allow"
         Action   = ["lambda:InvokeFunction"]
         Resource = aws_lambda_function.action_group.arn
+      },
+      # The agent's OWN service role applies the guardrail attached in bedrock.tf — the
+      # agent runtime evaluates it, not the caller. Missing this makes an agent with a
+      # guardrail_configuration fail on every turn.
+      #
+      # Guarded resource, unlike the app roles': there is exactly one guardrail an agent
+      # should ever apply, and an agent that could apply an arbitrary one could apply an
+      # empty one. Falls back to "*" only when the guardrail is disabled, where the
+      # statement grants nothing that is reachable anyway.
+      {
+        Sid      = "ApplyGuardrail"
+        Effect   = "Allow"
+        Action   = ["bedrock:ApplyGuardrail"]
+        Resource = var.guardrail_enabled ? local.guardrail_arn : "*"
       },
       {
         # Supervisor router must be able to reach its collaborator agent aliases.
@@ -160,12 +183,35 @@ resource "aws_iam_role_policy" "ecs_task" {
   role = aws_iam_role.ecs_task.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:InvokeAgent"]
         Resource = "*"
       },
+      {
+        Sid      = "ApplyGuardrail"
+        Effect   = "Allow"
+        Action   = ["bedrock:ApplyGuardrail"]
+        Resource = "*"
+      },
+      # Makes the guardrail NON-BYPASSABLE for the API task: a Converse call that omits it
+      # is denied at the IAM layer, so protection no longer depends on the application
+      # remembering to attach it (or on nobody shipping a code path that forgets).
+      #
+      # Off by default — see guardrail_enforce_iam in variables.tf for why enabling it in
+      # the same apply that creates the guardrail would take every AI stage offline.
+      # Scoped to the text foundation model so Titan embedding calls, which legitimately
+      # carry no guardrail, are unaffected.
+      ], var.guardrail_enforce_iam && var.guardrail_enabled ? [{
+        Sid      = "DenyUnguardedModelInvoke"
+        Effect   = "Deny"
+        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+        Resource = "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${local.foundation_model}"
+        Condition = {
+          StringNotEquals = { "bedrock:GuardrailIdentifier" = "${local.guardrail_arn}:${local.guardrail_version}" }
+        }
+      }] : [], [
       {
         Effect   = "Allow"
         Action   = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:PutLogEvents", "logs:CreateLogStream", "logs:CreateLogGroup", "logs:DescribeLogStreams", "logs:DescribeLogGroups"]
@@ -176,6 +222,6 @@ resource "aws_iam_role_policy" "ecs_task" {
         Action   = ["s3:GetObject", "s3:ListBucket", "ses:SendEmail"]
         Resource = "*"
       }
-    ]
+    ])
   })
 }

@@ -11,6 +11,16 @@ output "supervisor_agent_alias_id" {
   value = aws_bedrockagent_agent_alias.supervisor.agent_alias_id
 }
 
+output "guardrail_id" {
+  description = "Bedrock Guardrail applied to every model call. Empty when guardrail_enabled = false."
+  value       = local.guardrail_id
+}
+
+output "guardrail_version" {
+  description = "Pinned guardrail version. Policy edits do NOT take effect until guardrail_revision is bumped."
+  value       = local.guardrail_version
+}
+
 output "rds_endpoint" {
   value = aws_db_instance.postgres.address
 }

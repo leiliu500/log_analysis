@@ -108,6 +108,12 @@ resource "aws_ecs_task_definition" "api" {
       # Assistant, chat, simulator, on-demand analysis). Kept identical to the Lambdas'
       # so the same question answered by either half gets the same budget.
       { name = "BEDROCK_MAX_TOKENS", value = tostring(var.bedrock_max_tokens) },
+      # Guardrail for the API container — the half that serves the Log Assistant, i.e. the
+      # only path where a human's typed words become a model prompt. Kept identical to the
+      # Lambdas' so the same question answered by either half is subject to the same
+      # policy. Empty when disabled; the runtime then sends the original request.
+      { name = "BEDROCK_GUARDRAIL_ID", value = local.guardrail_id },
+      { name = "BEDROCK_GUARDRAIL_VERSION", value = local.guardrail_version },
       # The API runs the SAME validateAgents() as the scheduled Lambda whenever someone
       # hits "Validate now", so it must be configured identically. Without these it fell
       # back to code defaults — and the default review epoch is 0, meaning a manual run
