@@ -44,6 +44,79 @@ variable "bedrock_model_arn" {
   default     = "openai.gpt-oss-120b-1:0"
 }
 
+# --- Bedrock Guardrail (model-call safety policy) -----------------------------
+# See guardrail.tf for why the policy is shaped the way it is. These knobs exist so the
+# protection can be re-tuned or switched off from Terraform without a code deploy — the
+# runtime reads BEDROCK_GUARDRAIL_ID and treats an empty value as "no guardrail".
+
+variable "guardrail_enabled" {
+  description = <<-EOT
+    Create the guardrail and apply it to every model call and hosted agent. false =
+    destroy it and clear the env vars, restoring exactly the pre-guardrail request shape.
+    The escape hatch for the failure mode that matters: a policy blocking legitimate
+    incident analysis must be reversible in one apply, without waiting on a code change.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "guardrail_revision" {
+  description = <<-EOT
+    Bump to cut a NEW numbered guardrail version from the current policy. Terraform cannot
+    see that the policy body changed underneath an existing version, so edits to
+    guardrail.tf do NOT reach production until this is incremented — the same deliberate
+    gate the Bedrock flow uses (flow_revision).
+  EOT
+  type        = number
+  default     = 1
+}
+
+variable "guardrail_masked_pii" {
+  description = <<-EOT
+    Bedrock managed PII types anonymized out of model replies.
+
+    Deliberately NARROW, and widening it is not free. This platform's job is to reproduce
+    transaction payloads verbatim and cite real message ids, so masking domain identifiers
+    breaks the product in a way that still looks healthy: the answer arrives, with the
+    number the user asked for replaced by a placeholder. Types like US_BANK_ACCOUNT_NUMBER
+    and EMAIL are therefore NOT masked by default — for an SCP/apiflc settlement corpus
+    those are the payload, not a leak.
+
+    The default set is the content that is always a credential and never an answer.
+  EOT
+  type        = list(string)
+  default = [
+    "AWS_ACCESS_KEY",
+    "AWS_SECRET_KEY",
+    "PASSWORD",
+    "CREDIT_DEBIT_CARD_NUMBER",
+    "CREDIT_DEBIT_CARD_CVV",
+    "PIN",
+  ]
+}
+
+variable "guardrail_enforce_iam" {
+  description = <<-EOT
+    Add an IAM Deny so InvokeModel on the text foundation model FAILS unless it carries
+    this guardrail — making the protection non-bypassable rather than dependent on the
+    application remembering to attach it.
+
+    Default false ON PURPOSE, because of this platform's deploy topology: application code
+    ships as a CodeBuild container image, separately from terraform apply. Enabling this in
+    the same apply that creates the guardrail would deny every model call made by the
+    already-running image, which does not yet read BEDROCK_GUARDRAIL_ID — a self-inflicted
+    outage of every AI stage.
+
+    Correct sequence: apply with this false, rebuild and deploy the images, confirm
+    guardrail activity is showing up in model-call telemetry, then set this true.
+
+    Scoped to the text model only; the Titan embedding model is excluded because embedding
+    calls pass no guardrail and would otherwise be denied along with it.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "db_username" {
   type    = string
   default = "loguser"

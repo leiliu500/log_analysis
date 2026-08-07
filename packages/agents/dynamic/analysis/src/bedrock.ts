@@ -5,6 +5,14 @@ import {
   InvokeModelCommand,
   type Message,
 } from '@aws-sdk/client-bedrock-runtime';
+import {
+  GuardrailBlockedError,
+  blockedMessage,
+  firedPolicies,
+  guardedContent,
+  guardrailConfig,
+  wasBlocked,
+} from './guardrail.js';
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 const MODEL_ID =
@@ -47,6 +55,17 @@ export interface ConverseOptions {
   stage?: string;
   /** Owning application, where the call is made on behalf of one. */
   application?: string;
+  /**
+   * The span of `prompt` a HUMAN typed, verbatim — the only part scanned for prompt
+   * injection when a guardrail is configured.
+   *
+   * Pass this on any path that embeds an end user's own words (the Log Assistant's
+   * question); leave it unset for prompts built solely from our instructions and
+   * retrieved logs. Deliberately opt-in: tagging retrieved log content instead would
+   * flag routine incident data as an attack, because logs quote the very strings an
+   * injection filter looks for. See {@link guardedContent}.
+   */
+  untrusted?: string;
 }
 
 /**
@@ -63,7 +82,7 @@ export async function converse(
   prompt: string,
   opts: ConverseOptions = {},
 ): Promise<string> {
-  const messages: Message[] = [{ role: 'user', content: [{ text: prompt }] }];
+  const messages: Message[] = [{ role: 'user', content: guardedContent(prompt, opts.untrusted) }];
   const startedAt = Date.now();
   const base = { ts: startedAt, stage: opts.stage ?? 'unattributed', model: MODEL_ID, application: opts.application };
   let res;
@@ -77,6 +96,10 @@ export async function converse(
         maxTokens: opts.maxTokens ?? MAX_TOKENS,
         temperature: opts.temperature ?? 0.1,
       },
+      // Undefined when no guardrail is provisioned, which is exactly the pre-guardrail
+      // request — so an unconfigured environment behaves identically rather than failing
+      // every call on an identifier that does not resolve.
+      guardrailConfig: guardrailConfig(),
     }),
   );
   } catch (err) {
@@ -85,6 +108,26 @@ export async function converse(
   }
   const parts = res.output?.message?.content ?? [];
   const text = parts.map((p) => ('text' in p ? p.text : '')).join('').trim();
+  // A guardrail intervention is a POLICY outcome, not a transport failure: the call
+  // succeeded, was billed, and has real latency and token counts. Record it as such —
+  // with the policies that fired — so an operator can tell a blocked request apart from
+  // a Bedrock outage, and can see a policy that is firing on legitimate traffic before
+  // users report the assistant "not answering".
+  if (wasBlocked(res)) {
+    const policies = firedPolicies(res.trace);
+    record({
+      ...base,
+      ok: true,
+      wallMs: Date.now() - startedAt,
+      latencyMs: res.metrics?.latencyMs,
+      inputTokens: res.usage?.inputTokens,
+      outputTokens: res.usage?.outputTokens,
+      replyChars: text.length,
+      stopReason: res.stopReason,
+      guardrailPolicies: policies,
+    });
+    throw new GuardrailBlockedError(blockedMessage(res), policies);
+  }
   record({
     ...base,
     ok: true,
@@ -95,6 +138,10 @@ export async function converse(
     outputTokens: res.usage?.outputTokens,
     replyChars: text.length,
     stopReason: res.stopReason,
+    // Present without a block when a policy MASKED rather than stopped the reply (a card
+    // number anonymised out of an answer). Silent otherwise: the reply is not what the
+    // model actually said, and nothing else would ever reveal that.
+    guardrailPolicies: firedPolicies(res.trace),
   });
   return text;
 }

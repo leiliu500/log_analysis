@@ -33,8 +33,15 @@ locals {
     # generously. A tight ceiling is the failure mode that bites: the reasoning model
     # spends hidden tokens from this same budget and the visible reply arrives truncated.
     BEDROCK_MAX_TOKENS = tostring(var.bedrock_max_tokens)
-    CLOUDWATCH_LOG_GROUPS  = join(",", concat(var.cloudwatch_log_groups, var.application_log_groups))
-    APP_ENDPOINTS_JSON     = var.app_endpoints_json
+    # Guardrail applied to every Converse call these Lambdas make (ingest transitions,
+    # validation review, analysis reasoning). Empty when guardrail_enabled = false, which
+    # the runtime reads as "no guardrail" and sends the original unguarded request — so
+    # switching it off never leaves the app pointing at an identifier that no longer
+    # resolves, which would fail every call rather than degrade.
+    BEDROCK_GUARDRAIL_ID      = local.guardrail_id
+    BEDROCK_GUARDRAIL_VERSION = local.guardrail_version
+    CLOUDWATCH_LOG_GROUPS     = join(",", concat(var.cloudwatch_log_groups, var.application_log_groups))
+    APP_ENDPOINTS_JSON        = var.app_endpoints_json
     # System-of-record reconciliation endpoints for the validation worker. Empty by
     # default ⇒ reconciliation is disabled (returns 'unknown', never affects a verdict).
     # Set these to activate the cross-check against the downstream ledger / Data Services.

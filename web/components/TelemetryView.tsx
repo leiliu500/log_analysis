@@ -491,6 +491,32 @@ export function TelemetryView() {
                     )}
                   </div>
                 </div>
+
+                {/* Guardrail activity. Rendered ONLY when something fired — a permanently
+                    empty panel trains people to stop reading it, and "no guardrail
+                    provisioned" and "guardrail provisioned but quiet" both legitimately
+                    produce zeros here. When it does appear it is worth looking at:
+                    `blocked` counts requests that received NO answer. */}
+                {t.models.guardrail && t.models.guardrail.blocked + t.models.guardrail.masked > 0 && (
+                  <div className="rounded-xl border border-edge bg-panel p-3">
+                    <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">
+                      Guardrail
+                      <span className="ml-1 normal-case text-slate-600">
+                        — {fmt(t.models.guardrail.blocked)} blocked (no answer returned),{' '}
+                        {fmt(t.models.guardrail.masked)} masked (answered with content redacted)
+                      </span>
+                    </div>
+                    <BarRows
+                      buckets={t.models.guardrail.byPolicy}
+                      // Blocking policies read as warnings, redacting ones as normal
+                      // operation: a masked secret is the guardrail doing its job, while a
+                      // prompt-attack block is either a real attempt or a false positive,
+                      // and either way somebody has to look at it.
+                      colorOf={(k) => (k.startsWith('pii:') || k.startsWith('regex:') ? '#059669' : '#d97706')}
+                      emptyNote="No guardrail policy fired in this window."
+                    />
+                  </div>
+                )}
               </>
             )}
           </Section>
