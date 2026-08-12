@@ -7,8 +7,9 @@ import {
   parseAckStatus,
   splitInstructions,
   separateSamplesAndInstructions,
+  rawMessageFromLine,
 } from './simulate.js';
-import { buildVerbatimRecords } from './simulator.js';
+import { buildRawMessageRecord, buildVerbatimRecords } from './simulator.js';
 import { parseLogGroup, resolveLogGroup } from '@log/app-scp';
 import { SimulateRequest } from '@log/shared';
 
@@ -132,6 +133,40 @@ test('pasted XML samples + (4)/(5) instructions are separated', () => {
 test('single command / XML is not split', () => {
   assert.equal(splitInstructions(REQ4).length, 1);
   assert.equal(splitInstructions('<ns2:cashMessage>simulate looking text</ns2:cashMessage>').length, 1);
+});
+
+test('agent-selected raw payload start keeps a failed stack trace opaque', () => {
+  const stack = [
+    '(7) simulate log message below and write to adt-d2-scp-restapp-log-group:',
+    'com.ibm.msg.client.jms.DetailedJMSException: JMSWMQ2020: Failed to connect',
+    '',
+    'Caused by: java.security.UnrecoverableKeyException: Cannot recover key',
+  ].join('\n');
+
+  assert.equal(
+    rawMessageFromLine(stack, 2),
+    [
+      'com.ibm.msg.client.jms.DetailedJMSException: JMSWMQ2020: Failed to connect',
+      '',
+      'Caused by: java.security.UnrecoverableKeyException: Cannot recover key',
+    ].join('\n'),
+  );
+  assert.equal(parseLogGroup(stack), 'adt-d2-scp-restapp-log-group');
+});
+
+test('raw multiline content becomes one CloudWatch event', () => {
+  const samples = 'first line: Failed to connect\n\nCaused by: Cannot recover key';
+  const req = SimulateRequest.parse({
+    application: 'scp',
+    samples,
+    sinks: ['cloudwatch'],
+    logGroup: 'adt-d2-scp-restapp-log-group',
+  });
+  const { record } = buildRawMessageRecord(req, 1234);
+
+  assert.equal(record.stream, 'adt-d2-scp-restapp-log-group');
+  assert.equal(record.timestamp, 1234);
+  assert.equal(record.raw, samples);
 });
 
 test('ack status negation', () => {

@@ -9,7 +9,7 @@ import {
 import { parseLogGroup, DEFAULT_CASHMESSAGE_SAMPLES } from '@log/app-scp';
 import { converseJson } from '@log/analysis';
 import { applicationRegistry } from '@log/applications';
-import { simulate, simulateVerbatim } from './simulator.js';
+import { simulate, simulateRawMessage, simulateVerbatim } from './simulator.js';
 
 /**
  * How many sets to generate. The explicit "N request/ack/response/sets" phrase
@@ -131,21 +131,22 @@ export function splitInstructions(prompt: string): string[] {
 const SEGMENT_SYSTEM = loadPrompt('apps/scp/simulate.segment.md');
 
 /**
- * Segment a prompt into one text span per command. Deterministic splitting
- * (numbered markers / repeated "simulate") is tried first because it is exact;
- * only when that yields a single span do we ask the LLM to segment, which
+ * Segment a prompt into one text span per command. The agent classifies raw
+ * pasted content before deterministic splitting. For transactions, numbered
+ * markers and repeated "simulate" remain authoritative; the model also
  * handles conjunction-joined prose like "3 … success and 1 … failure". Each
  * returned span is still parsed by the authoritative keyword regexes downstream.
  */
 export async function segmentCommands(prompt: string): Promise<string[]> {
   if (hasCashXml(prompt)) return [prompt];
   const det = splitInstructions(prompt);
-  if (det.length >= 2) return det;
   try {
-    const out = await converseJson<{ commands?: unknown }>(prompt, {
+    const out = await converseJson<{ mode?: unknown; commands?: unknown }>(prompt, {
       system: SEGMENT_SYSTEM,
       temperature: 0,
     });
+    if (out.mode === 'raw') return det;
+    if (det.length >= 2) return det;
     const cmds = Array.isArray(out.commands)
       ? out.commands.map((c) => String(c).trim()).filter(Boolean)
       : [];
@@ -182,11 +183,16 @@ export function buildSimulateRequest(message: string, route: RouteDecision): Sim
 
 /** One simulation command as understood from the user's request. */
 export interface SimulateCommand {
+  /** Prompt-classified behavior; omitted means a cashMessage transaction. */
+  mode?: 'transaction' | 'raw';
   count: number;
   messageTypes: ('REQUEST' | 'ACK' | 'RESPONSE')[];
   ackStatus: 'success' | 'failure';
   startMessageId?: string;
   application?: string;
+  /** Original pasted payload, populated from the model-provided start line. */
+  rawMessage?: string;
+  rawContentStartLine?: number;
   /** Target CloudWatch log group (from an explicit name or a content type). */
   logGroup?: string;
 }
@@ -258,13 +264,24 @@ function normalizeCommand(c: Record<string, unknown>): SimulateCommand {
     .map((t) => String(t).toUpperCase())
     .filter((t): t is 'REQUEST' | 'ACK' | 'RESPONSE' => ['REQUEST', 'ACK', 'RESPONSE'].includes(t));
   const sid = typeof c.startMessageId === 'string' && c.startMessageId.trim() ? c.startMessageId.trim() : undefined;
+  const contentStartLine = Number(c.contentStartLine);
   return {
+    mode: c.mode === 'raw' ? 'raw' : 'transaction',
     count: Math.max(1, Math.floor(Number(c.count) || 1)),
-    messageTypes: types.length ? types : ['REQUEST', 'ACK', 'RESPONSE'],
+    messageTypes: c.mode === 'raw' ? [] : types.length ? types : ['REQUEST', 'ACK', 'RESPONSE'],
     ackStatus: c.ackStatus === 'failure' ? 'failure' : 'success',
     startMessageId: sid,
     application: typeof c.application === 'string' ? c.application : undefined,
+    rawContentStartLine:
+      Number.isInteger(contentStartLine) && contentStartLine >= 1 ? contentStartLine : undefined,
   };
+}
+
+/** Slice the untouched payload using the one-based start line chosen by the agent. */
+export function rawMessageFromLine(command: string, startLine?: number): string | undefined {
+  if (!startLine || !Number.isInteger(startLine) || startLine < 1) return undefined;
+  const message = command.split(/\r?\n/).slice(startLine - 1).join('\n').trim();
+  return message || undefined;
 }
 
 /** Unambiguous success/failure keyword in the text (not negated). */
@@ -296,7 +313,22 @@ async function extractOneCommand(seg: string): Promise<SimulateCommand> {
     /* llm stays undefined */
   }
 
+  if (llm?.mode === 'raw') {
+    const rawMessage = rawMessageFromLine(seg, llm.rawContentStartLine);
+    if (rawMessage) {
+      return {
+        ...llm,
+        count: 1,
+        messageTypes: [],
+        ackStatus: 'success',
+        rawMessage,
+        logGroup: parseLogGroup(seg),
+      };
+    }
+  }
+
   return {
+    mode: 'transaction',
     count: rxCount || llm?.count || 1,
     // An explicit "without X"/"request only" (rxTypes < 3) is authoritative.
     messageTypes: rxTypes.length < 3 ? rxTypes : llm?.messageTypes ?? rxTypes,
@@ -514,6 +546,24 @@ export async function handleSimulatePrompt(
   const results: SimulatePromptOutcome[] = [];
   for (const spec of await extractCommands(commandText)) {
     spec.logGroup = spec.logGroup ?? promptLogGroup;
+    if (spec.mode === 'raw' && spec.rawMessage) {
+      const application = spec.application ?? app?.id ?? 'raw-log';
+      const req = SimulateRequest.parse({
+        application,
+        samples: spec.rawMessage,
+        sinks: ['cloudwatch'],
+        count: 1,
+        logGroup: spec.logGroup,
+      });
+      const result = await simulateRawMessage(req);
+      results.push({
+        instruction: `1 raw log message${spec.logGroup ? ` -> ${spec.logGroup}` : ''}`,
+        spec: { ...spec, application, rawMessage: undefined, rawContentStartLine: undefined },
+        result,
+      });
+      continue;
+    }
+
     const req = SimulateRequest.parse({
       application: spec.application ?? 'cashMessage',
       samples,

@@ -117,6 +117,46 @@ export async function simulate(req: SimulateRequest): Promise<SimulateResult> {
   return { application: req.application, written, batchId, messages: summary };
 }
 
+/** Build one CloudWatch event whose message is the complete pasted log payload. */
+export function buildRawMessageRecord(
+  req: SimulateRequest,
+  now = Date.now(),
+): { record: RawLogRecord; batchId: string } {
+  const batchId = randomUUID();
+  return {
+    batchId,
+    record: {
+      source: 'cloudwatch',
+      stream: req.logGroup?.trim() || `/sim/${req.application}`,
+      timestamp: now,
+      raw: req.samples,
+      attributes: { application: req.application, batchId },
+    },
+  };
+}
+
+/** Write a pasted multiline log message as one event without interpreting it. */
+export async function simulateRawMessage(req: SimulateRequest): Promise<SimulateResult> {
+  const { record, batchId } = buildRawMessageRecord(req);
+  const written = {} as Record<LogSourceType, number>;
+
+  for (const sink of req.sinks) {
+    const connector = connectorFor(sink);
+    if (!connector.write) {
+      written[sink] = 0;
+      continue;
+    }
+    try {
+      written[sink] = await connector.write([{ ...record, source: sink }]);
+    } catch (err) {
+      console.error(`simulator: raw-message write to ${sink} failed`, err);
+      written[sink] = 0;
+    }
+  }
+
+  return { application: req.application, written, batchId, messages: [] };
+}
+
 /**
  * Verbatim simulation for line-based logs (e.g. apiflc's raw Lambda / API-Gateway
  * output): write each non-empty line of the sample as its own CloudWatch event,
