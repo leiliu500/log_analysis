@@ -107,13 +107,17 @@ export async function searchLogsByEmbedding(
 // ---------------------------------------------------------------------------
 export async function insertAnomaly(f: Anomaly): Promise<void> {
   const sqlc = getSql();
+  const metadata = {
+    ...(f.metadata ?? {}),
+    ...(f.sourceLogGroups?.length ? { sourceLogGroups: f.sourceLogGroups } : {}),
+  };
   await sqlc`INSERT INTO anomalies
     (id, kind, severity, title, summary, confidence, sources, application, fingerprint,
      evidence, reasoning, recommendations, metadata, window_start, window_end, created_at, embedding)
     VALUES (${f.id}, ${f.kind}, ${f.severity}, ${f.title}, ${f.summary}, ${f.confidence},
             ${f.sources}, ${f.application ?? null}, ${f.fingerprint},
             ${JSON.stringify(f.evidence ?? [])}::jsonb, ${JSON.stringify(f.reasoning ?? [])}::jsonb,
-            ${JSON.stringify(f.recommendations ?? [])}::jsonb, ${JSON.stringify(f.metadata ?? {})}::jsonb,
+            ${JSON.stringify(f.recommendations ?? [])}::jsonb, ${JSON.stringify(metadata)}::jsonb,
             ${f.windowStart}, ${f.windowEnd}, ${f.createdAt}, ${toVector(f.embedding)}::vector)`;
 }
 
@@ -739,7 +743,22 @@ function rawRowToParsedLog(r: Record<string, unknown>): ParsedLog {
   };
 }
 
+function anomalySourceLogGroups(
+  metadata: Record<string, unknown>,
+  evidence: Anomaly['evidence'],
+): string[] {
+  const metadataGroups = Array.isArray(metadata.sourceLogGroups)
+    ? metadata.sourceLogGroups
+    : [];
+  return [...new Set([...metadataGroups, ...evidence.map((item) => item.stream)]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean))];
+}
+
 function rowToAnomaly(r: typeof anomalies.$inferSelect): Anomaly {
+  const evidence = (r.evidence ?? []) as Anomaly['evidence'];
+  const metadata = (r.metadata ?? {}) as Record<string, unknown>;
   return {
     id: r.id,
     kind: r.kind as Anomaly['kind'],
@@ -748,12 +767,13 @@ function rowToAnomaly(r: typeof anomalies.$inferSelect): Anomaly {
     summary: r.summary,
     confidence: r.confidence,
     sources: r.sources as LogSourceType[],
+    sourceLogGroups: anomalySourceLogGroups(metadata, evidence),
     application: (r.application ?? undefined) as string | undefined,
     fingerprint: r.fingerprint,
-    evidence: (r.evidence ?? []) as Anomaly['evidence'],
+    evidence,
     reasoning: (r.reasoning ?? []) as string[],
     recommendations: (r.recommendations ?? []) as string[],
-    metadata: (r.metadata ?? {}) as Record<string, unknown>,
+    metadata,
     windowStart: r.windowStart,
     windowEnd: r.windowEnd,
     createdAt: r.createdAt,
@@ -761,6 +781,8 @@ function rowToAnomaly(r: typeof anomalies.$inferSelect): Anomaly {
 }
 
 function rawRowToAnomaly(r: Record<string, unknown>): Anomaly {
+  const evidence = jsonbField<Anomaly['evidence']>(r.evidence, []);
+  const metadata = jsonbField<Record<string, unknown>>(r.metadata, {});
   return {
     id: r.id as string,
     kind: r.kind as Anomaly['kind'],
@@ -769,12 +791,13 @@ function rawRowToAnomaly(r: Record<string, unknown>): Anomaly {
     summary: r.summary as string,
     confidence: Number(r.confidence),
     sources: (r.sources ?? []) as LogSourceType[],
+    sourceLogGroups: anomalySourceLogGroups(metadata, evidence),
     application: (r.application ?? undefined) as string | undefined,
     fingerprint: r.fingerprint as string,
-    evidence: (r.evidence ?? []) as Anomaly['evidence'],
+    evidence,
     reasoning: (r.reasoning ?? []) as string[],
     recommendations: (r.recommendations ?? []) as string[],
-    metadata: (r.metadata ?? {}) as Record<string, unknown>,
+    metadata,
     windowStart: Number(r.window_start),
     windowEnd: Number(r.window_end),
     createdAt: Number(r.created_at),

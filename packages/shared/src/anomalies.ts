@@ -32,6 +32,8 @@ export const Anomaly = z.object({
   /** Model/heuristic confidence 0..1. */
   confidence: z.number().min(0).max(1),
   sources: z.array(LogSourceType),
+  /** Exact source log group/stream names where the anomaly was detected. */
+  sourceLogGroups: z.array(z.string()).optional(),
   /** Owning application id (e.g. 'scp', 'apiflc'), when the anomaly is app-scoped. */
   application: z.string().optional(),
   fingerprint: z.string(),

@@ -661,8 +661,9 @@ export async function advanceAgents(
 }
 
 /** A deterministic Anomaly for a terminally failed/errored (timed-out) agent. */
-function agentAnomaly(a: Agent, now: number, windowMs: number): Anomaly {
+export function agentAnomaly(a: Agent, now: number, windowMs: number): Anomaly {
   const failed = a.status === 'failed';
+  const sourceLogGroups = a.logGroup ? [a.logGroup] : [];
   return {
     id: randomUUID(),
     kind: 'anomaly',
@@ -673,6 +674,7 @@ function agentAnomaly(a: Agent, now: number, windowMs: number): Anomaly {
       (failed ? `Transaction ${a.messageId} failed.` : `Transaction ${a.messageId} timed out.`),
     confidence: 0.9,
     sources: a.source ? [a.source as LogSourceType] : [],
+    sourceLogGroups,
     application: a.application,
     fingerprint: agentAnomalyFingerprint(a),
     evidence: [],
@@ -691,6 +693,7 @@ function agentAnomaly(a: Agent, now: number, windowMs: number): Anomaly {
       waitingFor: a.waitingFor,
       phases: a.phases,
       phaseTs: a.phaseTs,
+      sourceLogGroups,
     },
     windowStart: now - windowMs,
     windowEnd: now,

@@ -1,5 +1,23 @@
 import type { Anomaly } from '@log/shared';
 
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function sourceLogGroupsFor(anomaly: Anomaly): string[] {
+  const metadataGroups = stringList(anomaly.metadata?.sourceLogGroups);
+  const evidenceGroups = stringList((anomaly.evidence ?? []).map((item) => item.stream));
+  return [...new Set([
+    ...stringList(anomaly.sourceLogGroups),
+    ...metadataGroups,
+    ...evidenceGroups,
+  ])];
+}
+
 const SEV: Record<string, string> = {
   critical: 'bg-red-500/20 text-red-300 border-red-500/40',
   high: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
@@ -9,6 +27,8 @@ const SEV: Record<string, string> = {
 };
 
 export function AnomalyCard({ f }: { f: Anomaly }) {
+  const sourceLogGroups = sourceLogGroupsFor(f);
+
   return (
     <div className="card">
       <div className="mb-2 flex items-center justify-between gap-3">
@@ -22,6 +42,22 @@ export function AnomalyCard({ f }: { f: Anomaly }) {
       </div>
       <h3 className="font-semibold text-white">{f.title}</h3>
       <p className="mt-1 text-sm text-slate-300">{f.summary}</p>
+
+      {sourceLogGroups.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-slate-500">
+            Source log group{sourceLogGroups.length === 1 ? '' : 's'}:
+          </span>
+          {sourceLogGroups.map((logGroup) => (
+            <span
+              key={logGroup}
+              className="max-w-full break-all rounded border border-edge bg-edge/40 px-1.5 py-0.5 font-mono text-slate-200"
+            >
+              {logGroup}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Source logs — the exact log lines this anomaly is based on. */}
       {f.evidence.length > 0 && (
