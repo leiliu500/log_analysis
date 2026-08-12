@@ -2,7 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Agent, AgentPromptContext, ParsedLog, TransactionProtocol, TransitionDecision } from '@log/shared';
 import { ApplicationRegistry, decideFromSpec } from '@log/shared';
-import { stepAgentsDynamic, agentEvents, agentAnomalyFingerprint, type AgentEvent } from './agentLifecycle.js';
+import {
+  stepAgentsDynamic,
+  agentEvents,
+  agentAnomaly,
+  agentAnomalyFingerprint,
+  type AgentEvent,
+} from './agentLifecycle.js';
 import { parseBatch } from './parser.js';
 
 const NOW = 1_700_000_000_000;
@@ -208,6 +214,19 @@ test('a timed-out agent maps to its stable anomaly fingerprint', async () => {
   const a = (await step([], [known])).agents.get('001')!;
   assert.equal(a.status, 'error');
   assert.equal(agentAnomalyFingerprint(a), 'tx:001');
+});
+
+test('a transaction anomaly includes its source log group', () => {
+  const anomaly = agentAnomaly(agent({
+    messageId: '0051',
+    status: 'failed',
+    active: false,
+    source: 'cloudwatch',
+    logGroup: 'adt-d2-scp-restapp-log-group',
+  }), NOW, TIMEOUT);
+
+  assert.deepEqual(anomaly.sourceLogGroups, ['adt-d2-scp-restapp-log-group']);
+  assert.deepEqual(anomaly.metadata.sourceLogGroups, ['adt-d2-scp-restapp-log-group']);
 });
 
 test('an awaiting agent is re-reasoned when its app.pendingSignals fires (no new event)', async () => {
