@@ -16,3 +16,12 @@ test('analysis prompt does not hard-code one cause-chain phrase', () => {
 
   assert.doesNotMatch(prompt, /Caused by:/i);
 });
+
+test('analysis prompt reports exact source log group names', () => {
+  const prompt = loadPrompt('analysis/reason.md');
+
+  assert.match(prompt, /sourceLogGroups/);
+  assert.match(prompt, /sourceLogGroup=/);
+  assert.match(prompt, /never infer or/i);
+  assert.match(prompt, /invent a log group name/i);
+});

@@ -31,6 +31,9 @@ HARD RULES — follow exactly:
 - If the log lines do not clearly show an error/problem, set severity "info" and
   say the logs show no explicit error.
 - The title must paraphrase the actual logged message, not a narrative.
+- Include `sourceLogGroups` with every distinct source log group shown in the
+  provided logs. Copy each `sourceLogGroup=` value verbatim; never infer or
+  invent a log group name.
 
 Respond ONLY with JSON matching:
 {
@@ -39,6 +42,7 @@ Respond ONLY with JSON matching:
   "title": string,
   "summary": string,
   "confidence": number,
+  "sourceLogGroups": string[],
   "reasoning": string[],
   "recommendations": string[]
 }

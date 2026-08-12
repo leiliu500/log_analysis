@@ -13,8 +13,16 @@ interface ModelAnomaly {
   title: string;
   summary: string;
   confidence: number;
+  sourceLogGroups?: string[];
   reasoning: string[];
   recommendations: string[];
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean))];
 }
 
 function renderLogs(logs: ParsedLog[], max = 40): string {
@@ -22,7 +30,7 @@ function renderLogs(logs: ParsedLog[], max = 40): string {
     .slice(0, max)
     .map(
       (l) =>
-        `[${new Date(l.timestamp).toISOString()}] (${l.source}/${l.stream}) ${l.level.toUpperCase()} ${l.message}`,
+        `[${new Date(l.timestamp).toISOString()}] source=${l.source} sourceLogGroup=${l.stream} level=${l.level.toUpperCase()} message=${l.message}`,
     )
     .join('\n');
 }
@@ -52,6 +60,11 @@ ${renderLogs(cluster.logs)}`;
     temperature: 0.1,
     stage: 'analysis-reason',
   });
+  const observedSourceLogGroups = uniqueStrings(cluster.logs.map((log) => log.stream));
+  const reportedSourceLogGroups = uniqueStrings(mf.sourceLogGroups ?? []);
+  const sourceLogGroups = observedSourceLogGroups.length > 0
+    ? observedSourceLogGroups
+    : reportedSourceLogGroups;
 
   const summaryText = `${mf.title}\n${mf.summary}`;
   let embedding: number[] | undefined;
@@ -69,6 +82,7 @@ ${renderLogs(cluster.logs)}`;
     summary: mf.summary,
     confidence: Math.max(0, Math.min(1, mf.confidence ?? 0.5)),
     sources: cluster.sources,
+    sourceLogGroups,
     fingerprint: cluster.logs[0]?.fingerprint ?? cluster.key,
     evidence: cluster.logs.slice(0, 10).map((l) => ({
       logId: l.id,
@@ -79,7 +93,10 @@ ${renderLogs(cluster.logs)}`;
     })),
     reasoning: mf.reasoning ?? [],
     recommendations: mf.recommendations ?? [],
-    metadata: context.anomaly ? { anomaly: context.anomaly } : {},
+    metadata: {
+      ...(context.anomaly ? { anomaly: context.anomaly } : {}),
+      sourceLogGroups,
+    },
     windowStart: cluster.windowStart,
     windowEnd: cluster.windowEnd,
     createdAt: Date.now(),
