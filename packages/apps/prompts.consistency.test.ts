@@ -39,6 +39,22 @@ test('scp and apiflc each declare their own transaction prompt', () => {
   }
 });
 
+test('edge declares its own simulator understanding prompt', () => {
+  const app = applicationRegistry.byId('edge');
+  assert.ok(app, 'application edge is registered');
+  assert.equal(app.simulateUnderstandingPromptPath, 'apps/edge/simulate.understand.md');
+});
+
+test('edge declares embedded-filename ingestion, assistant and validation prompts', () => {
+  const app = applicationRegistry.byId('edge');
+  assert.ok(app);
+  assert.equal(app.correlationLabel, 'fileName');
+  assert.equal(app.transactionPromptPath, 'apps/edge/transaction.md');
+  assert.equal(app.assistantPromptPath, 'apps/edge/qa.md');
+  assert.equal(app.validation?.agentPromptPath, 'apps/edge/validation.agent.md');
+  assert.equal(typeof app.validation?.checks, 'function');
+});
+
 /**
  * The validation AI agent is per-application by construction: its prompt encodes that
  * app's protocol and — critically — the deterministic checks it must NOT restate. A

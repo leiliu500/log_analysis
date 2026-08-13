@@ -4,6 +4,7 @@
     { "path": "packages/shared" },
     { "path": "packages/apps/scp" },
     { "path": "packages/apps/apiflc" },
+    { "path": "packages/apps/edge" },
     { "path": "packages/apps" },
     { "path": "packages/db" },
     { "path": "packages/agents/dynamic/analysis" },

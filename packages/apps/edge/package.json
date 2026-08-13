@@ -1,5 +1,5 @@
 {
-  "name": "@log/applications",
+  "name": "@log/app-edge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,13 +13,13 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test --import tsx ./*.test.ts",
+    "test": "node --test --import tsx ./src/agent.test.ts ./src/simulateEdge.test.ts ./src/transactionProtocol.test.ts ./src/validation.test.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@log/app-apiflc": "*",
-    "@log/app-edge": "*",
-    "@log/app-scp": "*",
     "@log/shared": "*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
   }
 }
