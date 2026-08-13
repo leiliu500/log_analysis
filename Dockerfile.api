@@ -7,6 +7,7 @@ RUN npm install --workspaces --include-workspace-root
 RUN npm run build --workspace @log/shared \
   && npm run build --workspace @log/app-scp \
   && npm run build --workspace @log/app-apiflc \
+  && npm run build --workspace @log/app-edge \
   && npm run build --workspace @log/applications \
   && npm run build --workspace @log/db \
   && npm run build --workspace @log/analysis \

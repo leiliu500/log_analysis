@@ -1,6 +1,7 @@
 import { ApplicationRegistry } from '@log/shared';
 import { scpApplication } from '@log/app-scp';
 import { apiflcApplication } from '@log/app-apiflc';
+import { edgeApplication } from '@log/app-edge';
 
 /**
  * The installed applications, built once at the composition root. The analysis
@@ -10,4 +11,5 @@ import { apiflcApplication } from '@log/app-apiflc';
  */
 export const applicationRegistry = new ApplicationRegistry()
   .register(scpApplication)
-  .register(apiflcApplication);
+  .register(apiflcApplication)
+  .register(edgeApplication);
