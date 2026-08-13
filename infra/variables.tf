@@ -161,6 +161,10 @@ variable "application_log_groups" {
     "adt-d2-scp-log-group",
     "adt-d2-scp-restapp-log-group",
     "esb-cloudwatch-logs-agent-cash",
+    # Edge
+    "edge-sftp-log-group",
+    "edge-bps-log-group",
+    "edge-cloudwatch-log-group",
     # apiflc (Lambda handlers + API Gateway execution logs)
     "/aws/lambda/adt-fca-d1-api_gateway_handler",
     "/aws/lambda/adt-fca-d1-api_gateway_authorizer",
