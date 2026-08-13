@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test --import tsx ./src/simulateEdge.test.ts ./src/transactionProtocol.test.ts",
+    "test": "node --test --import tsx ./src/agent.test.ts ./src/simulateEdge.test.ts ./src/transactionProtocol.test.ts ./src/validation.test.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {

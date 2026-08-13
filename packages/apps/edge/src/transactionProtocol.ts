@@ -7,17 +7,56 @@ export function edgeCorrelationFile(fileName: string): string {
   return fileName.trim().replace(/^['"]|['"]$/g, '').replace(TRANSFER_PREFIX, '');
 }
 
+export interface EdgeMessageMeta {
+  type: 'SFTP' | 'BPS' | 'CLOUDWATCH';
+  corrId: string;
+  /** Original file name before the BPS DyyyyMMddTHHmmssSSS. prefix. */
+  originalFile: string;
+  transferFile?: string;
+  xmlFile?: string;
+  status?: string;
+}
+
+/** Read one edge log line into the fields shared by ingestion, validation and Q&A. */
+export function edgeMessageMeta(raw: string): EdgeMessageMeta | undefined {
+  const sftpFile = raw.match(/\barguments=\S*\/([^\s/]+\.zip)\b/i)?.[1];
+  if (/\bservice=sftp\b/i.test(raw) && /\boperation=put\b/i.test(raw) && sftpFile) {
+    const status = raw.match(/\bstatus=([^\s|]+)/i)?.[1];
+    const originalFile = edgeCorrelationFile(sftpFile);
+    return { type: 'SFTP', corrId: originalFile, originalFile, status };
+  }
+
+  const bps = raw.match(/\|\s*([^|\s]+\.zip)\s*\|\s*([^|\s]+\.zip)\s*\|\s*([^|]*)\|\s*([A-Za-z_-]+)\s*$/i);
+  if (bps) {
+    const originalFile = edgeCorrelationFile(bps[1]!);
+    return {
+      type: 'BPS',
+      corrId: originalFile,
+      originalFile,
+      transferFile: bps[2],
+      status: bps[4],
+    };
+  }
+
+  // JSON uses `"ZIP_FILE_NM":"..."`; text audit lines use `ZIP_FILE_NM :...`;
+  // the processing-count line uses `ZipfileNM "..."`.
+  const transferFile = raw.match(/\b(?:ZIP_FILE_NM|ZipfileNM)\b["\s]*(?::|=)?\s*"?([A-Za-z0-9._-]+\.zip)/i)?.[1];
+  if (transferFile) {
+    const originalFile = edgeCorrelationFile(transferFile);
+    const xmlFile = raw.match(/\bXML_FILE_NM\b["\s]*(?::|=)?\s*"?([A-Za-z0-9._-]+\.xml)/i)?.[1];
+    const status = raw.match(/\b(?:status|result)\s*[=:]\s*"?([A-Za-z_-]+)/i)?.[1];
+    return { type: 'CLOUDWATCH', corrId: originalFile, originalFile, transferFile, xmlFile, status };
+  }
+  return undefined;
+}
+
 /** Extract an SFTP, BPS, or CloudWatch phase from one edge log line. */
 export function edgeEvent(raw: string): TxEvent | undefined {
-  const sftp = raw.match(/\bservice=sftp\b.*\boperation=put\b.*\barguments=\S*\/([^\s/]+\.zip)\b/i);
-  if (sftp) return { type: 'SFTP', corrId: edgeCorrelationFile(sftp[1]!), ackCode: /\bstatus=SUCCESS\b/i.test(raw) ? 'SUCCESS' : undefined };
-
-  const bps = raw.match(/\|\s*([^|\s]+\.zip)\s*\|\s*[^|]*\|\s*[^|]*\|\s*([A-Za-z]+)\s*$/i);
-  if (bps) return { type: 'BPS', corrId: edgeCorrelationFile(bps[1]!), ackCode: bps[2] };
-
-  const cloudwatch = raw.match(/\bZIP_FILE_NM(?:"\s*:\s*"|\s*:)\s*"?([A-Za-z0-9._-]+\.zip)/i);
-  if (cloudwatch) return { type: 'CLOUDWATCH', corrId: edgeCorrelationFile(cloudwatch[1]!) };
-  return undefined;
+  const meta = edgeMessageMeta(raw);
+  if (!meta) return undefined;
+  return meta.status
+    ? { type: meta.type, corrId: meta.corrId, ackCode: meta.status }
+    : { type: meta.type, corrId: meta.corrId };
 }
 
 export const edgeTransactionProtocol: TransactionProtocol = {
@@ -29,6 +68,6 @@ export const edgeTransactionProtocol: TransactionProtocol = {
     return edgeEvent(log.raw);
   },
   isSuccess(ackCode?: string): boolean {
-    return !ackCode || /^(SUCCESS|OK|COMPLETED?)$/i.test(ackCode.trim());
+    return !ackCode || /^(SUCCESS|OK|COMPLETE|COMPLETED|PROCESSED)$/i.test(ackCode.trim());
   },
 };

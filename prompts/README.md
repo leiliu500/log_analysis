@@ -27,9 +27,9 @@ asserts every declared path here actually resolves via `loadPrompt`.
 
 | File | Declared by (`ApplicationDef` field) | Role |
 |------|--------------------------------------|------|
-| `apps/scp/transaction.md`, `apps/apiflc/transaction.md` | `transactionPromptPath` | The **regular ingestion agent**'s transaction lifecycle spec — spawn / advance / close (SCP: REQUEST→ACK→RESPONSE; apiflc: REQUEST→RESPONSE). |
-| `apps/scp/validation.agent.md`, `apps/apiflc/validation.agent.md` | `validation.agentPromptPath` | The **validation AI agent**'s spec — the residual reviewer. It is invoked only for transactions the worker passed while `deriveOutcome` could not prove the outcome, may only emit claims that cite real `parsed_logs` ids with re-executable predicates, and is told which checks the worker already enforces so it never restates them. Every claim is re-verified in code before it is recorded. |
-| `apps/scp/qa.md`, `apps/apiflc/qa.md` | `assistantPromptPath` | The app's grounded Log-Assistant (scoped Q&A) system prompt. |
+| `apps/scp/transaction.md`, `apps/apiflc/transaction.md`, `apps/edge/transaction.md` | `transactionPromptPath` | The **regular ingestion agent**'s transaction lifecycle spec — spawn / advance / close. Edge uses SFTP→BPS→CLOUDWATCH and correlates on the embedded original ZIP value. |
+| `apps/scp/validation.agent.md`, `apps/apiflc/validation.agent.md`, `apps/edge/validation.agent.md` | `validation.agentPromptPath` | The **validation AI agent**'s residual-review spec. Claims must cite real `parsed_logs` ids with re-executable predicates and are re-verified before recording. |
+| `apps/scp/qa.md`, `apps/apiflc/qa.md`, `apps/edge/qa.md` | `assistantPromptPath` | The app's grounded Log-Assistant (scoped Q&A) system prompt. |
 | `apps/apiflc/simulate.understand.md`, `apps/edge/simulate.understand.md` | `simulateUnderstandingPromptPath` | The app's Simulator understanding-agent prompt (extracts its correlation id). Edge correlates its SFTP, BPS, and CloudWatch phases by the original ZIP filename. |
 | `apps/scp/simulate.segment.md`, `apps/scp/simulate.extract-one.md` | (SCP simulator) | SCP simulator segmentation / extraction prompts. |
 

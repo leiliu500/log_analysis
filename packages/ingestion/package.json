@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "test": "node --test --import tsx ./src/edgePipeline.test.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
@@ -23,5 +24,8 @@
     "@log/applications": "*",
     "@log/db": "*",
     "@log/shared": "*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
   }
 }
