@@ -18,6 +18,7 @@ import {
   getRecentValidationAgentRuns,
   deleteAllValidationAgents,
   recentPollerRuns,
+  allPollerRuns,
   getPlatformTelemetry,
   deleteAllPollerRuns,
 } from '@log/db';
@@ -157,6 +158,10 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     const q = req.query as { limit?: string };
     return { runs: await recentPollerRuns(Math.min(Number(q.limit ?? 50), 200)) };
   });
+
+  // Complete, untruncated ingestion execution history. Each run carries every recorded
+  // component invocation plus a defensive integrity verdict.
+  api.get('/execution-traces', async () => ({ runs: await allPollerRuns() }));
 
   // Clear the scheduled-ingestion run history (Schedule tab).
   api.delete('/schedule', async () => ({ deleted: await deleteAllPollerRuns() }));

@@ -7,6 +7,7 @@ import { AnomalyCard } from '@/components/AnomalyCard';
 import { AnomaliesHistoryTable } from '@/components/AnomaliesHistoryTable';
 import { AgentsPanel } from '@/components/AgentsPanel';
 import { ScheduleTab } from '@/components/ScheduleTab';
+import { ExecutionTraceTab } from '@/components/ExecutionTraceTab';
 
 const ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
@@ -16,7 +17,7 @@ type Analysis = {
   pruned: number;
 };
 
-type TabKey = 'agents' | 'anomalies' | 'schedule';
+type TabKey = 'agents' | 'anomalies' | 'schedule' | 'executionTrace';
 
 const REFRESH_MS = 30_000;
 
@@ -42,6 +43,7 @@ export function DashboardView() {
   const [activeAgents, setActiveAgents] = useState<Agent[]>([]);
   const [agentHistory, setAgentHistory] = useState<Agent[]>([]);
   const [schedule, setSchedule] = useState<PollerRun[]>([]);
+  const [executionRuns, setExecutionRuns] = useState<PollerRun[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
@@ -58,18 +60,19 @@ export function DashboardView() {
       // reading agent state. Starting all three together races the reads against the
       // write and displays the state from immediately before this run. Ordinary polling
       // stays parallel because it performs no writes.
-      const [f, a, s] = analyze
+      const [f, a, s, t] = analyze
         ? await (async () => {
             const analyzed = await api.anomalies(true);
-            const [agents, schedule] = await Promise.all([api.agents(), api.schedule()]);
-            return [analyzed, agents, schedule] as const;
+            const [agents, schedule, traces] = await Promise.all([api.agents(), api.schedule(), api.executionTraces()]);
+            return [analyzed, agents, schedule, traces] as const;
           })()
-        : await Promise.all([api.anomalies(false), api.agents(), api.schedule()]);
+        : await Promise.all([api.anomalies(false), api.agents(), api.schedule(), api.executionTraces()]);
       setAnomalies(f.anomalies);
       if (f.analysis) setAnalysis(f.analysis);
       setActiveAgents(a.active);
       setAgentHistory(a.history);
       setSchedule(s.runs);
+      setExecutionRuns(t.runs);
     } catch (e) {
       setError(String(e));
     }
@@ -118,6 +121,7 @@ export function DashboardView() {
       setActiveAgents([]);
       setAgentHistory([]);
       setSchedule([]);
+      setExecutionRuns([]);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -130,8 +134,9 @@ export function DashboardView() {
     const s = new Set<string>(KNOWN_APPS);
     for (const a of [...activeAgents, ...agentHistory]) if (a.application) s.add(a.application);
     for (const f of anomalies) if (f.application) s.add(f.application);
+    for (const run of executionRuns) for (const step of run.trace ?? []) if (step.application) s.add(step.application);
     return [...s].sort();
-  }, [activeAgents, agentHistory, anomalies]);
+  }, [activeAgents, agentHistory, anomalies, executionRuns]);
 
   const byApp = <T extends { application?: string }>(items: T[]): T[] =>
     appFilter === 'all' ? items : items.filter((i) => i.application === appFilter);
@@ -162,6 +167,7 @@ export function DashboardView() {
     { key: 'agents', label: 'Agents', badge: shownActive.length },
     { key: 'anomalies', label: 'Anomalies', badge: shownAnomalies.length },
     { key: 'schedule', label: 'Schedule', badge: schedule.length },
+    { key: 'executionTrace', label: 'Execution Trace', badge: executionRuns.length },
   ];
 
   return (
@@ -313,6 +319,10 @@ export function DashboardView() {
       )}
 
       {!loading && tab === 'schedule' && <ScheduleTab runs={schedule} appFilter={appFilter} />}
+
+      {!loading && tab === 'executionTrace' && (
+        <ExecutionTraceTab runs={executionRuns} appFilter={appFilter} />
+      )}
     </div>
   );
 }

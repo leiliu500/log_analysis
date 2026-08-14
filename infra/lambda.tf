@@ -25,7 +25,7 @@ locals {
   lambda_env = {
     DATABASE_URL = local.database_url
     # AWS_REGION is auto-set by the Lambda runtime; do not override it here.
-    BEDROCK_MODEL_ID       = local.foundation_model
+    BEDROCK_MODEL_ID       = var.bedrock_runtime_model_id
     BEDROCK_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
     # The output-token ceiling EVERY agent inherits (ingestion reasoner, validation AI
     # agent, analysis reasoning, simulator, Log Assistant). It is a cap, not a

@@ -585,26 +585,22 @@ function rawRowToValidationAgent(r: Record<string, unknown>): ValidationAgent {
 // Scheduled-ingestion run history (Schedule tab)
 // ---------------------------------------------------------------------------
 
-/** Keep the poller_runs table bounded to the most recent N rows. */
-const POLLER_RUNS_KEEP = 500;
-
 export async function insertPollerRun(run: PollerRun): Promise<void> {
   const sqlc = getSql();
   await sqlc`INSERT INTO poller_runs
-    (id, ran_at, trigger, window_minutes, duration_ms, by_source, agents, anomalies, pruned, by_application, stages)
+    (id, ran_at, trigger, window_minutes, duration_ms, by_source, agents, anomalies, pruned, by_application, stages, trace, trace_validation)
     VALUES (${run.id}, ${run.ranAt}, ${run.trigger}, ${run.windowMinutes}, ${run.durationMs},
             ${JSON.stringify(run.bySource)}::jsonb, ${JSON.stringify(run.agents)}::jsonb, ${run.anomalies}, ${run.pruned},
-            ${JSON.stringify(run.byApplication ?? {})}::jsonb, ${JSON.stringify(run.stages ?? {})}::jsonb)
+            ${JSON.stringify(run.byApplication ?? {})}::jsonb, ${JSON.stringify(run.stages ?? {})}::jsonb,
+            ${JSON.stringify(run.trace ?? [])}::jsonb, ${JSON.stringify(run.traceValidation ?? {})}::jsonb)
     ON CONFLICT (id) DO NOTHING`;
-  // Bound growth (a run lands every ~5 min) — drop everything past the newest N.
-  await sqlc`DELETE FROM poller_runs WHERE id IN (
-    SELECT id FROM poller_runs ORDER BY ran_at DESC OFFSET ${POLLER_RUNS_KEEP}
-  )`;
 }
 
-export async function recentPollerRuns(limit = 50): Promise<PollerRun[]> {
+export async function recentPollerRuns(limit: number | undefined = 50): Promise<PollerRun[]> {
   const sqlc = getSql();
-  const rows = await sqlc`SELECT * FROM poller_runs ORDER BY ran_at DESC LIMIT ${limit}`;
+  const rows = limit == null
+    ? await sqlc`SELECT * FROM poller_runs ORDER BY ran_at DESC`
+    : await sqlc`SELECT * FROM poller_runs ORDER BY ran_at DESC LIMIT ${limit}`;
   return rows.map((r) => ({
     id: r.id as string,
     ranAt: Number(r.ran_at),
@@ -617,7 +613,19 @@ export async function recentPollerRuns(limit = 50): Promise<PollerRun[]> {
     pruned: Number(r.pruned),
     byApplication: jsonbField<NonNullable<PollerRun['byApplication']>>(r.by_application, {}),
     stages: jsonbField<Record<string, number>>(r.stages, {}),
+    trace: jsonbField<NonNullable<PollerRun['trace']>>(r.trace, []),
+    traceValidation: jsonbField<NonNullable<PollerRun['traceValidation']>>(r.trace_validation, {
+      status: 'failed',
+      checkedAt: 0,
+      checks: 0,
+      violations: [{ code: 'legacy_trace', message: 'Execution predates complete tracing.' }],
+    }),
   }));
+}
+
+/** Every retained ingestion execution, with no dashboard truncation. */
+export async function allPollerRuns(): Promise<PollerRun[]> {
+  return recentPollerRuns(undefined);
 }
 
 export async function deleteAllPollerRuns(): Promise<number> {

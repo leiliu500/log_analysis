@@ -93,6 +93,8 @@ export const api = {
     req<PlatformTelemetry>(`/telemetry?windowMinutes=${windowMinutes}`),
   /** Scheduled-ingestion run history for the Schedule tab. */
   schedule: () => req<{ runs: PollerRun[] }>('/schedule?limit=100'),
+  /** Every retained ingestion execution with its complete ordered trace and integrity verdict. */
+  executionTraces: () => req<{ runs: PollerRun[] }>('/execution-traces'),
   chat: (sessionId: string, message: string) =>
     req<ChatResponse>('/chat', {
       method: 'POST',

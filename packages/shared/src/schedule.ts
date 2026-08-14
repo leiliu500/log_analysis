@@ -5,6 +5,41 @@
  */
 export type PollerTrigger = 'schedule' | 'manual';
 
+/** One real component invocation in an ingestion execution. */
+export interface ExecutionTraceStep {
+  id: string;
+  sequence: number;
+  component: string;
+  name: string;
+  status: 'completed' | 'skipped' | 'deferred' | 'error';
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+  source?: string;
+  application?: string;
+  correlationId?: string;
+  /** API agents are highlighted in the dashboard. */
+  agent?: {
+    kind: 'api' | 'anomaly' | 'lifecycle';
+    name: string;
+    execution: 'model' | 'deterministic' | 'deferred' | 'timeout';
+    /** Exact runtime model id. Absent only when no model was invoked. */
+    model?: string;
+    /** Agent/model-reported confidence, normalized to 0..1. */
+    confidence?: number;
+  };
+  /** Exact structured facts recorded by the component; raw secrets are never copied. */
+  details?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface ExecutionTraceValidation {
+  status: 'passed' | 'failed';
+  checkedAt: number;
+  checks: number;
+  violations: Array<{ code: string; message: string; stepId?: string }>;
+}
+
 export interface PollerRun {
   id: string;
   /** When the run started (epoch ms). */
@@ -27,6 +62,10 @@ export interface PollerRun {
    * phase, and makes the model's share of ingestion an observable number.
    */
   stages?: Record<string, number>;
+  /** Complete ordered component path, including parallel branches and agent calls. */
+  trace?: ExecutionTraceStep[];
+  /** Defensive integrity verdict computed from the completed trace before persistence. */
+  traceValidation?: ExecutionTraceValidation;
   /**
    * Per-application breakdown of this run, so the dashboard can scope the
    * Schedule tab to a selected application (e.g. scp vs apiflc).

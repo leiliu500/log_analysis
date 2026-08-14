@@ -39,9 +39,15 @@ variable "bedrock_max_tokens" {
 }
 
 variable "bedrock_model_arn" {
-  description = "Foundation model ARN the agents use (Claude on Bedrock)."
+  description = "Foundation model ID or ARN used by hosted Bedrock Agents."
   type        = string
-  default     = "openai.gpt-oss-120b-1:0"
+  default     = "anthropic.claude-sonnet-5"
+}
+
+variable "bedrock_runtime_model_id" {
+  description = "Inference profile or model ID used by direct Bedrock Runtime calls."
+  type        = string
+  default     = "us-gov.anthropic.claude-sonnet-5"
 }
 
 # --- Bedrock Guardrail (model-call safety policy) -----------------------------

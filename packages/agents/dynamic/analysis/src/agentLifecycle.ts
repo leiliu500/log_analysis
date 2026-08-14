@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { Agent, Anomaly, ApplicationDef, AgentPromptContext, LogSourceType, ParsedLog, Severity, ApplicationRegistry, TransitionDecision, TransitionReasoner } from '@log/shared';
+import type { Agent, Anomaly, ApplicationDef, AgentPromptContext, LogSourceType, ParsedLog, Severity, ApplicationRegistry, TransitionDecision, TransitionReasoner, ExecutionTraceStep } from '@log/shared';
 import { coalesceEntries, lifecycleTimeoutMs } from '@log/shared';
-import { converseJson } from './bedrock.js';
+import { converseJson, modelIds } from './bedrock.js';
 import {
   getActiveAgents,
   getAgentsByMessageIds,
@@ -40,6 +40,20 @@ export interface AgentEvent {
   application: string;
   /** The raw log line — handed to the dynamic agent so it reasons over actual log text. */
   raw?: string;
+}
+
+function addTrace(
+  trace: ExecutionTraceStep[],
+  step: Omit<ExecutionTraceStep, 'id' | 'sequence' | 'completedAt' | 'durationMs'>,
+): void {
+  const completedAt = Date.now();
+  trace.push({
+    ...step,
+    id: randomUUID(),
+    sequence: 0,
+    completedAt,
+    durationMs: Math.max(0, completedAt - step.startedAt),
+  });
 }
 
 /**
@@ -122,6 +136,7 @@ export interface AgentCounts {
 }
 
 export interface StepResult {
+  trace: ExecutionTraceStep[];
   agents: Map<string, Agent>;
   /** messageIds whose agent changed this step (need persisting). */
   changed: Set<string>;
@@ -200,6 +215,7 @@ export async function stepAgentsDynamic(
 ): Promise<StepResult> {
   const { now, timeoutMs, registry } = opts;
   const windowLogs = opts.windowLogs ?? [];
+  const trace: ExecutionTraceStep[] = [];
   const agents = new Map<string, Agent>();
   for (const a of known) {
     agents.set(a.messageId, {
@@ -256,6 +272,12 @@ export async function stepAgentsDynamic(
       justSpawned.add(id);
       bump(appId, 'spawned');
       changed.add(id);
+      addTrace(trace, {
+        component: 'lifecycle.spawn', name: `Spawn ${appId} ingestion agent`, status: 'completed',
+        startedAt: now, application: appId, correlationId: id,
+        agent: { kind: 'lifecycle', name: `${appId} ingestion agent`, execution: 'deterministic', confidence: 1 },
+        details: { firstPhase: evs[0]?.type, source: evs[0]?.source, logGroup: evs[0]?.logGroup },
+      });
     }
     if (!a.active) continue; // terminal — immutable
     for (const e of evs) {
@@ -401,16 +423,29 @@ export async function stepAgentsDynamic(
 
   const deferred: typeof decisions = [];
   for (const dec of decisions) {
+    const fastStarted = Date.now();
+    let fastError: string | undefined;
     let d: TransitionDecision | null = null;
     if (fastPathEnabled && dec.app.ingestionAgent?.fastPath) {
       try {
         d = dec.app.ingestionAgent.fastPath(ctxOf(dec));
       } catch (err) {
+        fastError = (err as Error).message;
         // A broken fast path must never drop a transaction — fall back to reasoning.
         console.error(`ingest: fastPath threw for ${dec.id}, deferring to the model`, (err as Error).message);
         d = null;
       }
     }
+    addTrace(trace, {
+      component: 'api-agent.fast-path', name: `${dec.app.id} API agent fast path`,
+      status: fastError ? 'error' : d ? 'completed' : 'deferred', startedAt: fastStarted,
+      application: dec.app.id, correlationId: dec.id, error: fastError,
+      agent: {
+        kind: 'api', name: `${dec.app.id} API agent`, execution: 'deterministic',
+        confidence: d ? 1 : undefined,
+      },
+      details: { decision: d?.status, waitingFor: d?.waitingFor, reason: d?.detail },
+    });
     if (d) {
       applyDecision(dec, d);
       fastPathed += 1;
@@ -424,11 +459,50 @@ export async function stepAgentsDynamic(
     if (idx >= maxLlm) {
       deferredOverCap += 1;
       backlogByApp[dec.app.id] = (backlogByApp[dec.app.id] ?? 0) + 1;
+      addTrace(trace, {
+        component: 'api-agent.reason', name: `${dec.app.id} API agent model decision`,
+        status: 'deferred', startedAt: Date.now(), application: dec.app.id, correlationId: dec.id,
+        agent: { kind: 'api', name: `${dec.app.id} API agent`, execution: 'deferred' },
+        details: { reason: 'per-execution reasoning cap reached', maxLlm, queueIndex: idx },
+      });
       return; // over the per-poll cap — carried to the next poll, most urgent first
     }
     const agent = dec.app.ingestionAgent;
-    if (!agent) return; // app declares no dynamic agent — only its timeouts fire
-    const d = await agent.decide(ctxOf(dec), opts.reasoner ?? defaultReasoner);
+    if (!agent) {
+      addTrace(trace, {
+        component: 'api-agent.reason', name: `${dec.app.id} API agent model decision`,
+        status: 'skipped', startedAt: Date.now(), application: dec.app.id, correlationId: dec.id,
+        agent: { kind: 'api', name: `${dec.app.id} API agent`, execution: 'deferred' },
+        details: { reason: 'application declares no ingestion agent' },
+      });
+      return;
+    }
+    const modelStarted = Date.now();
+    let d: TransitionDecision | null = null;
+    let modelError: string | undefined;
+    const reasoner = opts.reasoner ?? defaultReasoner;
+    try {
+      d = await agent.decide(ctxOf(dec), async (system, user) => {
+        try {
+          return await reasoner(system, user);
+        } catch (err) {
+          modelError = (err as Error).message;
+          throw err;
+        }
+      });
+    } catch (err) {
+      modelError = (err as Error).message;
+    }
+    addTrace(trace, {
+      component: 'api-agent.reason', name: `${dec.app.id} API agent model decision`,
+      status: modelError ? 'error' : d ? 'completed' : 'deferred', startedAt: modelStarted,
+      application: dec.app.id, correlationId: dec.id, error: modelError,
+      agent: {
+        kind: 'api', name: `${dec.app.id} API agent`, execution: 'model',
+        model: modelIds.MODEL_ID, confidence: d?.confidence,
+      },
+      details: { decision: d?.status, waitingFor: d?.waitingFor, severity: d?.severity, reason: d?.detail },
+    });
     if (!d) return; // no transition this poll (model error / no spec) — leave unchanged
     reasoned += 1;
     applyDecision(dec, d);
@@ -482,13 +556,23 @@ export async function stepAgentsDynamic(
       closed += 1;
       bump(a.application, 'closed');
       changed.add(a.messageId);
+      addTrace(trace, {
+        component: 'lifecycle.timeout', name: `${a.application ?? 'unknown'} API agent timeout`,
+        status: 'completed', startedAt: now, application: a.application, correlationId: a.messageId,
+        agent: {
+          kind: 'api', name: `${a.application ?? 'unknown'} API agent`,
+          execution: 'timeout', confidence: 1,
+        },
+        details: { waitingFor: wf, inactivityMs: now - last, observedMs, timeoutMs: appTimeoutMs, decision: 'error' },
+      });
     }
   }
 
-  return { agents, changed, spawned, advanced, closed, fastPathed, reasoned, deferredOverCap, backlogByApp, byApp };
+  return { trace, agents, changed, spawned, advanced, closed, fastPathed, reasoned, deferredOverCap, backlogByApp, byApp };
 }
 
 export interface AdvanceResult {
+  trace: ExecutionTraceStep[];
   spawned: number;
   advanced: number;
   closed: number;
@@ -527,9 +611,10 @@ export const agentAnomalyFingerprint = (a: Agent): string => `tx:${a.messageId}`
 export async function advanceAgents(
   parsed: ParsedLog[],
   registry: ApplicationRegistry,
-  opts: { now?: number; timeoutMs?: number; windowMs?: number; anomaliesTtlMs?: number } = {},
+  opts: { now?: number; timeoutMs?: number; windowMs?: number; anomaliesTtlMs?: number; trace?: ExecutionTraceStep[] } = {},
 ): Promise<AdvanceResult> {
   const now = opts.now ?? Date.now();
+  const trace = opts.trace ?? [];
   const windowMs = opts.windowMs ?? 5 * 60_000;
   // FALLBACK inactivity timeout only — the effective timeout is per-app, read from each
   // app's transaction.md by lifecycleTimeoutMs. Used when an app states no directive.
@@ -570,6 +655,7 @@ export async function advanceAgents(
   // degrading correlation.
   const windowLogLimit = Number(process.env.INGEST_WINDOW_LOG_LIMIT ?? 20000);
   let windowLogs = parsed;
+  const windowStarted = Date.now();
   try {
     const stored = await queryLogs({ from: now - windowSpanMs, to: now, limit: windowLogLimit });
     if (stored.length >= windowLogLimit) {
@@ -582,7 +668,17 @@ export async function advanceAgents(
     const byId = new Map<string, ParsedLog>();
     for (const l of [...stored, ...parsed]) byId.set(l.id, l);
     windowLogs = [...byId.values()];
+    addTrace(trace, {
+      component: 'lifecycle.correlation-window', name: 'Load and merge correlation window',
+      status: 'completed', startedAt: windowStarted,
+      details: { freshLogs: parsed.length, windowLogs: windowLogs.length, windowSpanMs, rowLimit: windowLogLimit, capReached: stored.length >= windowLogLimit },
+    });
   } catch (err) {
+    addTrace(trace, {
+      component: 'lifecycle.correlation-window', name: 'Load and merge correlation window',
+      status: 'error', startedAt: windowStarted, error: (err as Error).message,
+      details: { freshLogs: parsed.length, fallback: 'current execution logs only', windowSpanMs, rowLimit: windowLogLimit },
+    });
     console.error('advanceAgents: correlation-window query failed, using this poll only', (err as Error).message);
   }
 
@@ -590,9 +686,15 @@ export async function advanceAgents(
   // message is split across records, and its lines can straddle a poll boundary, so
   // extracting per-record per-poll can never see a whole message. `freshLogIds` keeps the
   // work bounded to entries this poll actually touched.
+  const eventStarted = Date.now();
   const freshLogIds = new Set(parsed.map((l) => l.id));
   const events = agentEvents(windowLogs, registry, freshLogIds);
   const ids = [...new Set(events.map((e) => e.corrId))];
+  addTrace(trace, {
+    component: 'lifecycle.extract-events', name: 'Coalesce entries and extract transaction events',
+    status: 'completed', startedAt: eventStarted,
+    details: { freshLogs: parsed.length, windowLogs: windowLogs.length, events: events.length, correlations: ids.length },
+  });
   // The active-agent load is CAPPED, and hitting the cap is the sharpest scaling cliff in
   // the poller: agents beyond it are never loaded, so they are never advanced, so they sit
   // until their inactivity timeout closes them as `error` — and the validation worker then
@@ -600,10 +702,16 @@ export async function advanceAgents(
   // invariant. Thousands of transactions can be silently mis-recorded that way. Raise it
   // with INGEST_ACTIVE_AGENT_LIMIT, and never let reaching it pass unreported.
   const activeLimit = Number(process.env.INGEST_ACTIVE_AGENT_LIMIT ?? 5000);
+  const loadAgentsStarted = Date.now();
   const [active, matching] = await Promise.all([
     getActiveAgents(activeLimit),
     ids.length ? getAgentsByMessageIds(ids) : Promise.resolve([] as Agent[]),
   ]);
+  addTrace(trace, {
+    component: 'lifecycle.load-agents', name: 'Load active and matching agents',
+    status: 'completed', startedAt: loadAgentsStarted,
+    details: { active: active.length, matching: matching.length, activeLimit, capReached: active.length >= activeLimit },
+  });
   if (active.length >= activeLimit) {
     console.error(
       `ingest: active-agent load hit the ${activeLimit} cap — agents beyond it are NOT being advanced and will time out spuriously. Raise INGEST_ACTIVE_AGENT_LIMIT.`,
@@ -612,10 +720,27 @@ export async function advanceAgents(
   const known = new Map<string, Agent>();
   for (const a of [...active, ...matching]) known.set(a.messageId, a);
 
+  const decisionStarted = Date.now();
   const step = await stepAgentsDynamic(events, [...known.values()], { now, timeoutMs, registry, windowLogs });
+  trace.push(...step.trace);
+  addTrace(trace, {
+    component: 'lifecycle.advance', name: 'Advance transaction-agent lifecycle',
+    status: 'completed', startedAt: decisionStarted,
+    details: {
+      spawned: step.spawned, advanced: step.advanced, closed: step.closed,
+      fastPathed: step.fastPathed, reasoned: step.reasoned,
+      deferredOverCap: step.deferredOverCap, backlogByApplication: step.backlogByApp,
+    },
+  });
 
   const toPersist = [...step.changed].map((id) => step.agents.get(id)!).filter(Boolean);
+  const persistStarted = Date.now();
   await upsertAgents(toPersist);
+  addTrace(trace, {
+    component: 'persistence.agents', name: 'Persist changed transaction agents',
+    status: 'completed', startedAt: persistStarted,
+    details: { agents: toPersist.length },
+  });
 
   // Report every non-completed closed agent lacking a anomaly — those that closed
   // this poll AND any that slipped through earlier (a fingerprint collision on a
@@ -624,8 +749,15 @@ export async function advanceAgents(
   // is self-healing. The per-occurrence fingerprint makes each mint idempotent.
   const anomalies: Anomaly[] = [];
   const anomaliesByApp: Record<string, number> = {};
+  const reconcileStarted = Date.now();
   const unreported = await getUnreportedClosedAgents(now - anomaliesTtlMs);
+  addTrace(trace, {
+    component: 'lifecycle.reconcile-anomalies', name: 'Find closed agents missing anomalies',
+    status: 'completed', startedAt: reconcileStarted,
+    details: { unreported: unreported.length, since: now - anomaliesTtlMs },
+  });
   for (const a of unreported) {
+    const anomalyStarted = Date.now();
     try {
       const f = agentAnomaly(a, now, windowMs);
       await insertAnomaly(f);
@@ -641,13 +773,33 @@ export async function advanceAgents(
         });
       }
       anomalies.push(f);
+      addTrace(trace, {
+        component: 'persistence.lifecycle-anomaly', name: `Persist lifecycle anomaly ${f.id}`,
+        status: 'completed', startedAt: anomalyStarted,
+        application: a.application, correlationId: a.messageId,
+        details: {
+          anomalyId: f.id, status: a.status, severity: f.severity,
+          confidence: f.confidence, alertCreated: ALERT_SEVERITIES.includes(f.severity),
+        },
+      });
     } catch (err) {
+      addTrace(trace, {
+        component: 'persistence.lifecycle-anomaly', name: `Persist lifecycle anomaly for ${a.messageId}`,
+        status: 'error', startedAt: anomalyStarted,
+        application: a.application, correlationId: a.messageId, error: (err as Error).message,
+      });
       console.error('agentLifecycle: failure anomaly skipped', (err as Error).message);
     }
   }
 
   const historyTtlMin = Number(process.env.INGEST_AGENT_HISTORY_TTL_MINUTES ?? 1440);
-  await pruneClosedAgentsOlderThan(now - historyTtlMin * 60_000);
+  const pruneStarted = Date.now();
+  const prunedAgents = await pruneClosedAgentsOlderThan(now - historyTtlMin * 60_000);
+  addTrace(trace, {
+    component: 'retention.agents', name: 'Prune expired closed agents',
+    status: 'completed', startedAt: pruneStarted,
+    details: { cutoff: now - historyTtlMin * 60_000, pruned: prunedAgents },
+  });
 
   const byApplication: AdvanceResult['byApplication'] = {};
   const appIds = new Set([...Object.keys(step.byApp), ...Object.keys(anomaliesByApp)]);
@@ -657,6 +809,7 @@ export async function advanceAgents(
   }
 
   return {
+    trace,
     spawned: step.spawned,
     advanced: step.advanced,
     closed: step.closed,
