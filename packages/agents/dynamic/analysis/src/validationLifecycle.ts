@@ -218,7 +218,15 @@ const AI_REVIEW_EPOCH = Number(process.env.VALIDATION_AI_REVIEW_EPOCH ?? 0);
  * correctness — correctness comes from the gate re-executing every claim.
  */
 const defaultValidationReasoner: ValidationReasoner = (system, user) =>
-  converse(user, { system, temperature: 0, maxTokens: AI_MAX_TOKENS, stage: 'validation-review' });
+  converse(user, {
+    system,
+    temperature: 0,
+    maxTokens: AI_MAX_TOKENS,
+    stage: 'validation-review',
+    // The payload is platform-built validation evidence, not a human instruction. Keep
+    // input prompt-attack filtering off the logs while retaining output protection.
+    trustedInput: true,
+  });
 
 /**
  * Run `fn` over `items` with bounded concurrency, stopping early once `deadline` passes.

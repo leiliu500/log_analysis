@@ -15,10 +15,14 @@ const REFRESH_MS = 30_000;
 const ACTIVE_REFRESH_MS = 3_000;
 
 /** Applications known to the platform (shown even before they have data). */
-const KNOWN_APPS = ['scp', 'apiflc'] as const;
+const KNOWN_APPS = ['scp', 'apiflc', 'edge'] as const;
 
 /** What each application calls its correlation id — app-specific column header. */
-const CORRELATION_LABELS: Record<string, string> = { scp: 'messageId', apiflc: 'correlationID' };
+const CORRELATION_LABELS: Record<string, string> = {
+  scp: 'messageId',
+  apiflc: 'correlationID',
+  edge: 'fileName',
+};
 
 export function ValidationView() {
   const [appFilter, setAppFilter] = useState<string>('all');

@@ -21,11 +21,15 @@ type TabKey = 'agents' | 'anomalies' | 'schedule';
 const REFRESH_MS = 30_000;
 
 /** Applications known to the platform (shown even before they have data). */
-const KNOWN_APPS = ['scp', 'apiflc'] as const;
+const KNOWN_APPS = ['scp', 'apiflc', 'edge'] as const;
 
 /** What each application calls its correlation id — app-specific (used as the
  *  Agent History id column header). SCP: messageId; apiflc: correlationID. */
-const CORRELATION_LABELS: Record<string, string> = { scp: 'messageId', apiflc: 'correlationID' };
+const CORRELATION_LABELS: Record<string, string> = {
+  scp: 'messageId',
+  apiflc: 'correlationID',
+  edge: 'fileName',
+};
 
 /** Anomalies newer than this are "recent (in window)"; older are history. */
 const RECENT_ANOMALY_MIN = 30;
@@ -50,7 +54,17 @@ export function DashboardView() {
   const refresh = useCallback(async (analyze: boolean) => {
     setError(null);
     try {
-      const [f, a, s] = await Promise.all([api.anomalies(analyze), api.agents(), api.schedule()]);
+      // On an explicit run, wait for analysis to commit lifecycle transitions before
+      // reading agent state. Starting all three together races the reads against the
+      // write and displays the state from immediately before this run. Ordinary polling
+      // stays parallel because it performs no writes.
+      const [f, a, s] = analyze
+        ? await (async () => {
+            const analyzed = await api.anomalies(true);
+            const [agents, schedule] = await Promise.all([api.agents(), api.schedule()]);
+            return [analyzed, agents, schedule] as const;
+          })()
+        : await Promise.all([api.anomalies(false), api.agents(), api.schedule()]);
       setAnomalies(f.anomalies);
       if (f.analysis) setAnalysis(f.analysis);
       setActiveAgents(a.active);

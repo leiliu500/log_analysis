@@ -20,9 +20,9 @@ import type { ContentBlock, ConverseResponse } from '@aws-sdk/client-bedrock-run
  * attack ("DROP TABLE", "sudo", quoted user input echoed by an application), and a
  * prompt-attack filter aimed at retrieved logs blocks routine incident analysis. Once a
  * request carries even one {@link https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html guardContent}
- * block, Bedrock evaluates ONLY the tagged blocks on input — so tagging just the user's
- * own words is what gives injection scanning on the sentence a human actually typed
- * while leaving retrieved evidence unscanned.
+ * block, Bedrock evaluates ONLY the tagged blocks on input. Human-facing callers tag the
+ * human-authored span; internal analysis callers tag a harmless one-character anchor so
+ * their log evidence is not accidentally treated as an instruction.
  *
  * The OUTPUT is always evaluated, tagging or not. That is deliberate and is where the
  * secret-leak protection actually lives: whatever the model read, it cannot emit an AWS
@@ -68,17 +68,37 @@ export function guardrailConfig():
  * question text. Everything around it (our own instructions, aggregates, retrieved log
  * lines) stays untagged and therefore unscanned on input.
  *
- * Falls back to a single unguarded block when there is no guardrail, no `untrusted`, or
- * the span is not found verbatim in the prompt. That last case is the important one: a
- * caller that reformats the question before embedding it would otherwise silently switch
- * the whole prompt — logs included — into scanned content and start blocking real work.
- * Losing input scanning is the safe failure here; output scanning is unaffected either
- * way, because Bedrock evaluates the reply regardless of tagging.
+ * `trustedInput` is only for prompts assembled entirely by the platform (validation,
+ * transaction transitions, anomaly reasoning). We still attach the guardrail so output
+ * scanning remains active, but tag only the first character as an input anchor. Splitting
+ * an existing character instead of adding a sentinel preserves exactly what the model
+ * reads.
+ *
+ * If a human-facing caller supplies an `untrusted` span that cannot be found verbatim, we
+ * deliberately fall back to the normal plain block, which makes Bedrock scan the whole
+ * prompt. That is the fail-closed behavior: an integration mistake may be noisy, but it
+ * cannot silently disable prompt-injection protection for human input.
  */
-export function guardedContent(prompt: string, untrusted?: string): ContentBlock[] {
-  if (!guardrailEnabled() || !untrusted) return [{ text: prompt }];
-  const at = prompt.indexOf(untrusted);
-  if (at === -1) return [{ text: prompt }];
+export function guardedContent(prompt: string, untrusted?: string, trustedInput = false): ContentBlock[] {
+  if (!guardrailEnabled()) return [{ text: prompt }];
+  const at = untrusted ? prompt.indexOf(untrusted) : -1;
+
+  if (trustedInput && !untrusted && prompt.length > 0) {
+    // The presence of one guardContent block makes Bedrock evaluate only tagged blocks
+    // on input. A single existing character is semantically inert and keeps the complete
+    // prompt byte-for-byte identical when the blocks are reassembled.
+    const anchor = Array.from(prompt)[0]!;
+    const tail = prompt.slice(anchor.length);
+    const blocks: ContentBlock[] = [
+      {
+        guardContent: { text: { text: anchor, qualifiers: ['guard_content'] } },
+      } as ContentBlock,
+    ];
+    if (tail) blocks.push({ text: tail });
+    return blocks;
+  }
+
+  if (!untrusted || at === -1) return [{ text: prompt }];
 
   const blocks: ContentBlock[] = [];
   const head = prompt.slice(0, at);

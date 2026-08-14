@@ -173,7 +173,15 @@ const REASONER_MAX_TOKENS = process.env.INGEST_DYNAMIC_MAXTOKENS
   ? Number(process.env.INGEST_DYNAMIC_MAXTOKENS)
   : undefined;
 const defaultReasoner: TransitionReasoner = (system, user) =>
-  converseJson<Partial<TransitionDecision>>(user, { system, temperature: 0, maxTokens: REASONER_MAX_TOKENS, stage: 'ingest-transition' });
+  converseJson<Partial<TransitionDecision>>(user, {
+    system,
+    temperature: 0,
+    maxTokens: REASONER_MAX_TOKENS,
+    stage: 'ingest-transition',
+    // App specs and log evidence are internal inputs. A log line that quotes an
+    // instruction must not block the transaction worker; output remains guarded.
+    trustedInput: true,
+  });
 
 /**
  * The dynamic lifecycle step (pure — no DB). Extraction/correlation + phaseTs bookkeeping

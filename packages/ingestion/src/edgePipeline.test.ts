@@ -7,6 +7,7 @@ import {
   appContextFor,
   deriveOutcome,
   relatedLogsFor,
+  residualReason,
   stepAgentsDynamic,
   validateAgent,
   validationAgentInfo,
@@ -102,6 +103,35 @@ test('validation worker re-derives edge completion from filename-correlated logs
   );
   assert.equal(result.result, 'success');
   assert.deepEqual(result.delta, []);
+  assert.match(
+    residualReason(result, derived, 'clean') ?? '',
+    /outcome was derived as completed/,
+    'the completed Edge transaction must remain eligible for its non-blocking AI review',
+  );
+});
+
+test('validation worker stays pending for an in-flight edge file without blocking the AI stage', () => {
+  const ctx = appContextFor({ application: 'edge' }, applicationRegistry);
+  const result = validateAgent(
+    {
+      messageId: INCOMPLETE,
+      application: 'edge',
+      status: 'awaiting',
+      active: true,
+      waitingFor: 'CLOUDWATCH',
+      phases: ['SFTP', 'BPS', 'CLOUDWATCH'],
+      phaseTs: { SFTP: 4, BPS: 5 },
+      spawnedAt: 4,
+    },
+    undefined,
+    100,
+    ctx,
+  );
+
+  assert.equal(result.result, 'pending');
+  assert.equal(result.active, true);
+  assert.match(result.detail ?? '', /awaiting CLOUDWATCH/);
+  assert.equal(residualReason(result, undefined, 'clean'), null);
 });
 
 test('validation worker rejects a completed edge agent whose embedded filename has no CloudWatch phase', () => {
