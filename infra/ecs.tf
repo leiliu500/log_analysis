@@ -25,6 +25,10 @@ resource "aws_lb" "main" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
   subnets            = aws_subnet.public[*].id
+  # Opus 4.8 long reasoning can legitimately exceed the ALB's
+  # 60-second default. The runtime aborts a call at 240 seconds, leaving time
+  # to return a structured response before this connection closes.
+  idle_timeout = 300
 }
 
 resource "aws_lb_target_group" "web" {
@@ -108,6 +112,7 @@ resource "aws_ecs_task_definition" "api" {
       # Assistant, chat, simulator, on-demand analysis). Kept identical to the Lambdas'
       # so the same question answered by either half gets the same budget.
       { name = "BEDROCK_MAX_TOKENS", value = tostring(var.bedrock_max_tokens) },
+      { name = "BEDROCK_TIMEOUT_MS", value = tostring(var.bedrock_timeout_ms) },
       # Guardrail for the API container — the half that serves the Log Assistant, i.e. the
       # only path where a human's typed words become a model prompt. Kept identical to the
       # Lambdas' so the same question answered by either half is subject to the same

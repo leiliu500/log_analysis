@@ -33,6 +33,7 @@ locals {
     # generously. A tight ceiling is the failure mode that bites: the reasoning model
     # spends hidden tokens from this same budget and the visible reply arrives truncated.
     BEDROCK_MAX_TOKENS = tostring(var.bedrock_max_tokens)
+    BEDROCK_TIMEOUT_MS = tostring(var.bedrock_timeout_ms)
     # Guardrail applied to every Converse call these Lambdas make (ingest transitions,
     # validation review, analysis reasoning). Empty when guardrail_enabled = false, which
     # the runtime reads as "no guardrail" and sends the original unguarded request — so
