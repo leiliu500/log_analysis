@@ -16,6 +16,8 @@ export interface TransitionDecision {
   waitingFor?: string;
   /** Severity for a non-completed close (failed ⇒ high, timeout/error ⇒ medium). */
   severity?: 'high' | 'medium';
+  /** Model-reported confidence in this transition, normalized to 0..1. */
+  confidence?: number;
   detail: string;
 }
 
@@ -62,6 +64,7 @@ const specCache = new Map<string, string | null>();
 
 /** The JSON response contract every app's agent shares (appended to its evidence). */
 const RESPONSE_CONTRACT = [
+  'The JSON object must include a confidence field containing a number from 0 to 1.',
   "Decide this transaction's NEW lifecycle state. Respond ONLY with JSON:",
   '{ "status": "awaiting" | "completed" | "failed" | "error", "waitingFor": "<next phase or null>", "severity": "high" | "medium" | null, "detail": "<short reason>" }',
 ].join('\n');
@@ -107,6 +110,10 @@ export async function decideFromSpec(
             : status === 'error'
               ? 'medium'
               : undefined,
+      confidence:
+        typeof out.confidence === 'number' && Number.isFinite(out.confidence)
+          ? Math.max(0, Math.min(1, out.confidence))
+          : undefined,
       detail: out.detail ?? `reasoned ${status}`,
     };
   } catch (err) {

@@ -10,13 +10,14 @@ test('decideFromSpec loads the app spec, appends the JSON contract, and normaliz
   const reason = async (system: string, user: string): Promise<Partial<TransitionDecision>> => {
     sawSystem = system;
     sawUser = user;
-    return { status: 'completed', detail: 'done' };
+    return { status: 'completed', confidence: 0.87, detail: 'done' };
   };
   const d = await decideFromSpec(SPEC, 'EVIDENCE-MARKER', reason);
   assert.equal(d?.status, 'completed');
   assert.ok(sawSystem.length > 0, 'the transaction.md spec is the system prompt');
   assert.match(sawUser, /EVIDENCE-MARKER/); // the app-built evidence is passed through
   assert.match(sawUser, /Respond ONLY with JSON/); // the shared response contract is appended
+  assert.equal(d?.confidence, 0.87);
 });
 
 test('decideFromSpec defaults severity by status (failed ⇒ high)', async () => {

@@ -7,10 +7,19 @@
  */
 import { randomUUID } from 'node:crypto';
 import { dispatchAgentic, advanceAgents } from '@log/analysis';
-import type { ParsedLog, PollerTrigger, Anomaly, PollerRun } from '@log/shared';
+import type { ParsedLog, PollerTrigger, Anomaly, PollerRun, ExecutionTraceStep } from '@log/shared';
 import { allConnectors } from './source/index.js';
 import { pruneAnomaliesOlderThan, insertPollerRun } from '@log/db';
 import { applicationRegistry } from '@log/applications';
+import { validateExecutionTrace } from './executionTrace.js';
+
+function traceStep(
+  trace: ExecutionTraceStep[],
+  step: Omit<ExecutionTraceStep, 'id' | 'sequence' | 'completedAt' | 'durationMs'>,
+): void {
+  const completedAt = Date.now();
+  trace.push({ ...step, id: randomUUID(), sequence: 0, completedAt, durationMs: Math.max(0, completedAt - step.startedAt) });
+}
 
 export interface AnalyzeOptions {
   windowMinutes?: number;
@@ -39,6 +48,9 @@ export interface AnalyzeResult {
  */
 export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<AnalyzeResult> {
   const startedAt = Date.now();
+  const runId = randomUUID();
+  const trace: ExecutionTraceStep[] = [];
+  const connectors = allConnectors();
   const windowMinutes = opts.windowMinutes ?? 5;
   const windowMs = windowMinutes * 60_000;
   // Anomalies are RETAINED as history (like the agent history) rather than expired
@@ -48,11 +60,24 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
     opts.anomaliesTtlMinutes ?? Number(process.env.FINDINGS_HISTORY_TTL_MINUTES ?? 1440);
   const since = Date.now() - windowMs;
   const bySource: Record<string, { parsed: number; anomalies: number }> = {};
+  traceStep(trace, {
+    component: 'poller.trigger', name: 'Start ingestion execution', status: 'completed',
+    startedAt, details: { runId, trigger: opts.trigger ?? 'schedule', windowMinutes, since, sources: connectors.map((c) => c.source) },
+  });
 
   let pruned = 0;
+  const pruneStarted = Date.now();
   try {
     pruned = await pruneAnomaliesOlderThan(Date.now() - ttlMinutes * 60_000);
+    traceStep(trace, {
+      component: 'retention.anomalies', name: 'Prune expired anomalies', status: 'completed',
+      startedAt: pruneStarted, details: { ttlMinutes, pruned },
+    });
   } catch (err) {
+    traceStep(trace, {
+      component: 'retention.anomalies', name: 'Prune expired anomalies', status: 'error',
+      startedAt: pruneStarted, error: (err as Error).message, details: { ttlMinutes },
+    });
     console.error('prune anomalies failed', err);
   }
 
@@ -66,20 +91,49 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
   const stages: Record<string, number> = {};
   const ingestStart = Date.now();
   await Promise.all(
-    allConnectors().map(async (connector) => {
+    connectors.map(async (connector) => {
+      const pullStarted = Date.now();
+      const sourceTrace: ExecutionTraceStep[] = [];
       try {
         const records = await connector.pull({ since, limit: 5000 });
+        traceStep(trace, {
+          component: 'connector.pull', name: `Pull ${connector.source} logs`, status: 'completed',
+          startedAt: pullStarted, source: connector.source, details: { since, limit: 5000, records: records.length },
+        });
         if (!records.length) {
           bySource[connector.source] = { parsed: 0, anomalies: 0 };
+          traceStep(trace, {
+            component: 'source.complete', name: `Complete ${connector.source} branch`, status: 'completed',
+            startedAt: pullStarted, source: connector.source, details: { records: 0, parsed: 0, anomalies: 0 },
+          });
           return;
         }
-        const result = await dispatchAgentic(records, { windowMs, registry: applicationRegistry });
+        const result = await dispatchAgentic(records, { windowMs, registry: applicationRegistry, trace: sourceTrace });
         allParsed.push(...result.parsed);
         sourceAnomalies.push(...result.anomalies);
         bySource[connector.source] = { parsed: result.parsed.length, anomalies: result.anomalies.length };
+        traceStep(trace, {
+          component: 'source.complete', name: `Complete ${connector.source} branch`, status: 'completed',
+          startedAt: pullStarted, source: connector.source,
+          details: { records: records.length, parsed: result.parsed.length, anomalies: result.anomalies.length, agentOutcomes: result.outcomes.length },
+        });
       } catch (err) {
+        if (!trace.some((s) => s.component === 'connector.pull' && s.source === connector.source)) {
+          traceStep(trace, {
+            component: 'connector.pull', name: `Pull ${connector.source} logs`, status: 'error',
+            startedAt: pullStarted, source: connector.source, error: (err as Error).message,
+            details: { since, limit: 5000 },
+          });
+        }
+        traceStep(trace, {
+          component: 'source.complete', name: `Complete ${connector.source} branch`, status: 'error',
+          startedAt: pullStarted, source: connector.source, error: (err as Error).message,
+          details: { parsed: 0, anomalies: 0 },
+        });
         console.error(`ingest ${connector.source} failed`, err);
         bySource[connector.source] = { parsed: 0, anomalies: 0 };
+      } finally {
+        trace.push(...sourceTrace);
       }
     }),
   );
@@ -90,8 +144,9 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
   // allParsed is empty, so timeouts fire on idle polls and report Anomalies.
   const lifecycleStart = Date.now();
   let agents = { spawned: 0, advanced: 0, closed: 0, anomalies: 0 };
-  let lifecycleSplit: { fastPathed: number; reasoned: number; deferredOverCap: number } | undefined;
+  let lifecycleSplit = { fastPathed: 0, reasoned: 0, deferredOverCap: 0 };
   let lifeByApp: Record<string, { spawned: number; advanced: number; closed: number; anomalies: number }> = {};
+  const lifecycleTrace: ExecutionTraceStep[] = [];
   try {
     const timeoutMs =
       opts.agentTimeoutMinutes != null ? opts.agentTimeoutMinutes * 60_000 : undefined;
@@ -99,6 +154,7 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
       windowMs,
       timeoutMs,
       anomaliesTtlMs: ttlMinutes * 60_000,
+      trace: lifecycleTrace,
     });
     agents = {
       spawned: life.spawned,
@@ -116,8 +172,14 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
       deferredOverCap: life.deferredOverCap ?? 0,
     };
   } catch (err) {
+    traceStep(trace, {
+      component: 'lifecycle.advance', name: 'Advance transaction-agent lifecycle', status: 'error',
+      startedAt: lifecycleStart, error: (err as Error).message,
+      details: { parsedLogs: allParsed.length },
+    });
     console.error('agent lifecycle advance failed', err);
   }
+  trace.push(...lifecycleTrace);
   stages.lifecycle = Date.now() - lifecycleStart;
 
   // Per-application breakdown for the Schedule tab (parsed by log group, anomalies
@@ -138,13 +200,34 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
     b.anomalies += c.anomalies;
   }
 
-  // Record this run for the dashboard's Schedule tab (best-effort — never fail
-  // the poll on a bookkeeping error).
+  // Persist the run and its defensive trace. This is mandatory: silently succeeding
+  // without an audit/validation record would defeat the trace's line-of-defense role.
   const anomaliesTotal =
     Object.values(bySource).reduce((n, s) => n + s.anomalies, 0) + agents.anomalies;
+  const aggregateStarted = Date.now();
+  traceStep(trace, {
+    component: 'run.aggregate', name: 'Aggregate and reconcile execution totals',
+    status: 'completed', startedAt: aggregateStarted,
+    details: { bySource, byApplication, agents, anomalies: anomaliesTotal, pruned, lifecycleSplit },
+  });
+  trace.sort((a, b) =>
+    a.startedAt - b.startedAt || a.completedAt - b.completedAt || a.id.localeCompare(b.id),
+  );
+  trace.forEach((step, index) => {
+    step.sequence = index + 1;
+  });
+  const traceValidation = validateExecutionTrace(trace, {
+    sources: connectors.map((connector) => connector.source),
+    bySource,
+    agents,
+    lifecycleSplit,
+  });
+  if (traceValidation.status === 'failed') {
+    console.error('ingestion execution trace validation failed', { runId, violations: traceValidation.violations });
+  }
   try {
     await insertPollerRun({
-      id: randomUUID(),
+      id: runId,
       ranAt: startedAt,
       trigger: opts.trigger ?? 'schedule',
       windowMinutes,
@@ -155,9 +238,12 @@ export async function analyzeAllSources(opts: AnalyzeOptions = {}): Promise<Anal
       anomalies: anomaliesTotal,
       pruned,
       stages: { ...stages, ...(lifecycleSplit ?? {}) },
+      trace,
+      traceValidation,
     });
   } catch (err) {
     console.error('record poller run failed', err);
+    throw err;
   }
 
   return { bySource, agents, pruned };

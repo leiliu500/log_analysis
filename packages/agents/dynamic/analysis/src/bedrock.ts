@@ -16,7 +16,8 @@ import {
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 const MODEL_ID =
-  process.env.BEDROCK_MODEL_ID ?? 'anthropic.claude-sonnet-5-20250101-v1:0';
+  process.env.BEDROCK_MODEL_ID ?? 'anthropic.claude-sonnet-5';
+const IS_CLAUDE_SONNET_5 = MODEL_ID.endsWith('anthropic.claude-sonnet-5');
 const EMBED_MODEL_ID =
   process.env.BEDROCK_EMBED_MODEL_ID ?? 'amazon.titan-embed-text-v2:0';
 
@@ -25,15 +26,15 @@ const EMBED_MODEL_ID =
  *
  * `maxTokens` is a CAP, not a reservation: billing and latency follow the tokens the
  * model actually emits, so a generous ceiling costs nothing on a short reply. A tight one
- * is what actually hurts — the configured foundation model (openai.gpt-oss-120b) is a
- * REASONING model whose hidden reasoning tokens are charged against this same budget, so
- * a low ceiling gets consumed by reasoning and the reply is truncated mid-JSON or comes
- * back empty. That produced silently-failed validation reviews in prod at 2000, and
- * timed-out ingest transitions at 400 before that.
+ * is what actually hurts — Claude Sonnet 5 uses always-on adaptive reasoning, whose
+ * reasoning tokens are charged against this same budget, so a low ceiling gets consumed
+ * by reasoning and the reply is truncated mid-JSON or comes back empty. That produced
+ * silently-failed validation reviews in prod at 2000, and timed-out ingest transitions
+ * at 400 before that.
  *
- * Verified against the deployed model: it accepts ceilings up to the full context window
- * without a ValidationException. Individual call sites may still pass a smaller
- * `maxTokens` when they genuinely want a short answer; they inherit this otherwise.
+ * The 32K default remains below Sonnet 5's 128K maximum output. Individual call sites may
+ * still pass a smaller `maxTokens` when they genuinely want a short answer; they inherit
+ * this otherwise.
  */
 const MAX_TOKENS = Number(process.env.BEDROCK_MAX_TOKENS ?? 32000);
 
@@ -105,7 +106,9 @@ export async function converse(
       system: opts.system ? [{ text: opts.system }] : undefined,
       inferenceConfig: {
         maxTokens: opts.maxTokens ?? MAX_TOKENS,
-        temperature: opts.temperature ?? 0.1,
+        // Sonnet 5 uses always-on adaptive reasoning and rejects the legacy
+        // temperature parameter with a ValidationException.
+        ...(!IS_CLAUDE_SONNET_5 ? { temperature: opts.temperature ?? 0.1 } : {}),
       },
       // Undefined when no guardrail is provisioned, which is exactly the pre-guardrail
       // request — so an unconfigured environment behaves identically rather than failing

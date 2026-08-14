@@ -92,9 +92,9 @@ resource "aws_ecs_task_definition" "api" {
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
   container_definitions = jsonencode([{
-    name      = "api"
-    image     = var.api_image != "" ? var.api_image : "${aws_ecr_repository.api.repository_url}:latest"
-    essential = true
+    name         = "api"
+    image        = var.api_image != "" ? var.api_image : "${aws_ecr_repository.api.repository_url}:latest"
+    essential    = true
     portMappings = [{ containerPort = 4000 }]
     environment = [
       { name = "API_PORT", value = "4000" },
@@ -102,7 +102,7 @@ resource "aws_ecs_task_definition" "api" {
       { name = "DATABASE_URL", value = local.database_url },
       { name = "APP_ENDPOINTS_JSON", value = var.app_endpoints_json },
       { name = "CLOUDWATCH_LOG_GROUPS", value = join(",", concat(var.cloudwatch_log_groups, var.application_log_groups)) },
-      { name = "BEDROCK_MODEL_ID", value = local.foundation_model },
+      { name = "BEDROCK_MODEL_ID", value = var.bedrock_runtime_model_id },
       { name = "BEDROCK_EMBED_MODEL_ID", value = "amazon.titan-embed-text-v2:0" },
       # Output-token ceiling inherited by every agent in the API container (Log
       # Assistant, chat, simulator, on-demand analysis). Kept identical to the Lambdas'
@@ -147,9 +147,9 @@ resource "aws_ecs_task_definition" "web" {
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
   container_definitions = jsonencode([{
-    name      = "web"
-    image     = var.web_image != "" ? var.web_image : "${aws_ecr_repository.web.repository_url}:latest"
-    essential = true
+    name         = "web"
+    image        = var.web_image != "" ? var.web_image : "${aws_ecr_repository.web.repository_url}:latest"
+    essential    = true
     portMappings = [{ containerPort = 3000 }]
     environment = [
       { name = "NEXT_PUBLIC_API_BASE_URL", value = "http://${aws_lb.main.dns_name}/api" }

@@ -4,3 +4,4 @@
 export * from './source/index.js';
 export * from './ingestPoller.js';
 export * from './validationPoller.js';
+export * from './executionTrace.js';

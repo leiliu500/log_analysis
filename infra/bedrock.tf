@@ -10,9 +10,10 @@
 # ---------------------------------------------------------------------------
 
 locals {
-  # Agent + reasoning foundation model, driven by var.bedrock_model_arn
-  # (default "openai.gpt-oss-120b-1:0" — the model this account's existing
-  # agents already use successfully). A plain model id, as GovCloud expects.
+  # Agent + reasoning foundation model, driven by var.bedrock_model_arn.
+  # Claude Sonnet 5 uses always-on adaptive reasoning; its default effort is high.
+  # Hosted agents use the base model ID; direct Converse calls use the inference
+  # profile selected separately by var.bedrock_runtime_model_id.
   foundation_model = var.bedrock_model_arn
 
   # Guardrail attachment, shared by every hosted agent below. Empty list ⇒ no
