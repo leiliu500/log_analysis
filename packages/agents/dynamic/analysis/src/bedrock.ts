@@ -60,12 +60,20 @@ export interface ConverseOptions {
    * injection when a guardrail is configured.
    *
    * Pass this on any path that embeds an end user's own words (the Log Assistant's
-   * question); leave it unset for prompts built solely from our instructions and
-   * retrieved logs. Deliberately opt-in: tagging retrieved log content instead would
-   * flag routine incident data as an attack, because logs quote the very strings an
-   * injection filter looks for. See {@link guardedContent}.
+   * question). For prompts built solely from our instructions and retrieved logs, set
+   * {@link trustedInput}; leaving both fields unset deliberately makes Bedrock scan the
+   * whole prompt. Tagging retrieved log content would flag routine incident data as an
+   * attack, because logs quote the very strings an injection filter looks for. See
+   * {@link guardedContent}.
    */
   untrusted?: string;
+  /**
+   * The prompt was assembled entirely by the platform from specs and log evidence. This
+   * exempts that evidence from INPUT policies that would mistake quoted log text for a
+   * prompt attack, while the attached guardrail continues to inspect model OUTPUT.
+   * Never set this on a prompt containing an unmarked human instruction.
+   */
+  trustedInput?: boolean;
 }
 
 /**
@@ -82,7 +90,10 @@ export async function converse(
   prompt: string,
   opts: ConverseOptions = {},
 ): Promise<string> {
-  const messages: Message[] = [{ role: 'user', content: guardedContent(prompt, opts.untrusted) }];
+  const messages: Message[] = [{
+    role: 'user',
+    content: guardedContent(prompt, opts.untrusted, opts.trustedInput),
+  }];
   const startedAt = Date.now();
   const base = { ts: startedAt, stage: opts.stage ?? 'unattributed', model: MODEL_ID, application: opts.application };
   let res;

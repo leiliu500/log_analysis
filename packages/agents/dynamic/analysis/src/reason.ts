@@ -59,6 +59,9 @@ ${renderLogs(cluster.logs)}`;
     system: REASONING_SYSTEM,
     temperature: 0.1,
     stage: 'analysis-reason',
+    // Correlated log evidence is data, not a human-authored instruction. Exempt it from
+    // input prompt-attack filtering while preserving guardrail checks on the finding.
+    trustedInput: true,
   });
   const observedSourceLogGroups = uniqueStrings(cluster.logs.map((log) => log.stream));
   const reportedSourceLogGroups = uniqueStrings(mf.sourceLogGroups ?? []);
