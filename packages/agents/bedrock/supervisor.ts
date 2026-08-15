@@ -15,6 +15,10 @@ export async function routeRequest(message: string): Promise<RouteDecision> {
     const raw = await converseJson<unknown>(message, {
       system: SUPERVISOR_SYSTEM,
       temperature: 0,
+      stage: 'supervisor',
+      // Routing has a deterministic safe fallback and must not consume the whole
+      // interactive request budget when Bedrock stalls.
+      timeoutMs: 30_000,
     });
     return RouteDecision.parse(raw);
   } catch {

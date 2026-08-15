@@ -144,6 +144,8 @@ export async function segmentCommands(prompt: string): Promise<string[]> {
     const out = await converseJson<{ mode?: unknown; commands?: unknown }>(prompt, {
       system: SEGMENT_SYSTEM,
       temperature: 0,
+      stage: 'simulate',
+      timeoutMs: 30_000,
     });
     if (out.mode === 'raw') return det;
     if (det.length >= 2) return det;
@@ -251,7 +253,12 @@ export async function understandSimulation(
   }
   const user = `Target log groups (use these exact names): ${JSON.stringify([...app.logGroups])}\n\nUser request (may include pasted raw logs):\n"""\n${prompt.slice(0, 16000)}\n"""`;
   try {
-    const raw = await converseJson<Record<string, unknown>>(user, { system, temperature: 0, stage: 'simulate' });
+    const raw = await converseJson<Record<string, unknown>>(user, {
+      system,
+      temperature: 0,
+      stage: 'simulate',
+      timeoutMs: 30_000,
+    });
     return normalizePlan(raw, app);
   } catch {
     return undefined;
@@ -307,7 +314,12 @@ async function extractOneCommand(seg: string): Promise<SimulateCommand> {
   let llm: SimulateCommand | undefined;
   try {
     llm = normalizeCommand(
-      await converseJson<Record<string, unknown>>(seg, { system: EXTRACT_ONE_SYSTEM, temperature: 0, stage: 'simulate' }),
+      await converseJson<Record<string, unknown>>(seg, {
+        system: EXTRACT_ONE_SYSTEM,
+        temperature: 0,
+        stage: 'simulate',
+        timeoutMs: 30_000,
+      }),
     );
   } catch {
     /* llm stays undefined */
@@ -356,9 +368,10 @@ export async function extractCommands(prompt: string): Promise<SimulateCommand[]
       },
     ];
   }
-  const out: SimulateCommand[] = [];
-  for (const seg of await segmentCommands(prompt)) out.push(await extractOneCommand(seg));
-  return out;
+  const segments = await segmentCommands(prompt);
+  // Each command is independent. Preserve input order while avoiding N serial model
+  // waits that can exhaust the interactive request budget.
+  return Promise.all(segments.map((seg) => extractOneCommand(seg)));
 }
 
 function describe(c: SimulateCommand): string {

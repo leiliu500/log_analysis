@@ -35,19 +35,25 @@ variable "bedrock_max_tokens" {
     bound themselves (INGEST_DYNAMIC_MAXTOKENS, VALIDATION_AI_MAXTOKENS).
   EOT
   type        = number
-  default     = 32000
+  default     = 128000
+}
+
+variable "bedrock_timeout_ms" {
+  description = "Abort deadline for one direct Bedrock Runtime call; must remain below the API ALB idle timeout and Lambda execution budget."
+  type        = number
+  default     = 240000
 }
 
 variable "bedrock_model_arn" {
   description = "Foundation model ID or ARN used by hosted Bedrock Agents."
   type        = string
-  default     = "anthropic.claude-sonnet-5"
+  default     = "anthropic.claude-opus-4-8"
 }
 
 variable "bedrock_runtime_model_id" {
   description = "Inference profile or model ID used by direct Bedrock Runtime calls."
   type        = string
-  default     = "us-gov.anthropic.claude-sonnet-5"
+  default     = "us-gov.anthropic.claude-opus-4-8"
 }
 
 # --- Bedrock Guardrail (model-call safety policy) -----------------------------

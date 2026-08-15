@@ -16,8 +16,12 @@ import {
 
 const region = process.env.AWS_REGION ?? 'us-east-1';
 const MODEL_ID =
-  process.env.BEDROCK_MODEL_ID ?? 'anthropic.claude-sonnet-5';
-const IS_CLAUDE_SONNET_5 = MODEL_ID.endsWith('anthropic.claude-sonnet-5');
+  process.env.BEDROCK_MODEL_ID ?? 'anthropic.claude-opus-4-8';
+const IS_CLAUDE_OPUS_48 = MODEL_ID.endsWith('anthropic.claude-opus-4-8');
+const USES_ADAPTIVE_REASONING =
+  IS_CLAUDE_OPUS_48 ||
+  MODEL_ID.endsWith('anthropic.claude-opus-5') ||
+  MODEL_ID.endsWith('anthropic.claude-sonnet-5');
 const EMBED_MODEL_ID =
   process.env.BEDROCK_EMBED_MODEL_ID ?? 'amazon.titan-embed-text-v2:0';
 
@@ -32,11 +36,17 @@ const EMBED_MODEL_ID =
  * silently-failed validation reviews in prod at 2000, and timed-out ingest transitions
  * at 400 before that.
  *
- * The 32K default remains below Sonnet 5's 128K maximum output. Individual call sites may
- * still pass a smaller `maxTokens` when they genuinely want a short answer; they inherit
- * this otherwise.
+ * The 128K default is Opus 4.8's maximum output ceiling. Individual call sites may still
+ * pass a smaller `maxTokens` when they genuinely want a short answer; they inherit this
+ * otherwise.
  */
-const MAX_TOKENS = Number(process.env.BEDROCK_MAX_TOKENS ?? 32000);
+const MAX_TOKENS = Number(process.env.BEDROCK_MAX_TOKENS ?? 128000);
+/**
+ * A model transport must eventually release its request slot. This remains below the
+ * API ALB's 300-second idle timeout and the five-minute worker budget; optional routing
+ * and simulator calls use much shorter deadlines because they have safe fallbacks.
+ */
+const DEFAULT_TIMEOUT_MS = Number(process.env.BEDROCK_TIMEOUT_MS ?? 240000);
 
 let _client: BedrockRuntimeClient | undefined;
 function client(): BedrockRuntimeClient {
@@ -48,6 +58,8 @@ export interface ConverseOptions {
   system?: string;
   maxTokens?: number;
   temperature?: number;
+  /** Abort this individual Bedrock call after the deadline. */
+  timeoutMs?: number;
   /**
    * Which pipeline stage is asking. Recorded on every call so latency, token use and
    * failure can be attributed to a STAGE rather than averaged into one platform-wide
@@ -97,6 +109,9 @@ export async function converse(
   }];
   const startedAt = Date.now();
   const base = { ts: startedAt, stage: opts.stage ?? 'unattributed', model: MODEL_ID, application: opts.application };
+  const timeoutMs = Math.max(1, Math.floor(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
   let res;
   try {
     res = await client().send(
@@ -106,19 +121,28 @@ export async function converse(
       system: opts.system ? [{ text: opts.system }] : undefined,
       inferenceConfig: {
         maxTokens: opts.maxTokens ?? MAX_TOKENS,
-        // Sonnet 5 uses always-on adaptive reasoning and rejects the legacy
-        // temperature parameter with a ValidationException.
-        ...(!IS_CLAUDE_SONNET_5 ? { temperature: opts.temperature ?? 0.1 } : {}),
+        // Current adaptive-reasoning models reject the legacy temperature
+        // parameter with a ValidationException.
+        ...(!USES_ADAPTIVE_REASONING ? { temperature: opts.temperature ?? 0.1 } : {}),
       },
+      // Opus 4.8 supports deep reasoning natively. AWS documents its 128K output
+      // ceiling, but does not list it among the models that accept output_config
+      // effort=max; sending that unsupported field would fail the entire request.
       // Undefined when no guardrail is provisioned, which is exactly the pre-guardrail
       // request — so an unconfigured environment behaves identically rather than failing
       // every call on an identifier that does not resolve.
       guardrailConfig: guardrailConfig(),
     }),
+    { abortSignal: abort.signal },
   );
   } catch (err) {
-    record({ ...base, ok: false, wallMs: Date.now() - startedAt, error: (err as Error).message.slice(0, 300) });
-    throw err;
+    const failure = abort.signal.aborted
+      ? new Error(`Bedrock Converse timed out after ${timeoutMs}ms`)
+      : err as Error;
+    record({ ...base, ok: false, wallMs: Date.now() - startedAt, error: failure.message.slice(0, 300) });
+    throw failure;
+  } finally {
+    clearTimeout(timer);
   }
   const parts = res.output?.message?.content ?? [];
   const text = parts.map((p) => ('text' in p ? p.text : '')).join('').trim();
