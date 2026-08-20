@@ -4,9 +4,7 @@ environment = "prod"
 region      = "us-east-1"
 
 # Bedrock foundation model ID (must be enabled in your account/region).
-bedrock_model_arn = "anthropic.claude-opus-4-8"
-# GovCloud direct-runtime inference profile for the same model.
-bedrock_runtime_model_id = "us-gov.anthropic.claude-opus-4-8"
+bedrock_model_arn = "openai.gpt-oss-120b-1:0"
 
 # Real application endpoints the scp-agent can call.
 app_endpoints_json = "{\"scp\":\"https://scp.example.internal/api/execute\"}"

@@ -22,16 +22,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) };
   if (init?.body != null) headers['Content-Type'] = 'application/json';
   const res = await fetch(`${BASE}${path}`, { ...init, headers, cache: 'no-store' });
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const body = (await res.json()) as { error?: unknown };
-      if (typeof body.error === 'string' && body.error.trim()) detail = `: ${body.error.trim()}`;
-    } catch {
-      /* non-JSON proxy/load-balancer response */
-    }
-    throw new Error(`${path} → ${res.status}${detail}`);
-  }
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return (await res.json()) as T;
 }
 

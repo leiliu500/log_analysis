@@ -25,7 +25,7 @@ locals {
   lambda_env = {
     DATABASE_URL = local.database_url
     # AWS_REGION is auto-set by the Lambda runtime; do not override it here.
-    BEDROCK_MODEL_ID       = var.bedrock_runtime_model_id
+    BEDROCK_MODEL_ID       = local.foundation_model
     BEDROCK_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
     # The output-token ceiling EVERY agent inherits (ingestion reasoner, validation AI
     # agent, analysis reasoning, simulator, Log Assistant). It is a cap, not a
@@ -33,7 +33,6 @@ locals {
     # generously. A tight ceiling is the failure mode that bites: the reasoning model
     # spends hidden tokens from this same budget and the visible reply arrives truncated.
     BEDROCK_MAX_TOKENS = tostring(var.bedrock_max_tokens)
-    BEDROCK_TIMEOUT_MS = tostring(var.bedrock_timeout_ms)
     # Guardrail applied to every Converse call these Lambdas make (ingest transitions,
     # validation review, analysis reasoning). Empty when guardrail_enabled = false, which
     # the runtime reads as "no guardrail" and sends the original unguarded request — so

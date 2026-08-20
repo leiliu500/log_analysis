@@ -204,13 +204,10 @@ resource "aws_iam_role_policy" "ecs_task" {
       # Scoped to the text foundation model so Titan embedding calls, which legitimately
       # carry no guardrail, are unaffected.
       ], var.guardrail_enforce_iam && var.guardrail_enabled ? [{
-        Sid    = "DenyUnguardedModelInvoke"
-        Effect = "Deny"
-        Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-        Resource = [
-          "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${local.foundation_model}",
-          "arn:${data.aws_partition.current.partition}:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_runtime_model_id}"
-        ]
+        Sid      = "DenyUnguardedModelInvoke"
+        Effect   = "Deny"
+        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+        Resource = "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${local.foundation_model}"
         Condition = {
           StringNotEquals = { "bedrock:GuardrailIdentifier" = "${local.guardrail_arn}:${local.guardrail_version}" }
         }

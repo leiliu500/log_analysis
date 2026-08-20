@@ -122,9 +122,9 @@ and web behind an ALB, and all IAM roles. Container images are built from
 ### GovCloud note
 `variables.tf` currently defaults `region` to `us-gov-west-1`. **Amazon Bedrock
 availability and the set of enabled foundation models differ in AWS GovCloud** —
-confirm the Claude/Titan model IDs and ARNs available in your partition. Hosted
-agents use `bedrock_model_arn`; direct runtime calls use
-`bedrock_runtime_model_id` (the GovCloud default is the US-GOV inference profile).
+confirm the OpenAI/Titan model IDs available in your partition and update
+`bedrock_model_arn`, `BEDROCK_MODEL_ID`, and `BEDROCK_EMBED_MODEL_ID`
+accordingly.
 Bedrock Agents/Flows resources may also lag in some partitions; if
 so, run the analysis pipeline + local `routeRequest` path (both fully functional
 without native agents) and adopt native agents where supported.

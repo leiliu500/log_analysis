@@ -209,10 +209,8 @@ async function apiRoutes(api: FastifyInstance): Promise<void> {
     try {
       return await handleChat(req.body);
     } catch (err) {
-      const failure = err as Error;
-      req.log.error(failure, 'chat request failed');
-      reply.code(/timed out/i.test(failure.message) ? 504 : 400);
-      return { error: failure.message };
+      reply.code(400);
+      return { error: (err as Error).message };
     }
   });
 
